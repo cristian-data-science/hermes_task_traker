@@ -2,13 +2,18 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { Loader2, Lock, CheckCircle2, Sparkles } from "lucide-react";
 import toast from "react-hot-toast";
-import { useAuth } from "../hooks/useAuth";
 
 /**
  * Pantalla de login simple con PIN.
+ *
+ * Recibe `signIn` como prop desde App, así cuando el PIN es correcto,
+ * el estado de App se actualiza y re-renderiza al Dashboard automáticamente.
  */
-export function LoginScreen() {
-  const { signIn } = useAuth();
+export function LoginScreen({
+  signIn,
+}: {
+  signIn: (pin: string) => Promise<boolean>;
+}) {
   const [pin, setPin] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
