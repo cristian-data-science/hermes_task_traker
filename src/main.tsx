@@ -1,20 +1,25 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { ConvexReactClient } from "convex/react";
-import { ConvexAuthProvider } from "@convex-dev/auth/react";
+import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "react-hot-toast";
 import App from "./App.tsx";
 import "./index.css";
+
+// Capturar errores globales y mostrarlos en pantalla
+window.addEventListener("error", (e) => {
+  console.error("[GLOBAL ERROR]", e.message, e.error);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  console.error("[UNHANDLED REJECTION]", e.reason);
+});
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL);
 const queryClient = new QueryClient();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {/* ConvexAuthProvider ya incluye ConvexProvider internamente y maneja los
-        tokens de autenticación. NO envolver con ConvexProvider adicional. */}
-    <ConvexAuthProvider client={convex}>
+    <ConvexProvider client={convex}>
       <QueryClientProvider client={queryClient}>
         <App />
         <Toaster
@@ -33,6 +38,6 @@ createRoot(document.getElementById("root")!).render(
           }}
         />
       </QueryClientProvider>
-    </ConvexAuthProvider>
+    </ConvexProvider>
   </StrictMode>,
 );

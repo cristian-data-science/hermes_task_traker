@@ -1,26 +1,54 @@
-import { useAuthActions } from "@convex-dev/auth/react";
-import { useQuery } from "convex/react";
-import { api } from "~/convex/_generated/api";
+import { useEffect, useState } from "react";
 
 /**
- * Hook de autenticación.
+ * Auth simple basada en PIN.
  *
- * `api.auth.isAuthenticated` devuelve:
- *   - undefined  → cargando
- *   - false      → sin sesión
- *   - true       → sesión activa
+ * El PIN correcto se define en `VITE_HERMES_PIN` (variable de entorno).
+ * Al acertar, se guarda un flag en localStorage para persistir la sesión.
+ *
+ * No usa Convex Auth ni JWT — es lo más simple y robusto.
  */
+
+const STORAGE_KEY = "hermes-auth-ok";
+
 export function useAuth() {
-  const { signIn, signOut } = useAuthActions();
-  const viewer = useQuery(api.auth.isAuthenticated, {});
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState(true);
 
-  const isLoading = viewer === undefined;
-  const isAuthenticated = viewer === true;
+  // Al montar, leer el flag de localStorage
+  useEffect(() => {
+    try {
+      const ok = localStorage.getItem(STORAGE_KEY) === "1";
+      setIsAuthenticated(ok);
+    } catch {
+      setIsAuthenticated(false);
+    }
+    setIsLoading(false);
+  }, []);
 
-  return {
-    isLoading,
-    isAuthenticated,
-    signIn,
-    signOut,
-  };
+  /** Verifica el PIN. Devuelve true si es correcto. */
+  async function signIn(pin: string): Promise<boolean> {
+    const correctPin = import.meta.env.VITE_HERMES_PIN ?? "1234";
+    if (pin === correctPin) {
+      try {
+        localStorage.setItem(STORAGE_KEY, "1");
+      } catch {
+        /* ignore */
+      }
+      setIsAuthenticated(true);
+      return true;
+    }
+    return false;
+  }
+
+  function signOut() {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+    setIsAuthenticated(false);
+  }
+
+  return { isLoading, isAuthenticated, signIn, signOut };
 }
