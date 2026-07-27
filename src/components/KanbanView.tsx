@@ -7,6 +7,7 @@ import {
   useSensor,
   useSensors,
   useDraggable,
+  useDroppable,
   pointerWithin,
   type DragStartEvent,
   type DragEndEvent,
@@ -136,7 +137,7 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
   );
 }
 
-/** Una columna del Kanban (también actúa como droppable vía su id = status). */
+/** Una columna del Kanban. Es droppable con id = status. */
 function Column({
   status,
   tasks,
@@ -151,6 +152,10 @@ function Column({
   onNewTask: () => void;
 }) {
   const meta = STATUS_META[status];
+  const { setNodeRef, isOver } = useDroppable({
+    id: status,
+    data: { type: "column", status },
+  });
   return (
     <div className="flex w-72 shrink-0 flex-col">
       {/* Header */}
@@ -173,11 +178,14 @@ function Column({
         </button>
       </div>
 
-      {/* Drop zone: el id coincide con el status para detectar drop en vacío */}
+      {/* Drop zone registrada con useDroppable */}
       <div
-        id={status}
-        data-status={status}
-        className="flex flex-1 flex-col gap-2 overflow-y-auto rounded-xl bg-slate-100/60 p-2 dark:bg-slate-900/40"
+        ref={setNodeRef}
+        className={`flex flex-1 flex-col gap-2 overflow-y-auto rounded-xl p-2 transition-colors ${
+          isOver
+            ? "bg-indigo-100 ring-2 ring-indigo-400 dark:bg-indigo-950/40"
+            : "bg-slate-100/60 dark:bg-slate-900/40"
+        }`}
         style={{ minHeight: 80 }}
       >
         {tasks.map((task) => (
