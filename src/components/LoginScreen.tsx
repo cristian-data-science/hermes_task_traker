@@ -1,34 +1,38 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { Loader2, Lock, CheckCircle2, Sparkles } from "lucide-react";
+import { Loader2, Mail, Lock, CheckCircle2, Sparkles } from "lucide-react";
 import toast from "react-hot-toast";
 
 /**
- * Pantalla de login simple con PIN.
- *
- * Recibe `signIn` como prop desde App, así cuando el PIN es correcto,
- * el estado de App se actualiza y re-renderiza al Dashboard automáticamente.
+ * Pantalla de login con email + contraseña (auth segura en Convex).
+ * Soporta registro y login.
  */
 export function LoginScreen({
   signIn,
+  signUp,
 }: {
-  signIn: (pin: string) => Promise<boolean>;
+  signIn: (email: string, password: string) => Promise<unknown>;
+  signUp: (email: string, password: string) => Promise<unknown>;
 }) {
-  const [pin, setPin] = useState("");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e?: React.FormEvent | React.MouseEvent) {
     e?.preventDefault();
-    if (!pin.trim()) return;
+    if (!email.trim() || !password) return;
     setSubmitting(true);
     try {
-      const ok = await signIn(pin.trim());
-      if (ok) {
-        toast.success("¡Bienvenido! 🎉");
+      if (mode === "signup") {
+        await signUp(email.trim(), password);
+        toast.success("Cuenta creada 🎉");
       } else {
-        toast.error("PIN incorrecto");
-        setPin("");
+        await signIn(email.trim(), password);
+        toast.success("¡Bienvenido! 👋");
       }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Error");
     } finally {
       setSubmitting(false);
     }
@@ -47,7 +51,7 @@ export function LoginScreen({
         initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: "easeOut" }}
-        className="relative w-full max-w-sm"
+        className="relative w-full max-w-md"
       >
         {/* Logo */}
         <div className="mb-8 text-center">
@@ -69,21 +73,67 @@ export function LoginScreen({
 
         {/* Card */}
         <div className="card p-6 sm:p-8">
+          {/* Toggle signin/signup */}
+          <div className="mb-6 flex rounded-lg bg-slate-100 p-1 dark:bg-slate-800">
+            <button
+              type="button"
+              onClick={() => setMode("signin")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-all ${
+                mode === "signin"
+                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400"
+              }`}
+            >
+              Iniciar sesión
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("signup")}
+              className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition-all ${
+                mode === "signup"
+                  ? "bg-white text-slate-900 shadow-sm dark:bg-slate-700 dark:text-white"
+                  : "text-slate-500 hover:text-slate-700 dark:text-slate-400"
+              }`}
+            >
+              Crear cuenta
+            </button>
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="label">PIN de acceso</label>
+              <label className="label">Email</label>
+              <div className="relative">
+                <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="email"
+                  required
+                  autoFocus
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="tu@email.com"
+                  className="input pl-9"
+                  autoComplete="email"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="label">
+                Contraseña
+                {mode === "signup" && (
+                  <span className="ml-1 font-normal text-slate-400">(mín. 8)</span>
+                )}
+              </label>
               <div className="relative">
                 <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
                 <input
                   type="password"
-                  inputMode="numeric"
-                  autoFocus
                   required
-                  value={pin}
-                  onChange={(e) => setPin(e.target.value)}
-                  placeholder="••••"
-                  className="input pl-9 text-center text-2xl tracking-[0.5em]"
-                  autoComplete="off"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="input pl-9"
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
                 />
               </div>
             </div>
@@ -99,13 +149,13 @@ export function LoginScreen({
               ) : (
                 <Sparkles className="h-4 w-4" />
               )}
-              Entrar
+              {mode === "signup" ? "Crear cuenta" : "Iniciar sesión"}
             </button>
           </form>
         </div>
 
         <p className="mt-6 text-center text-xs text-slate-400 dark:text-slate-500">
-          Tus datos se guardan en Convex · plan gratuito
+          🔒 Contraseñas hasheadas con PBKDF2 · sesión segura
         </p>
       </motion.div>
     </div>

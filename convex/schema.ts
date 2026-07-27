@@ -68,4 +68,23 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_task", ["taskId", "order"]),
+
+  // ===== Auth =====
+  users: defineTable({
+    email: v.string(),
+    /** Hash de la contraseña (PBKDF2, formato: salt:iterations:hash en hex) */
+    passwordHash: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_email", ["email"]),
+
+  sessions: defineTable({
+    /** Token aleatorio opaco (32 bytes en hex) */
+    token: v.string(),
+    userId: v.id("users"),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"]),
 });
+

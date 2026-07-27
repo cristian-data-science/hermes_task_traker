@@ -1,54 +1,78 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useAction, useQuery } from "convex/react";
+import { api } from "~/convex/_generated/api";
 
 /**
- * Auth simple basada en PIN.
+ * Auth segura con email + contraseña.
  *
- * El PIN correcto se define en `VITE_HERMES_PIN` (variable de entorno).
- * Al acertar, se guarda un flag en localStorage para persistir la sesión.
- *
- * No usa Convex Auth ni JWT — es lo más simple y robusto.
+ * - Token de sesión guardado en localStorage.
+ * - En cada carga, se verifica el token contra el backend vía query reactiva.
+ * - signIn/signUp (actions con hashing PBKDF2) guardan el token y disparan
+ *   la re-verificación, que re-renderiza App automáticamente.
  */
 
-const STORAGE_KEY = "hermes-auth-ok";
+const TOKEN_KEY = "hermes-session-token";
 
 export function useAuth() {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Al montar, leer el flag de localStorage
-  useEffect(() => {
+  const [token, setToken] = useState<string | null>(() => {
     try {
-      const ok = localStorage.getItem(STORAGE_KEY) === "1";
-      setIsAuthenticated(ok);
+      return localStorage.getItem(TOKEN_KEY);
     } catch {
-      setIsAuthenticated(false);
+      return null;
     }
-    setIsLoading(false);
-  }, []);
+  });
 
-  /** Verifica el PIN. Devuelve true si es correcto. */
-  async function signIn(pin: string): Promise<boolean> {
-    const correctPin = import.meta.env.VITE_HERMES_PIN ?? "1234";
-    if (pin === correctPin) {
-      try {
-        localStorage.setItem(STORAGE_KEY, "1");
-      } catch {
-        /* ignore */
-      }
-      setIsAuthenticated(true);
-      return true;
-    }
-    return false;
-  }
+  // verifySession es query reactiva: cambia cuando el token cambia
+  const user = useQuery(api.authQuery.verifySession, token ? { token } : "skip");
 
-  function signOut() {
+  const signInAction = useAction(api.auth.signIn);
+  const signUpAction = useAction(api.auth.signUp);
+  const signOutAction = useAction(api.auth.signOut);
+
+  function setSessionToken(t: string | null) {
+    setToken(t);
     try {
-      localStorage.removeItem(STORAGE_KEY);
+      if (t) localStorage.setItem(TOKEN_KEY, t);
+      else localStorage.removeItem(TOKEN_KEY);
     } catch {
       /* ignore */
     }
-    setIsAuthenticated(false);
   }
 
-  return { isLoading, isAuthenticated, signIn, signOut };
+  async function signIn(email: string, password: string) {
+    const result = (await signInAction({ email, password })) as {
+      token: string;
+      email: string;
+    };
+    setSessionToken(result.token);
+    return result;
+  }
+
+  async function signUp(email: string, password: string) {
+    const result = (await signUpAction({ email, password })) as {
+      token: string;
+      email: string;
+    };
+    setSessionToken(result.token);
+    return result;
+  }
+
+  async function signOut() {
+    if (token) {
+      try {
+        await signOutAction({ token });
+      } catch {
+        /* ignore */
+      }
+    }
+    setSessionToken(null);
+  }
+
+  // user === undefined → cargando (solo si hay token y aún no respondió)
+  // user === null      → sin sesión / token inválido
+  // user === {...}     → sesión activa
+  const isLoading = token !== null && user === undefined;
+  const isAuthenticated = user !== null && user !== undefined;
+
+  return { isLoading, isAuthenticated, user, signIn, signUp, signOut };
 }
