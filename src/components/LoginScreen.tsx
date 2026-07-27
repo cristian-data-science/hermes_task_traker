@@ -22,19 +22,28 @@ export function LoginScreen() {
     setSubmitting(true);
     try {
       if (flow === "credentials") {
-        await signIn("password", {
+        const result = await signIn("password", {
           email,
           password,
           flow: mode === "signup" ? "signUp" : "signIn",
         });
-        toast.success(mode === "signup" ? "Cuenta creada 🎉" : "Sesión iniciada");
+        console.log("[auth] signIn result:", result);
+        if (result.signingIn) {
+          toast.success(mode === "signup" ? "Cuenta creada 🎉" : "¡Bienvenido!");
+        } else {
+          toast(
+            mode === "signup"
+              ? "Cuenta creada. Verifica tu email si se solicita."
+              : "Revisa tu email para completar el login.",
+          );
+        }
       } else {
         // Email mágico: Convex Auth envía un código al correo
         await signIn("password", { email, flow: "magic" });
         toast.success("Te enviamos un código por correo 📧");
       }
     } catch (err) {
-      console.error(err);
+      console.error("[auth] signIn error:", err);
       toast.error(
         err instanceof Error ? err.message : "No se pudo iniciar sesión",
       );
