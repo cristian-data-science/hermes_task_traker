@@ -14,10 +14,9 @@ import { TaskModal } from "./components/TaskModal";
 import { Loader2 } from "lucide-react";
 
 export default function App() {
-  const { isLoading, isAuthenticated, signIn, signUp, signOut } = useAuth();
+  const { isLoading, isAuthenticated, signIn, signOut } = useAuth();
   const { isDark, toggle } = useTheme();
 
-  // Pantalla de carga inicial
   if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
@@ -26,9 +25,8 @@ export default function App() {
     );
   }
 
-  // Si no está autenticado, mostrar login
   if (!isAuthenticated) {
-    return <LoginScreen signIn={signIn} signUp={signUp} />;
+    return <LoginScreen signIn={signIn} />;
   }
 
   return (

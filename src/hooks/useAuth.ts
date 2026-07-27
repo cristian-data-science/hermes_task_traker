@@ -3,12 +3,11 @@ import { useAction, useQuery } from "convex/react";
 import { api } from "~/convex/_generated/api";
 
 /**
- * Auth segura con email + contraseña.
+ * Auth personal: 1 sola contraseña, sin registro.
  *
  * - Token de sesión guardado en localStorage.
- * - En cada carga, se verifica el token contra el backend vía query reactiva.
- * - signIn/signUp (actions con hashing PBKDF2) guardan el token y disparan
- *   la re-verificación, que re-renderiza App automáticamente.
+ * - verifySession (query reactiva) confirma el token en cada carga.
+ * - signIn (action) compara la contraseña en el backend y devuelve un token.
  */
 
 const TOKEN_KEY = "hermes-session-token";
@@ -22,11 +21,8 @@ export function useAuth() {
     }
   });
 
-  // verifySession es query reactiva: cambia cuando el token cambia
-  const user = useQuery(api.authQuery.verifySession, token ? { token } : "skip");
-
+  const valid = useQuery(api.authQuery.verifySession, token ? { token } : "skip");
   const signInAction = useAction(api.auth.signIn);
-  const signUpAction = useAction(api.auth.signUp);
   const signOutAction = useAction(api.auth.signOut);
 
   function setSessionToken(t: string | null) {
@@ -39,20 +35,8 @@ export function useAuth() {
     }
   }
 
-  async function signIn(email: string, password: string) {
-    const result = (await signInAction({ email, password })) as {
-      token: string;
-      email: string;
-    };
-    setSessionToken(result.token);
-    return result;
-  }
-
-  async function signUp(email: string, password: string) {
-    const result = (await signUpAction({ email, password })) as {
-      token: string;
-      email: string;
-    };
+  async function signIn(password: string) {
+    const result = (await signInAction({ password })) as { token: string };
     setSessionToken(result.token);
     return result;
   }
@@ -68,11 +52,11 @@ export function useAuth() {
     setSessionToken(null);
   }
 
-  // user === undefined → cargando (solo si hay token y aún no respondió)
-  // user === null      → sin sesión / token inválido
-  // user === {...}     → sesión activa
-  const isLoading = token !== null && user === undefined;
-  const isAuthenticated = user !== null && user !== undefined;
+  // valid === undefined → cargando (solo si hay token)
+  // valid === true     → sesión activa
+  // valid === false    → sin sesión / token inválido
+  const isLoading = token !== null && valid === undefined;
+  const isAuthenticated = valid === true;
 
-  return { isLoading, isAuthenticated, user, signIn, signUp, signOut };
+  return { isLoading, isAuthenticated, signIn, signOut };
 }

@@ -4,13 +4,9 @@ import { v } from "convex/values";
 /**
  * Modelo de datos de Hermes Task Tracker
  *
- * Basado en el archivo tareas-pendientes.md:
- *  - Áreas (Patagonia 💼 / Datacef 🏢 / Personal 🏠)
- *  - Estados (🔴 Urgente, 🟡 Pendiente, 🟢 Baja, ⏸️ Standby, 📅 Programado, ✅ Completado)
- *  - Tareas con notas, estimación, fecha de entrega, progreso
- *  - Sub-tareas con checkbox y fecha de completado
- *
- * Auth: simple, vía PIN (variable de entorno HERMES_PIN). Sin tablas de auth.
+ * Auth: 1 sola contraseña (variable de entorno HERMES_PASSWORD en Convex).
+ * No hay tabla de usuarios ni hashes guardados en la DB.
+ * La sesión es un token opaco en la tabla `sessions`.
  */
 
 export const areas = ["patagonia", "datacef", "personal"] as const;
@@ -69,22 +65,12 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_task", ["taskId", "order"]),
 
-  // ===== Auth =====
-  users: defineTable({
-    email: v.string(),
-    /** Hash de la contraseña (PBKDF2, formato: salt:iterations:hash en hex) */
-    passwordHash: v.string(),
-    createdAt: v.number(),
-  })
-    .index("by_email", ["email"]),
-
+  // ===== Sesiones (token opaco, 30 días) =====
+  // NO hay tabla de usuarios ni passwords. La contraseña se compara en runtime
+  // contra la variable de entorno HERMES_PASSWORD.
   sessions: defineTable({
-    /** Token aleatorio opaco (32 bytes en hex) */
     token: v.string(),
-    userId: v.id("users"),
     expiresAt: v.number(),
     createdAt: v.number(),
-  })
-    .index("by_token", ["token"]),
+  }).index("by_token", ["token"]),
 });
-
