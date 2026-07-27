@@ -46,3 +46,4 @@ $RECYCLE.BIN/
 # Editor / agent tooling
 .zcode/
 .vscode/
+*.tsbuildinfo
