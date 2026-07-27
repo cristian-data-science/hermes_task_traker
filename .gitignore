@@ -42,3 +42,7 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# Editor / agent tooling
+.zcode/
+.vscode/
