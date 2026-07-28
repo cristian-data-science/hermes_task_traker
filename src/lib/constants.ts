@@ -12,6 +12,8 @@ import {
   CirclePause,
   CalendarClock,
   CheckCircle2,
+  UserRound,
+  Bot,
   type LucideIcon,
 } from "lucide-react";
 
@@ -24,16 +26,16 @@ export type Executor = (typeof EXECUTORS)[number];
 
 export const EXECUTOR_META: Record<
   Executor,
-  { label: string; emoji: string; color: string }
+  { label: string; Icon: LucideIcon; color: string }
 > = {
   cris: {
     label: "Cris",
-    emoji: "🧑",
+    Icon: UserRound,
     color: "text-indigo-600 dark:text-indigo-400",
   },
   claw: {
     label: "Claw",
-    emoji: "🤖",
+    Icon: Bot,
     color: "text-amber-600 dark:text-amber-400",
   },
 };

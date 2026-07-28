@@ -144,16 +144,22 @@ export function TaskCard({
 
       {/* Footer: metadatos */}
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1.5 text-[11px] text-mute">
-        <span
-          className={cn(
-            "inline-flex items-center gap-1 font-medium",
-            EXECUTOR_META[task.executor ?? "cris"].color,
-          )}
-          title={`Ejecutor: ${EXECUTOR_META[task.executor ?? "cris"].label}`}
-        >
-          {EXECUTOR_META[task.executor ?? "cris"].emoji}
-          {EXECUTOR_META[task.executor ?? "cris"].label}
-        </span>
+        {(() => {
+          const execMeta = EXECUTOR_META[task.executor ?? "cris"];
+          const ExecIcon = execMeta.Icon;
+          return (
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 font-medium",
+                execMeta.color,
+              )}
+              title={`Ejecutor: ${execMeta.label}`}
+            >
+              <ExecIcon className="h-3 w-3" />
+              {execMeta.label}
+            </span>
+          );
+        })()}
 
         {subtaskCount && subtaskCount.total > 0 && (
           <span

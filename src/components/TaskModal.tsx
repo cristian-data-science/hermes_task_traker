@@ -259,17 +259,25 @@ export function TaskModal({
                 </div>
                 <div>
                   <label className="label">Ejecutor</label>
-                  <select
-                    value={executor}
-                    onChange={(e) => setExecutor(e.target.value as Executor)}
-                    className="input"
-                  >
-                    {EXECUTORS.map((ex) => (
-                      <option key={ex} value={ex}>
-                        {EXECUTOR_META[ex].emoji} {EXECUTOR_META[ex].label}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="relative">
+                    {(() => {
+                      const ExecIcon = EXECUTOR_META[executor].Icon;
+                      return (
+                        <ExecIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-mute" />
+                      );
+                    })()}
+                    <select
+                      value={executor}
+                      onChange={(e) => setExecutor(e.target.value as Executor)}
+                      className="input pl-9"
+                    >
+                      {EXECUTORS.map((ex) => (
+                        <option key={ex} value={ex}>
+                          {EXECUTOR_META[ex].label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
