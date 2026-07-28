@@ -1,24 +1,45 @@
 import { useEffect, useState } from "react";
+import {
+  Terminal,
+  Newspaper,
+  Zap,
+  Binary,
+  type LucideIcon,
+} from "lucide-react";
 
-/** Hook que maneja el tema claro/oscuro con persistencia en localStorage. */
+/** Los 4 temas de Cris Agent Task. Matrix primero (default). */
+export const THEMES = ["matrix", "terminal", "paper", "brutal"] as const;
+export type ThemeId = (typeof THEMES)[number];
+
+export const THEME_META: Record<ThemeId, { label: string; Icon: LucideIcon }> =
+  {
+    matrix: { label: "Matrix", Icon: Binary },
+    terminal: { label: "Ámbar", Icon: Terminal },
+    paper: { label: "Papel", Icon: Newspaper },
+    brutal: { label: "Brutal", Icon: Zap },
+  };
+
+const STORAGE_KEY = "cat-theme";
+
+function isTheme(v: string | null): v is ThemeId {
+  return !!v && (THEMES as readonly string[]).includes(v);
+}
+
+/** Hook de tema: 4 temas intercambiables, persistidos en localStorage. */
 export function useTheme() {
-  const [isDark, setIsDark] = useState<boolean>(() => {
-    if (typeof window === "undefined") return false;
-    const saved = localStorage.getItem("hermes-theme");
-    if (saved) return saved === "dark";
-    // Default: preferencia del sistema
-    return window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const [theme, setTheme] = useState<ThemeId>(() => {
+    if (typeof window === "undefined") return "matrix";
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return isTheme(saved) ? saved : "matrix";
   });
 
   useEffect(() => {
-    const root = document.documentElement;
-    if (isDark) {
-      root.classList.add("dark");
-    } else {
-      root.classList.remove("dark");
-    }
-    localStorage.setItem("hermes-theme", isDark ? "dark" : "light");
-  }, [isDark]);
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(STORAGE_KEY, theme);
+    // Limpieza del sistema anterior (claro/oscuro)
+    localStorage.removeItem("hermes-theme");
+    document.documentElement.classList.remove("dark");
+  }, [theme]);
 
-  return { isDark, toggle: () => setIsDark((d) => !d) };
+  return { theme, setTheme };
 }

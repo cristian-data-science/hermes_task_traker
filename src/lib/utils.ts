@@ -32,15 +32,7 @@ export function formatRelative(ms?: number | null): string {
   return formatDate(ms);
 }
 
-/** Devuelve un color sutil para una tarjeta según su estado. */
-export function statusAccent(status: string): string {
-  const map: Record<string, string> = {
-    urgente: "before:bg-red-500",
-    pendiente: "before:bg-amber-500",
-    baja: "before:bg-green-500",
-    standby: "before:bg-slate-400",
-    programado: "before:bg-blue-500",
-    completado: "before:bg-emerald-500",
-  };
-  return map[status] ?? "before:bg-slate-300";
+/** CSS variable con el color tonal de un estado (depende del tema activo). */
+export function statusTone(status: string): string {
+  return `var(--status-${status}, var(--muted))`;
 }

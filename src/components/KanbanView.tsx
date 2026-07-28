@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type CSSProperties } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -13,13 +13,15 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { sortableKeyboardCoordinates } from "@dnd-kit/sortable";
-import { Plus } from "lucide-react";
+import { Plus, Inbox } from "lucide-react";
 import { useMutation } from "convex/react";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
 import { KANBAN_COLUMNS, STATUS_META, type Status } from "../lib/constants";
 import { TaskCard } from "./TaskCard";
+import { StatusDot } from "./Badges";
 import { useSubtaskCounts } from "../hooks/useSubtaskCounts";
+import { cn } from "../lib/utils";
 
 interface KanbanViewProps {
   tasks: Doc<"tasks">[];
@@ -109,7 +111,8 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
       onDragEnd={handleDragEnd}
       onDragCancel={() => setActiveId(null)}
     >
-      <div className="flex h-full gap-3 overflow-x-auto px-1 pb-2">
+      {/* Scroll horizontal con snap en móvil */}
+      <div className="flex h-full snap-x snap-mandatory gap-3 overflow-x-auto px-1 pb-2 sm:snap-none">
         {KANBAN_COLUMNS.map((status) => (
           <Column
             key={status}
@@ -157,21 +160,25 @@ function Column({
     data: { type: "column", status },
   });
   return (
-    <div className="flex w-72 shrink-0 flex-col">
+    <div className="flex w-[82vw] shrink-0 snap-start flex-col sm:w-72">
       {/* Header */}
       <div className="mb-2 flex items-center justify-between px-1">
         <div className="flex items-center gap-2">
-          <span className={`inline-block h-2.5 w-2.5 rounded-full ${meta.dot}`} />
-          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-            {meta.emoji} {meta.label}
+          <StatusDot status={status} />
+          <h3
+            className="flex items-center gap-1.5 text-sm font-semibold text-ink"
+            style={{ "--tone": meta.tone } as CSSProperties}
+          >
+            <meta.Icon className="h-4 w-4" style={{ color: "var(--tone)" }} />
+            {meta.label}
           </h3>
-          <span className="rounded-full bg-slate-200 px-1.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+          <span className="rounded-full border-el border-line bg-panel2 px-1.5 text-xs font-medium text-mute">
             {tasks.length}
           </span>
         </div>
         <button
           onClick={onNewTask}
-          className="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+          className="rounded-el p-1 text-faint transition-colors hover:bg-panel2 hover:text-ink"
           title="Nueva tarea"
         >
           <Plus className="h-4 w-4" />
@@ -181,12 +188,11 @@ function Column({
       {/* Drop zone registrada con useDroppable */}
       <div
         ref={setNodeRef}
-        className={`flex flex-1 flex-col gap-2 overflow-y-auto rounded-xl p-2 transition-colors ${
-          isOver
-            ? "bg-indigo-100 ring-2 ring-indigo-400 dark:bg-indigo-950/40"
-            : "bg-slate-100/60 dark:bg-slate-900/40"
-        }`}
-        style={{ minHeight: 80 }}
+        style={{ "--tone": meta.tone, minHeight: 80 } as CSSProperties}
+        className={cn(
+          "flex flex-1 flex-col gap-2 overflow-y-auto rounded-el-lg p-2 transition-all",
+          isOver ? "bg-panel2 ring-2 ring-accent" : "col-drop ring-1 ring-transparent",
+        )}
       >
         {tasks.map((task) => (
           <DraggableTask
@@ -197,7 +203,8 @@ function Column({
           />
         ))}
         {tasks.length === 0 && (
-          <div className="flex h-20 items-center justify-center rounded-lg border-2 border-dashed border-slate-200 text-xs text-slate-400 dark:border-slate-800">
+          <div className="flex h-20 flex-col items-center justify-center gap-1 rounded-el border-2 border-dashed border-line text-xs text-faint">
+            <Inbox className="h-4 w-4" />
             Suelta aquí
           </div>
         )}

@@ -1,8 +1,68 @@
+import { useEffect, useState, type CSSProperties } from "react";
 import { motion } from "framer-motion";
-import { Calendar, Clock, GitBranch, ListChecks, AlertTriangle } from "lucide-react";
+import { useMutation } from "convex/react";
+import {
+  Calendar,
+  Clock,
+  ListChecks,
+  AlertTriangle,
+  CheckCircle2,
+  User,
+} from "lucide-react";
 import type { Doc } from "~/convex/_generated/dataModel";
+import { api } from "~/convex/_generated/api";
 import { AreaBadge, StatusBadge } from "./Badges";
-import { cn, statusAccent, formatRelative } from "../lib/utils";
+import { cn, statusTone, formatRelative } from "../lib/utils";
+
+/** Slider rápido de progreso 0-100 (commit al soltar). */
+export function ProgressSlider({
+  task,
+  className,
+}: {
+  task: Doc<"tasks">;
+  className?: string;
+}) {
+  const update = useMutation(api.tasks.update);
+  const [val, setVal] = useState(task.progress ?? 0);
+
+  useEffect(() => {
+    setVal(task.progress ?? 0);
+  }, [task.progress]);
+
+  function commit() {
+    if (val !== (task.progress ?? 0)) {
+      void update({ id: task._id, progress: val });
+    }
+  }
+
+  return (
+    <div
+      className={cn("flex items-center gap-2", className)}
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
+    >
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={5}
+        value={val}
+        onChange={(e) => setVal(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+        aria-label="Progreso"
+        className="pct-slider min-w-0 flex-1"
+        style={{
+          background: `linear-gradient(to right, var(--tone, var(--accent)) ${val}%, color-mix(in srgb, var(--border) 55%, transparent) ${val}%)`,
+        }}
+      />
+      <span className="w-9 shrink-0 text-right text-[10px] font-bold tabular-nums text-mute">
+        {val}%
+      </span>
+    </div>
+  );
+}
 
 interface TaskCardProps {
   task: Doc<"tasks">;
@@ -32,12 +92,16 @@ export function TaskCard({
   draggableProps,
 }: TaskCardProps) {
   const isCompleted = task.status === "completado";
-  const isUrgente = task.status === "urgente";
 
-  const card = (
+  return (
     <motion.div
       ref={draggableProps?.setNodeRef}
-      style={draggableProps?.style}
+      style={
+        {
+          ...draggableProps?.style,
+          "--tone": statusTone(task.status),
+        } as CSSProperties
+      }
       {...(draggableProps?.listeners ?? {})}
       {...(draggableProps?.attributes ?? {})}
       layout
@@ -51,49 +115,39 @@ export function TaskCard({
       whileHover={{ y: -2 }}
       onClick={onClick}
       className={cn(
-        "group relative cursor-pointer overflow-hidden rounded-xl border bg-white p-3 shadow-sm transition-shadow",
-        "hover:shadow-md dark:bg-slate-900",
-        isCompleted
-          ? "border-slate-200 opacity-75 dark:border-slate-800 dark:opacity-80"
-          : isUrgente
-            ? "border-red-200 dark:border-red-900/60"
-            : "border-slate-200 dark:border-slate-800",
-        // Barra de acento a la izquierda según estado
-        "before:absolute before:inset-y-0 before:left-0 before:w-1 before:content-['']",
-        statusAccent(task.status),
+        "card task-accent group relative cursor-pointer overflow-hidden p-3 transition-shadow hover:shadow-el-lg",
+        isCompleted && "opacity-70",
       )}
     >
-      {/* Header: área + título */}
-      <div className="mb-1.5 pl-1.5">
+      {/* Header: área + estado */}
+      <div className="mb-1.5 flex flex-wrap items-center gap-1.5 pl-1.5">
         <AreaBadge area={task.area} />
+        {variant === "kanban" && <StatusBadge status={task.status} size="xs" />}
       </div>
 
       <h3
         className={cn(
-          "pl-1.5 text-sm font-semibold leading-snug text-slate-900 dark:text-slate-100",
-          isCompleted && "text-slate-500 line-through dark:text-slate-500",
+          "pl-1.5 text-sm font-semibold leading-snug text-ink",
+          isCompleted && "text-mute line-through",
         )}
       >
         {task.title}
       </h3>
 
-      {/* Notas (solo en variante lista o si hay notas cortas) */}
+      {/* Notas (solo en variante lista) */}
       {variant === "list" && task.notes && (
-        <p className="mt-1.5 line-clamp-2 pl-1.5 text-xs text-slate-500 dark:text-slate-400">
+        <p className="mt-1.5 line-clamp-2 pl-1.5 text-xs text-mute">
           {task.notes}
         </p>
       )}
 
       {/* Footer: metadatos */}
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1.5 text-[11px] text-slate-500 dark:text-slate-400">
-        {variant === "kanban" && <StatusBadge status={task.status} size="xs" />}
-
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1.5 text-[11px] text-mute">
         {subtaskCount && subtaskCount.total > 0 && (
           <span
             className={cn(
               "inline-flex items-center gap-1",
-              subtaskCount.done === subtaskCount.total &&
-                "text-emerald-600 dark:text-emerald-400",
+              subtaskCount.done === subtaskCount.total && "text-accent",
             )}
           >
             <ListChecks className="h-3 w-3" />
@@ -115,36 +169,47 @@ export function TaskCard({
           </span>
         )}
 
-        {task.progress !== undefined && task.progress > 0 && task.progress < 100 && (
-          <span className="inline-flex items-center gap-1">
-            <GitBranch className="h-3 w-3" />
-            {task.progress}%
-          </span>
-        )}
-
         {task.scheduledDates && (
-          <span className="inline-flex items-center gap-1 text-blue-600 dark:text-blue-400">
+          <span
+            className="inline-flex items-center gap-1"
+            style={{ color: "var(--status-programado)" }}
+          >
             <Calendar className="h-3 w-3" />
             {task.scheduledDates}
           </span>
         )}
 
         {task.standbyFrom && (
-          <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+          <span
+            className="inline-flex items-center gap-1"
+            style={{ color: "var(--status-pendiente)" }}
+          >
             <AlertTriangle className="h-3 w-3" />
             desde {task.standbyFrom}
           </span>
         )}
+
+        {variant === "list" && task.requestedBy && (
+          <span className="inline-flex items-center gap-1">
+            <User className="h-3 w-3" />
+            {task.requestedBy}
+          </span>
+        )}
       </div>
+
+      {/* Slider rápido de progreso 0-100 */}
+      {!isCompleted && <ProgressSlider task={task} className="ml-1.5 mt-2.5" />}
 
       {/* Footer de completado */}
       {isCompleted && task.completedAt && (
-        <div className="mt-1.5 pl-1.5 text-[10px] text-emerald-600 dark:text-emerald-500">
+        <div
+          className="mt-1.5 flex items-center gap-1 pl-1.5 text-[10px]"
+          style={{ color: "var(--status-completado)" }}
+        >
+          <CheckCircle2 className="h-3 w-3" />
           completado {formatRelative(task.completedAt)}
         </div>
       )}
     </motion.div>
   );
-
-  return card;
 }

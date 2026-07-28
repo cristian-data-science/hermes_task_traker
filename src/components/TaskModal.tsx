@@ -1,14 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
-import {
-  X,
-  Plus,
-  Trash2,
-  Loader2,
-  Check,
-  GripVertical,
-} from "lucide-react";
+import { X, Plus, Trash2, Loader2, Check, GripVertical } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -123,7 +116,7 @@ export function TaskModal({
         toast.success("Tarea actualizada");
       } else {
         await createTask(payload);
-        toast.success("Tarea creada 🎉");
+        toast.success("Tarea creada");
       }
       onClose();
     } catch (err) {
@@ -163,32 +156,32 @@ export function TaskModal({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/50 p-0 backdrop-blur-sm sm:items-center sm:p-4"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-black/55 p-0 backdrop-blur-sm sm:items-center sm:p-4"
           onClick={onClose}
         >
           <motion.div
-            initial={{ opacity: 0, y: 40, scale: 0.98 }}
+            initial={{ opacity: 0, y: 48, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.98 }}
-            transition={{ type: "spring", stiffness: 320, damping: 30 }}
+            exit={{ opacity: 0, y: 24, scale: 0.98 }}
+            transition={{ type: "spring", stiffness: 340, damping: 30 }}
             onClick={(e) => e.stopPropagation()}
-            className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border border-slate-200 bg-white shadow-2xl dark:border-slate-800 dark:bg-slate-900 sm:rounded-2xl"
+            className="flex max-h-[94dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border-el border-line bg-panel shadow-el-lg sm:max-h-[92vh] sm:rounded-el-lg"
           >
             {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4 dark:border-slate-800">
-              <h2 className="flex items-center gap-2 text-lg font-semibold text-slate-900 dark:text-slate-100">
+            <div className="flex items-center justify-between border-b border-line px-4 py-3.5 sm:px-5 sm:py-4">
+              <h2 className="font-display text-lg font-semibold text-ink">
                 {isEdit ? "Editar tarea" : "Nueva tarea"}
               </h2>
               <button
                 onClick={onClose}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800"
+                className="rounded-el p-1.5 text-faint transition-colors hover:bg-panel2 hover:text-ink"
               >
                 <X className="h-5 w-5" />
               </button>
             </div>
 
             {/* Body (scrollable) */}
-            <div className="flex-1 overflow-y-auto px-5 py-4">
+            <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
               {/* Título */}
               <div className="mb-4">
                 <label className="label">Título *</label>
@@ -202,26 +195,45 @@ export function TaskModal({
               </div>
 
               {/* Área + Estado */}
-              <div className="mb-4 grid grid-cols-2 gap-3">
+              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="label">Área</label>
                   <div className="grid grid-cols-3 gap-1">
-                    {AREAS.map((a) => (
-                      <button
-                        key={a}
-                        type="button"
-                        onClick={() => setArea(a)}
-                        className={cn(
-                          "rounded-lg border px-2 py-2 text-xs font-medium transition-all",
-                          area === a
-                            ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:bg-indigo-950/40 dark:text-indigo-300"
-                            : "border-slate-200 text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-800",
-                        )}
-                      >
-                        <div className="text-base">{AREA_META[a].emoji}</div>
-                        {AREA_META[a].label}
-                      </button>
-                    ))}
+                    {AREAS.map((a) => {
+                      const meta = AREA_META[a];
+                      const active = area === a;
+                      return (
+                        <button
+                          key={a}
+                          type="button"
+                          onClick={() => setArea(a)}
+                          style={
+                            {
+                              "--tone": meta.tone,
+                              ...(active
+                                ? {
+                                    borderColor: "var(--tone)",
+                                    background:
+                                      "color-mix(in srgb, var(--tone) 12%, transparent)",
+                                  }
+                                : {}),
+                            } as CSSProperties
+                          }
+                          className={cn(
+                            "flex flex-col items-center gap-1 rounded-el border-el px-2 py-2 text-xs font-medium transition-all",
+                            active
+                              ? "text-ink"
+                              : "border-line text-mute hover:bg-panel2",
+                          )}
+                        >
+                          <meta.Icon
+                            className="h-4 w-4"
+                            style={active ? { color: "var(--tone)" } : undefined}
+                          />
+                          {meta.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
                 <div>
@@ -233,7 +245,7 @@ export function TaskModal({
                   >
                     {STATUSES.map((s) => (
                       <option key={s} value={s}>
-                        {STATUS_META[s].emoji} {STATUS_META[s].label}
+                        {STATUS_META[s].label}
                       </option>
                     ))}
                   </select>
@@ -245,39 +257,45 @@ export function TaskModal({
                 <div className="mb-4">
                   <label className="label">Sub-tareas</label>
                   <div className="space-y-1.5">
-                    {subtasks?.map((s) => (
-                      <div
-                        key={s._id}
-                        className="flex items-center gap-2 rounded-lg border border-slate-200 px-2 py-1.5 dark:border-slate-700"
-                      >
-                        <GripVertical className="h-3.5 w-3.5 text-slate-300" />
-                        <button
-                          onClick={() => toggleSub({ id: s._id })}
-                          className={cn(
-                            "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-all",
-                            s.done
-                              ? "border-emerald-500 bg-emerald-500 text-white"
-                              : "border-slate-300 dark:border-slate-600",
-                          )}
+                    <AnimatePresence initial={false}>
+                      {subtasks?.map((s) => (
+                        <motion.div
+                          key={s._id}
+                          layout
+                          initial={{ opacity: 0, y: -6 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          exit={{ opacity: 0, x: 12 }}
+                          className="flex items-center gap-2 rounded-el border-el border-line px-2 py-1.5"
                         >
-                          {s.done && <Check className="h-3 w-3" strokeWidth={3} />}
-                        </button>
-                        <span
-                          className={cn(
-                            "flex-1 text-sm",
-                            s.done && "text-slate-400 line-through",
-                          )}
-                        >
-                          {s.title}
-                        </span>
-                        <button
-                          onClick={() => removeSub({ id: s._id })}
-                          className="text-slate-300 hover:text-red-500"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    ))}
+                          <GripVertical className="h-3.5 w-3.5 text-faint" />
+                          <button
+                            onClick={() => toggleSub({ id: s._id })}
+                            className={cn(
+                              "flex h-4 w-4 shrink-0 items-center justify-center rounded-el border-el transition-all",
+                              s.done
+                                ? "border-accent bg-accent text-acfg"
+                                : "border-line2",
+                            )}
+                          >
+                            {s.done && <Check className="h-3 w-3" strokeWidth={3} />}
+                          </button>
+                          <span
+                            className={cn(
+                              "flex-1 text-sm",
+                              s.done && "text-faint line-through",
+                            )}
+                          >
+                            {s.title}
+                          </span>
+                          <button
+                            onClick={() => removeSub({ id: s._id })}
+                            className="text-faint transition-colors hover:text-danger"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </motion.div>
+                      ))}
+                    </AnimatePresence>
                     <div className="flex gap-1.5">
                       <input
                         value={newSub}
@@ -317,7 +335,7 @@ export function TaskModal({
               </div>
 
               {/* Estimación + Fecha entrega */}
-              <div className="mb-4 grid grid-cols-2 gap-3">
+              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="label">Estimación</label>
                   <input
@@ -339,7 +357,7 @@ export function TaskModal({
               </div>
 
               {/* Progreso + Solicitado por */}
-              <div className="mb-4 grid grid-cols-2 gap-3">
+              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label className="label">Progreso (%)</label>
                   <input
@@ -367,7 +385,7 @@ export function TaskModal({
 
               {/* Standby (condicional) */}
               {(status === "standby" || standbyFrom || standbyUntil) && (
-                <div className="mb-4 grid grid-cols-2 gap-3">
+                <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Standby desde</label>
                     <input
@@ -404,16 +422,16 @@ export function TaskModal({
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-between gap-2 border-t border-slate-200 px-5 py-3 dark:border-slate-800">
+            <div className="flex items-center justify-between gap-2 border-t border-line px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
               <div>
                 {isEdit && (
                   <button
                     onClick={handleDelete}
                     disabled={saving}
-                    className="btn-ghost text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/40"
+                    className="btn-ghost text-danger hover:bg-panel2"
                   >
                     <Trash2 className="h-4 w-4" />
-                    Eliminar
+                    <span className="hidden sm:inline">Eliminar</span>
                   </button>
                 )}
               </div>

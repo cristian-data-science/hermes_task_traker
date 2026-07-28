@@ -27,14 +27,26 @@ createRoot(document.getElementById("root")!).render(
           toastOptions={{
             duration: 2500,
             style: {
-              borderRadius: "10px",
-              background: "#1e293b",
-              color: "#f1f5f9",
+              borderRadius: "var(--radius-lg)",
+              background: "var(--surface-2)",
+              color: "var(--text)",
               fontSize: "14px",
-              border: "1px solid #334155",
+              fontFamily: "var(--font-sans)",
+              border: "var(--bw) solid var(--border)",
+              boxShadow: "var(--shadow-lg)",
             },
-            success: { iconTheme: { primary: "#22c55e", secondary: "#fff" } },
-            error: { iconTheme: { primary: "#ef4444", secondary: "#fff" } },
+            success: {
+              iconTheme: {
+                primary: "var(--status-completado)",
+                secondary: "var(--surface)",
+              },
+            },
+            error: {
+              iconTheme: {
+                primary: "var(--danger)",
+                secondary: "var(--surface)",
+              },
+            },
           }}
         />
       </QueryClientProvider>

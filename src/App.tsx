@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useAuth } from "./hooks/useAuth";
-import { useTheme } from "./hooks/useTheme";
+import { useTheme, type ThemeId } from "./hooks/useTheme";
 import { api } from "~/convex/_generated/api";
 import type { Doc } from "~/convex/_generated/dataModel";
 import type { Area, Status } from "./lib/constants";
@@ -10,43 +10,50 @@ import { LoginScreen } from "./components/LoginScreen";
 import { Toolbar, type ViewMode } from "./components/Toolbar";
 import { KanbanView } from "./components/KanbanView";
 import { ListView } from "./components/ListView";
+import { CalendarView } from "./components/CalendarView";
 import { TaskModal } from "./components/TaskModal";
-import { Loader2 } from "lucide-react";
+import { ChangePasswordModal } from "./components/ChangePasswordModal";
+import { ThemedBackground } from "./components/ThemedBackground";
+import { Loader2, ClipboardList } from "lucide-react";
 
 export default function App() {
-  const { isLoading, isAuthenticated, signIn, signOut } = useAuth();
-  const { isDark, toggle } = useTheme();
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <Loader2 className="h-8 w-8 animate-spin text-indigo-500" />
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return <LoginScreen signIn={signIn} />;
-  }
+  const { isLoading, isAuthenticated, signIn, signOut, changePassword } = useAuth();
+  const { theme, setTheme } = useTheme();
 
   return (
-    <Dashboard
-      isDark={isDark}
-      onToggleTheme={toggle}
-      onLogout={() => void signOut()}
-    />
+    <>
+      {/* Fondo animado sutil, cambia con el tema */}
+      <ThemedBackground theme={theme} />
+
+      {isLoading ? (
+        <div className="flex min-h-screen items-center justify-center">
+          <Loader2 className="h-8 w-8 animate-spin text-accent" />
+        </div>
+      ) : !isAuthenticated ? (
+        <LoginScreen signIn={signIn} />
+      ) : (
+        <Dashboard
+          theme={theme}
+          onThemeChange={setTheme}
+          onLogout={() => void signOut()}
+          onChangePassword={changePassword}
+        />
+      )}
+    </>
   );
 }
 
 /** Dashboard principal (cuando hay sesión). */
 function Dashboard({
-  isDark,
-  onToggleTheme,
+  theme,
+  onThemeChange,
   onLogout,
+  onChangePassword,
 }: {
-  isDark: boolean;
-  onToggleTheme: () => void;
+  theme: ThemeId;
+  onThemeChange: (t: ThemeId) => void;
   onLogout: () => void;
+  onChangePassword: (current: string, next: string) => Promise<void>;
 }) {
   const tasks = useQuery(api.tasks.list, {}) ?? [];
 
@@ -57,6 +64,7 @@ function Dashboard({
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Doc<"tasks"> | null>(null);
+  const [pwModalOpen, setPwModalOpen] = useState(false);
   const [newDefaults, setNewDefaults] = useState<{
     status?: Status;
     area?: Area;
@@ -90,7 +98,7 @@ function Dashboard({
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950">
+    <div className="min-h-screen">
       <Toolbar
         view={view}
         onViewChange={setView}
@@ -101,21 +109,22 @@ function Dashboard({
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         onNewTask={() => openNew()}
-        isDark={isDark}
-        onToggleTheme={onToggleTheme}
+        theme={theme}
+        onThemeChange={onThemeChange}
         onLogout={onLogout}
+        onChangePassword={() => setPwModalOpen(true)}
         totalCount={tasks.length}
         pendingCount={pendingCount}
       />
 
-      <main className="mx-auto max-w-7xl px-4 py-4">
+      <main className="mx-auto max-w-[1600px] px-2.5 py-3 sm:px-6 sm:py-4 lg:px-8">
         <AnimatePresence mode="wait">
           <motion.div
             key={view}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.15 }}
+            initial={{ opacity: 0, y: 6 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -6 }}
+            transition={{ duration: 0.18, ease: "easeOut" }}
           >
             {view === "kanban" ? (
               <KanbanView
@@ -123,28 +132,35 @@ function Dashboard({
                 onEditTask={openEdit}
                 onNewTask={(status) => openNew(status)}
               />
-            ) : (
+            ) : view === "list" ? (
               <ListView
                 tasks={filteredTasks}
                 onEditTask={openEdit}
                 onNewTask={(area) => openNew(undefined, area)}
               />
+            ) : (
+              <CalendarView tasks={filteredTasks} onEditTask={openEdit} />
             )}
           </motion.div>
         </AnimatePresence>
 
         {/* Estado vacío */}
         {filteredTasks.length === 0 && (
-          <div className="mt-20 text-center">
-            <p className="text-lg font-medium text-slate-400">
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mt-20 text-center"
+          >
+            <ClipboardList className="mx-auto mb-3 h-10 w-10 text-faint" />
+            <p className="text-lg font-medium text-mute">
               {tasks.length === 0
-                ? "Aún no hay tareas 🎉"
+                ? "Aún no hay tareas"
                 : "Sin resultados para los filtros"}
             </p>
             <button onClick={() => openNew()} className="btn-primary mt-4">
               Crear tu primera tarea
             </button>
-          </div>
+          </motion.div>
         )}
       </main>
 
@@ -154,6 +170,12 @@ function Dashboard({
         onClose={() => setModalOpen(false)}
         defaultStatus={newDefaults.status}
         defaultArea={newDefaults.area}
+      />
+
+      <ChangePasswordModal
+        open={pwModalOpen}
+        onClose={() => setPwModalOpen(false)}
+        onChangePassword={onChangePassword}
       />
     </div>
   );

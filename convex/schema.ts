@@ -66,11 +66,18 @@ export default defineSchema({
   }).index("by_task", ["taskId", "order"]),
 
   // ===== Sesiones (token opaco, 30 días) =====
-  // NO hay tabla de usuarios ni passwords. La contraseña se compara en runtime
-  // contra la variable de entorno HERMES_PASSWORD.
   sessions: defineTable({
     token: v.string(),
     expiresAt: v.number(),
     createdAt: v.number(),
   }).index("by_token", ["token"]),
+
+  // ===== Settings (clave-valor) =====
+  // Guarda la contraseña hasheada (PBKDF2) para poder cambiarla desde la app.
+  // Si no existe el registro `passwordHash`, se usa la env var HERMES_PASSWORD.
+  settings: defineTable({
+    key: v.string(),
+    value: v.string(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
 });

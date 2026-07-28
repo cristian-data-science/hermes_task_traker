@@ -1,4 +1,4 @@
-import { query, internalMutation } from "./_generated/server";
+import { query, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
 
 /**
@@ -42,6 +42,35 @@ export const _deleteSession = internalMutation({
       .first();
     if (session) {
       await ctx.db.delete(session._id);
+    }
+    return null;
+  },
+});
+
+/** Helper interno: lee un setting por clave. */
+export const _getSetting = internalQuery({
+  args: { key: v.string() },
+  handler: async (ctx, { key }) => {
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .first();
+    return row?.value ?? null;
+  },
+});
+
+/** Helper interno: upsert de un setting. */
+export const _setSetting = internalMutation({
+  args: { key: v.string(), value: v.string() },
+  handler: async (ctx, { key, value }) => {
+    const existing = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .first();
+    if (existing) {
+      await ctx.db.patch(existing._id, { value, updatedAt: Date.now() });
+    } else {
+      await ctx.db.insert("settings", { key, value, updatedAt: Date.now() });
     }
     return null;
   },

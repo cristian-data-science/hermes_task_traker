@@ -1,32 +1,37 @@
 /** @type {import('tailwindcss').Config} */
 export default {
-  darkMode: "class",
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
       fontFamily: {
-        sans: [
-          "Inter",
-          "ui-sans-serif",
-          "system-ui",
-          "-apple-system",
-          "Segoe UI",
-          "Roboto",
-          "Helvetica Neue",
-          "Arial",
-          "sans-serif",
-        ],
+        sans: ["var(--font-sans)"],
+        display: ["var(--font-display)"],
       },
       colors: {
-        // Estados de tareas (alineados con la leyenda del .md)
-        status: {
-          urgente: "#ef4444", // rojo 🔴
-          pendiente: "#eab308", // amarillo 🟡
-          baja: "#22c55e", // verde 🟢
-          standby: "#64748b", // gris-azul ⏸️
-          programado: "#3b82f6", // azul 📅
-          completado: "#10b981", // esmeralda ✅
-        },
+        // Tokens temáticos (CSS variables — cambian con data-theme)
+        canvas: "var(--bg)",
+        canvas2: "var(--bg-soft)",
+        panel: "var(--surface)",
+        panel2: "var(--surface-2)",
+        line: "var(--border)",
+        line2: "var(--border-strong)",
+        ink: "var(--text)",
+        mute: "var(--muted)",
+        faint: "var(--faint)",
+        accent: "var(--accent)",
+        acfg: "var(--accent-fg)",
+        danger: "var(--danger)",
+      },
+      borderRadius: {
+        el: "var(--radius)",
+        "el-lg": "var(--radius-lg)",
+      },
+      borderWidth: {
+        el: "var(--bw)",
+      },
+      boxShadow: {
+        el: "var(--shadow)",
+        "el-lg": "var(--shadow-lg)",
       },
       keyframes: {
         "fade-in": {

@@ -8,6 +8,7 @@ import { api } from "~/convex/_generated/api";
  * - Token de sesión guardado en localStorage.
  * - verifySession (query reactiva) confirma el token en cada carga.
  * - signIn (action) compara la contraseña en el backend y devuelve un token.
+ * - changePassword (action) cambia la contraseña (pide la actual).
  */
 
 const TOKEN_KEY = "hermes-session-token";
@@ -24,6 +25,7 @@ export function useAuth() {
   const valid = useQuery(api.authQuery.verifySession, token ? { token } : "skip");
   const signInAction = useAction(api.auth.signIn);
   const signOutAction = useAction(api.auth.signOut);
+  const changePasswordAction = useAction(api.auth.changePassword);
 
   function setSessionToken(t: string | null) {
     setToken(t);
@@ -52,11 +54,12 @@ export function useAuth() {
     setSessionToken(null);
   }
 
-  // valid === undefined → cargando (solo si hay token)
-  // valid === true     → sesión activa
-  // valid === false    → sin sesión / token inválido
+  async function changePassword(currentPassword: string, newPassword: string) {
+    await changePasswordAction({ currentPassword, newPassword });
+  }
+
   const isLoading = token !== null && valid === undefined;
   const isAuthenticated = valid === true;
 
-  return { isLoading, isAuthenticated, signIn, signOut };
+  return { isLoading, isAuthenticated, signIn, signOut, changePassword };
 }
