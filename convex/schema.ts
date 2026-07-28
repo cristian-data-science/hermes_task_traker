@@ -39,6 +39,10 @@ export default defineSchema({
       v.literal("completado"),
     ),
     notes: v.optional(v.string()),
+    /** Ejecutor responsable: Cris (tú) o Claw (agente Hermes). */
+    executor: v.optional(
+      v.union(v.literal("cris"), v.literal("claw")),
+    ),
     estimate: v.optional(v.string()),
     dueDate: v.optional(v.string()),
     progress: v.optional(v.number()),

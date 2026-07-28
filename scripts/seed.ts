@@ -37,10 +37,16 @@ console.log("Deployment:", url);
 console.log("Tareas a importar:", summarize(SEED_TASKS));
 console.log("\n⏳ Ejecutando resetAndSeed en Convex...\n");
 
+// Asegurar que todas las tareas tengan executor (por defecto "cris")
+const tasks = SEED_TASKS.map((t) => ({
+  ...t,
+  executor: t.executor ?? ("cris" as const),
+}));
+
 const client = new ConvexHttpClient(url);
 try {
   const result = (await client.mutation(api.seed.resetAndSeed, {
-    tasks: SEED_TASKS,
+    tasks,
   })) as { createdTasks: number; createdSubtasks: number };
 
   console.log("✅ Seed completado:");

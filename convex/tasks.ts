@@ -75,6 +75,10 @@ const taskFields = {
   area: areaUnion,
   status: statusUnion,
   notes: v.optional(v.string()),
+  /** Ejecutor: Cris (tú) o Claw (agente). Por defecto Cris. */
+  executor: v.optional(
+    v.union(v.literal("cris"), v.literal("claw")),
+  ),
   estimate: v.optional(v.string()),
   dueDate: v.optional(v.string()),
   progress: v.optional(v.number()),
@@ -116,6 +120,9 @@ export const update = mutation({
     area: v.optional(areaUnion),
     status: v.optional(statusUnion),
     notes: v.optional(v.string()),
+    executor: v.optional(
+      v.union(v.literal("cris"), v.literal("claw")),
+    ),
     estimate: v.optional(v.string()),
     dueDate: v.optional(v.string()),
     progress: v.optional(v.number()),

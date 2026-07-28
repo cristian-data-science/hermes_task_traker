@@ -18,6 +18,26 @@ import {
 export const AREAS = ["patagonia", "datacef", "personal"] as const;
 export type Area = (typeof AREAS)[number];
 
+/** Ejecutores disponibles: Cris (tú) o Claw (agente Hermes). */
+export const EXECUTORS = ["cris", "claw"] as const;
+export type Executor = (typeof EXECUTORS)[number];
+
+export const EXECUTOR_META: Record<
+  Executor,
+  { label: string; emoji: string; color: string }
+> = {
+  cris: {
+    label: "Cris",
+    emoji: "🧑",
+    color: "text-indigo-600 dark:text-indigo-400",
+  },
+  claw: {
+    label: "Claw",
+    emoji: "🤖",
+    color: "text-amber-600 dark:text-amber-400",
+  },
+};
+
 export const STATUSES = [
   "urgente",
   "pendiente",

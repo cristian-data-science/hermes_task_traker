@@ -12,6 +12,7 @@ import {
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
 import { AreaBadge, StatusBadge } from "./Badges";
+import { EXECUTOR_META } from "../lib/constants";
 import { cn, statusTone, formatRelative } from "../lib/utils";
 
 /** Slider rápido de progreso 0-100 (commit al soltar). */
@@ -143,6 +144,17 @@ export function TaskCard({
 
       {/* Footer: metadatos */}
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1.5 text-[11px] text-mute">
+        <span
+          className={cn(
+            "inline-flex items-center gap-1 font-medium",
+            EXECUTOR_META[task.executor ?? "cris"].color,
+          )}
+          title={`Ejecutor: ${EXECUTOR_META[task.executor ?? "cris"].label}`}
+        >
+          {EXECUTOR_META[task.executor ?? "cris"].emoji}
+          {EXECUTOR_META[task.executor ?? "cris"].label}
+        </span>
+
         {subtaskCount && subtaskCount.total > 0 && (
           <span
             className={cn(

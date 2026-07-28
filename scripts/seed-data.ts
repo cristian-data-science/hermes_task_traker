@@ -17,6 +17,8 @@ export type SeedTask = {
     | "programado"
     | "completado";
   notes?: string;
+  /** Ejecutor: "cris" (tú, por defecto) o "claw" (agente Hermes). */
+  executor?: "cris" | "claw";
   estimate?: string;
   dueDate?: string;
   progress?: number;

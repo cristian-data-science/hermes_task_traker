@@ -10,8 +10,11 @@ import {
   STATUSES,
   AREA_META,
   STATUS_META,
+  EXECUTORS,
+  EXECUTOR_META,
   type Area,
   type Status,
+  type Executor,
 } from "../lib/constants";
 import { cn } from "../lib/utils";
 
@@ -49,6 +52,7 @@ export function TaskModal({
   const [title, setTitle] = useState("");
   const [area, setArea] = useState<Area>(defaultArea);
   const [status, setStatus] = useState<Status>(defaultStatus);
+  const [executor, setExecutor] = useState<Executor>("cris");
   const [notes, setNotes] = useState("");
   const [estimate, setEstimate] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -67,6 +71,7 @@ export function TaskModal({
       setTitle(task.title);
       setArea(task.area);
       setStatus(task.status);
+      setExecutor(task.executor ?? "cris");
       setNotes(task.notes ?? "");
       setEstimate(task.estimate ?? "");
       setDueDate(task.dueDate ?? "");
@@ -79,6 +84,7 @@ export function TaskModal({
       setTitle("");
       setArea(defaultArea);
       setStatus(defaultStatus);
+      setExecutor("cris");
       setNotes("");
       setEstimate("");
       setDueDate("");
@@ -102,6 +108,7 @@ export function TaskModal({
         title: title.trim(),
         area,
         status,
+        executor,
         notes: notes.trim() || undefined,
         estimate: estimate.trim() || undefined,
         dueDate: dueDate.trim() || undefined,
@@ -194,8 +201,8 @@ export function TaskModal({
                 />
               </div>
 
-              {/* Área + Estado */}
-              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {/* Área + Estado + Ejecutor */}
+              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
                   <label className="label">Área</label>
                   <div className="grid grid-cols-3 gap-1">
@@ -246,6 +253,20 @@ export function TaskModal({
                     {STATUSES.map((s) => (
                       <option key={s} value={s}>
                         {STATUS_META[s].label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">Ejecutor</label>
+                  <select
+                    value={executor}
+                    onChange={(e) => setExecutor(e.target.value as Executor)}
+                    className="input"
+                  >
+                    {EXECUTORS.map((ex) => (
+                      <option key={ex} value={ex}>
+                        {EXECUTOR_META[ex].emoji} {EXECUTOR_META[ex].label}
                       </option>
                     ))}
                   </select>

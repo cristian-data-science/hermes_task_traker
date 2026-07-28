@@ -29,6 +29,9 @@ export const resetAndSeed = mutation({
           v.literal("completado"),
         ),
         notes: v.optional(v.string()),
+        executor: v.optional(
+          v.union(v.literal("cris"), v.literal("claw")),
+        ),
         estimate: v.optional(v.string()),
         dueDate: v.optional(v.string()),
         progress: v.optional(v.number()),
@@ -72,6 +75,7 @@ export const resetAndSeed = mutation({
         area: t.area,
         status,
         notes: t.notes,
+        executor: t.executor,
         estimate: t.estimate,
         dueDate: t.dueDate,
         progress: t.progress,
