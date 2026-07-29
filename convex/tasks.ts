@@ -270,26 +270,60 @@ export const reorderWithinStatus = mutation({
   },
 });
 
-/** Marca/desmarca una tarea como completada rápidamente. */
+/**
+ * Marca/desmarca una tarea como completada rápidamente.
+ * Reasigna `order` para que la tarea vaya al INICIO (order 0) de la columna
+ * destino — así lo más recientemente completado queda arriba — y compacta la
+ * columna origen para no dejar huecos ni colisiones de orden.
+ */
 export const toggleComplete = mutation({
   args: { id: v.id("tasks") },
   handler: async (ctx, { id }) => {
     const task = await ctx.db.get(id);
     if (!task) throw new Error("Tarea no encontrada");
     const now = Date.now();
-    if (task.status === "completado") {
-      await ctx.db.patch(id, {
-        status: "pendiente",
-        completedAt: undefined,
-        updatedAt: now,
-      });
-    } else {
-      await ctx.db.patch(id, {
-        status: "completado",
-        completedAt: now,
-        updatedAt: now,
-      });
-    }
+    const oldStatus = task.status;
+    const newStatus: "completado" | "pendiente" =
+      oldStatus === "completado" ? "pendiente" : "completado";
+
+    // Misma columna no debería darse (toggle siempre cruza), pero por seguridad.
+    if (oldStatus === newStatus) return id;
+
+    // 1) Compactar columna origen: quitar la tarea y reindexar 0..n.
+    const sourceCol = await ctx.db
+      .query("tasks")
+      .withIndex("by_status", (q) => q.eq("status", oldStatus))
+      .collect();
+    const sourceSorted = sourceCol
+      .filter((t) => t._id !== id)
+      .sort((a, b) => a.order - b.order);
+    await Promise.all(
+      sourceSorted.map((t, i) =>
+        ctx.db.patch(t._id, { order: i, updatedAt: now }),
+      ),
+    );
+
+    // 2) Insertar al INICIO (order 0) de la columna destino, empujando las
+    //    existentes hacia abajo (+1) para evitar colisiones de order.
+    const destCol = await ctx.db
+      .query("tasks")
+      .withIndex("by_status", (q) => q.eq("status", newStatus))
+      .collect();
+    const destSorted = destCol
+      .filter((t) => t._id !== id)
+      .sort((a, b) => a.order - b.order);
+    await Promise.all(
+      destSorted.map((t, i) =>
+        ctx.db.patch(t._id, { order: i + 1, updatedAt: now }),
+      ),
+    );
+
+    await ctx.db.patch(id, {
+      status: newStatus,
+      order: 0,
+      completedAt: newStatus === "completado" ? now : undefined,
+      updatedAt: now,
+    });
     return id;
   },
 });

@@ -12,6 +12,7 @@ import {
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
 import { AreaBadge, StatusBadge } from "./Badges";
+import { CompleteButton } from "./CompleteButton";
 import { EXECUTOR_META } from "../lib/constants";
 import { cn, statusTone, formatRelative } from "../lib/utils";
 
@@ -120,6 +121,13 @@ export function TaskCard({
         isCompleted && "opacity-70",
       )}
     >
+      {/* Botón rápido de completar (esquina superior derecha) */}
+      <CompleteButton
+        task={task}
+        revealOnHover
+        className="absolute right-2 top-2"
+      />
+
       {/* Header: área + estado */}
       <div className="mb-1.5 flex flex-wrap items-center gap-1.5 pl-1.5">
         <AreaBadge area={task.area} />

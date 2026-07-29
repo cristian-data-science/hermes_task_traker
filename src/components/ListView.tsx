@@ -11,6 +11,7 @@ import {
 import type { Doc } from "~/convex/_generated/dataModel";
 import { AREAS, AREA_META, STATUS_META, type Area } from "../lib/constants";
 import { ProgressSlider } from "./TaskCard";
+import { CompleteButton } from "./CompleteButton";
 import { StatusBadge } from "./Badges";
 import { useSubtaskCounts } from "../hooks/useSubtaskCounts";
 import { cn } from "../lib/utils";
@@ -181,6 +182,14 @@ function TaskRow({
         isCompleted && "opacity-60",
       )}
     >
+      {/* Botón rápido de completar */}
+      <CompleteButton
+        task={task}
+        revealOnHover
+        size="md"
+        className="mr-0.5"
+      />
+
       {/* Icono de estado tonal */}
       <span
         className="grid h-7 w-7 shrink-0 place-items-center rounded-el"

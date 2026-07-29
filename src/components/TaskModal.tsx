@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Plus, Trash2, Loader2, Check, GripVertical } from "lucide-react";
@@ -64,9 +64,18 @@ export function TaskModal({
   const [saving, setSaving] = useState(false);
   const [newSub, setNewSub] = useState("");
 
-  // Cargar datos cuando se abre
+  // Cargar datos solo cuando CAMBIA el contexto (otra tarea, o editar↔nueva),
+  // no cada vez que se reabre el modal. Así, si lo cerrás por misclic mientras
+  // escribías y lo volvés a abrir, lo que tenías sigue ahí.
+  // Clave de contexto: task id (o "new" si es creación) + defaults.
+  const ctxKey = task ? task._id : `new:${defaultArea}:${defaultStatus}`;
+  const lastCtx = useRef<string | null>(null);
   useEffect(() => {
     if (!open) return;
+    // Si el contexto no cambió (reapertura del mismo modal tras un misclic),
+    // conservar el borrador tal cual está.
+    if (lastCtx.current === ctxKey) return;
+    lastCtx.current = ctxKey;
     if (task) {
       setTitle(task.title);
       setArea(task.area);
@@ -95,7 +104,7 @@ export function TaskModal({
       setRequestedBy("");
     }
     setNewSub("");
-  }, [open, task, defaultArea, defaultStatus]);
+  }, [open, task, defaultArea, defaultStatus, ctxKey]);
 
   async function handleSave() {
     if (!title.trim()) {
@@ -125,6 +134,8 @@ export function TaskModal({
         await createTask(payload);
         toast.success("Tarea creada");
       }
+      // Invalidar el borrador: la próxima apertura empieza limpio.
+      lastCtx.current = null;
       onClose();
     } catch (err) {
       console.error(err);
@@ -142,6 +153,8 @@ export function TaskModal({
     try {
       await removeTask({ id: task._id });
       toast.success("Tarea eliminada");
+      // Invalidar el borrador: la tarea ya no existe.
+      lastCtx.current = null;
       onClose();
     } catch (err) {
       toast.error("No se pudo eliminar");
