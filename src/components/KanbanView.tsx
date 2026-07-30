@@ -7,8 +7,6 @@ import {
 import {
   DndContext,
   DragOverlay,
-  MouseSensor,
-  TouchSensor,
   KeyboardSensor,
   useSensor,
   useSensors,
@@ -29,15 +27,17 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Plus, Inbox } from "lucide-react";
+import { Plus, Inbox, Columns3, Eye, EyeOff } from "lucide-react";
 import { useMutation } from "convex/react";
 import toast from "react-hot-toast";
 import type { Doc, Id } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
-import { KANBAN_COLUMNS, STATUS_META, type Status } from "../lib/constants";
+import { KANBAN_COLUMNS, STATUSES, STATUS_META, type Status } from "../lib/constants";
 import { TaskCard } from "./TaskCard";
 import { StatusDot } from "./Badges";
 import { useSubtaskCounts } from "../hooks/useSubtaskCounts";
+import { useHiddenColumns } from "../hooks/useHiddenColumns";
+import { MouseSensor, TouchSensor } from "../lib/dndSensors";
 import { cn } from "../lib/utils";
 
 interface KanbanViewProps {
@@ -64,6 +64,8 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<Status | null>(null);
+  const { isHidden, toggle, showAll, hidden } = useHiddenColumns();
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // ---- Estado optimista de columnas (ids ordenados por estado) ----
   const taskMap = useMemo(() => {
@@ -195,10 +197,13 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
       .catch((err) => {
         console.error(err);
         toast.error("No se pudo mover la tarea");
-        setOptimisticCols(null); // revertir al estado del servidor
       })
       .finally(() => {
+        // El servidor ya aplicó el cambio: descartar el estado optimista
+        // para que las columnas vuelvan a derivarse del servidor (y así
+        // reflejar también mutations externas como toggleComplete).
         pending.current = false;
+        setOptimisticCols(null);
       });
   }
 
@@ -220,6 +225,77 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
+      {/* Barra superior: toggle de columnas visibles */}
+      <div className="relative mb-2 flex items-center justify-end px-1">
+        <button
+          onClick={() => setMenuOpen((o) => !o)}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-el border-el border-line bg-panel2 px-2.5 py-1.5 text-xs font-medium transition-colors",
+            menuOpen ? "text-ink ring-1 ring-accent" : "text-mute hover:text-ink",
+          )}
+          title="Mostrar / ocultar columnas"
+        >
+          <Columns3 className="h-3.5 w-3.5" />
+          Columnas
+          {hidden.length > 0 && (
+            <span className="rounded-full bg-accent px-1.5 text-[10px] font-bold text-acfg">
+              {hidden.length}
+            </span>
+          )}
+        </button>
+
+        {menuOpen && (
+          <>
+            {/* Cerrar al clicar fuera */}
+            <div
+              className="fixed inset-0 z-10"
+              onClick={() => setMenuOpen(false)}
+            />
+            <div className="absolute right-0 top-full z-20 mt-1 w-52 rounded-el-lg border-el border-line bg-panel p-1.5 shadow-el-lg">
+              <div className="mb-1 flex items-center justify-between px-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-faint">
+                  Mostrar columnas
+                </span>
+                {hidden.length > 0 && (
+                  <button
+                    onClick={showAll}
+                    className="text-[10px] font-semibold text-accent hover:underline"
+                  >
+                    Mostrar todo
+                  </button>
+                )}
+              </div>
+              {STATUSES.map((s) => {
+                const meta = STATUS_META[s];
+                const hidden_ = isHidden(s);
+                return (
+                  <button
+                    key={s}
+                    onClick={() => toggle(s)}
+                    style={{ "--tone": meta.tone } as CSSProperties}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-el px-1.5 py-1.5 text-sm transition-colors hover:bg-panel2",
+                      hidden_ && "opacity-50",
+                    )}
+                  >
+                    <meta.Icon
+                      className="h-3.5 w-3.5 shrink-0"
+                      style={{ color: "var(--tone)" }}
+                    />
+                    <span className="flex-1 text-left text-ink">{meta.label}</span>
+                    {hidden_ ? (
+                      <EyeOff className="h-3.5 w-3.5 text-faint" />
+                    ) : (
+                      <Eye className="h-3.5 w-3.5 text-mute" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+
       {/* Scroll horizontal; el snap móvil se desactiva durante el drag */}
       <div
         className={cn(
@@ -227,7 +303,7 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
           activeId ? "snap-none" : "snap-x snap-mandatory sm:snap-none",
         )}
       >
-        {KANBAN_COLUMNS.map((status) => (
+        {KANBAN_COLUMNS.filter((s) => !isHidden(s)).map((status) => (
           <Column
             key={status}
             status={status}

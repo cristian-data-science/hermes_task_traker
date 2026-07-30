@@ -37,7 +37,7 @@
 
     --status-urgente: #ff5c33;
     --status-pendiente: #ffb000;
-    --status-baja: #8fc93f;
+    --status-en-curso: #8fc93f;
     --status-standby: #8a7a5c;
     --status-programado: #53b7ff;
     --status-completado: #54d17f;
@@ -74,7 +74,7 @@
 
     --status-urgente: #b3261e;
     --status-pendiente: #a87710;
-    --status-baja: #5d7052;
+    --status-en-curso: #5d7052;
     --status-standby: #6f6553;
     --status-programado: #2b5d8a;
     --status-completado: #2f6b4f;
@@ -111,7 +111,7 @@
 
     --status-urgente: #ff2e2e;
     --status-pendiente: #ffd500;
-    --status-baja: #27c93f;
+    --status-en-curso: #27c93f;
     --status-standby: #9b9b9b;
     --status-programado: #2f7df6;
     --status-completado: #00b37a;
@@ -148,7 +148,7 @@
 
     --status-urgente: #ff3860;
     --status-pendiente: #f5d90a;
-    --status-baja: #35e0c0;
+    --status-en-curso: #35e0c0;
     --status-standby: #5c7a6a;
     --status-programado: #38b6ff;
     --status-completado: #00ff9d;

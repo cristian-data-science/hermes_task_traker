@@ -15,7 +15,7 @@ export type Area = (typeof areas)[number];
 export const statuses = [
   "urgente",
   "pendiente",
-  "baja",
+  "en-curso",
   "standby",
   "programado",
   "completado",
@@ -33,7 +33,7 @@ export default defineSchema({
     status: v.union(
       v.literal("urgente"),
       v.literal("pendiente"),
-      v.literal("baja"),
+      v.literal("en-curso"),
       v.literal("standby"),
       v.literal("programado"),
       v.literal("completado"),

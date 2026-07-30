@@ -16,7 +16,7 @@ const areaUnion = v.union(
 const statusUnion = v.union(
   v.literal("urgente"),
   v.literal("pendiente"),
-  v.literal("baja"),
+  v.literal("en-curso"),
   v.literal("standby"),
   v.literal("programado"),
   v.literal("completado"),
@@ -369,9 +369,28 @@ export const toggleComplete = mutation({
     const now = Date.now();
     const oldStatus = task.status;
     const newStatus = oldStatus === "completado" ? "pendiente" : "completado";
+    const completing = newStatus === "completado";
+
     await moveToTopOfStatus(ctx, id, oldStatus, newStatus, now, {
-      completedAt: newStatus === "completado" ? now : undefined,
+      completedAt: completing ? now : undefined,
+      // Completar la tarea lleva el progreso al 100% automáticamente
+      ...(completing ? { progress: 100 } : {}),
     });
+
+    // Marcar completada también marca todas sus sub-tareas
+    if (completing) {
+      const subs = await ctx.db
+        .query("subtasks")
+        .withIndex("by_task", (q) => q.eq("taskId", id))
+        .collect();
+      await Promise.all(
+        subs
+          .filter((s) => !s.done)
+          .map((s) =>
+            ctx.db.patch(s._id, { done: true, completedAt: now, updatedAt: now }),
+          ),
+      );
+    }
     return id;
   },
 });

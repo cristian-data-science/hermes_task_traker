@@ -39,9 +39,15 @@ export function ProgressSlider({
 
   return (
     <div
+      // data-no-dnd: los sensores custom ignoran los eventos de esta zona,
+      // así arrastrar el slider no arrastra la tarjeta del kanban.
+      data-no-dnd
       className={cn("flex items-center gap-2", className)}
       onClick={(e) => e.stopPropagation()}
       onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
     >
       <input
         type="range"
@@ -54,7 +60,7 @@ export function ProgressSlider({
         onKeyUp={commit}
         onBlur={commit}
         aria-label="Progreso"
-        className="pct-slider min-w-0 flex-1"
+        className="pct-slider min-w-0 flex-1 touch-none"
         style={{
           background: `linear-gradient(to right, var(--tone, var(--accent)) ${val}%, color-mix(in srgb, var(--border) 55%, transparent) ${val}%)`,
         }}

@@ -1,6 +1,41 @@
 import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
+import type { MutationCtx } from "./_generated/server";
+
+/**
+ * Sincroniza el progreso de la tarea padre con sus sub-tareas.
+ *
+ * Reglas:
+ *  - Todas las sub-tareas completadas → progreso 100%.
+ *  - Si venía en 100% y se desmarca alguna → recalcula al % real
+ *    (así el slider no se queda "mintiendo" en 100).
+ *  - En cualquier otro caso se respeta el valor manual del slider.
+ */
+async function syncProgressFromSubtasks(
+  ctx: MutationCtx,
+  taskId: Id<"tasks">,
+) {
+  const subs = await ctx.db
+    .query("subtasks")
+    .withIndex("by_task", (q) => q.eq("taskId", taskId))
+    .collect();
+  if (subs.length === 0) return;
+
+  const done = subs.filter((s) => s.done).length;
+  const pct = Math.round((done / subs.length) * 100);
+
+  const task = await ctx.db.get(taskId);
+  if (!task) return;
+
+  const allDone = done === subs.length;
+  const wasFull = (task.progress ?? 0) === 100;
+  if (!allDone && !wasFull) return; // respetar el valor manual
+
+  if (task.progress !== pct) {
+    await ctx.db.patch(taskId, { progress: pct, updatedAt: Date.now() });
+  }
+}
 
 /**
  * Devuelve los conteos de sub-tareas {done, total} agrupados por taskId.
@@ -43,7 +78,7 @@ export const create = mutation({
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .collect();
     const order = existing.length;
-    return await ctx.db.insert("subtasks", {
+    const id = await ctx.db.insert("subtasks", {
       taskId,
       title,
       done: false,
@@ -51,6 +86,9 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
+    // Añadir una pendiente a una tarea que estaba al 100% la baja al % real
+    await syncProgressFromSubtasks(ctx, taskId);
+    return id;
   },
 });
 
@@ -76,6 +114,8 @@ export const toggle = mutation({
       completedAt: done ? now : undefined,
       updatedAt: now,
     });
+    // Si quedaron todas completadas → progreso 100% automático
+    await syncProgressFromSubtasks(ctx, sub.taskId);
     return id;
   },
 });
@@ -99,6 +139,8 @@ export const remove = mutation({
         ctx.db.patch(s._id, { order: i, updatedAt: Date.now() }),
       ),
     );
+    // Al borrar una pendiente puede que ya estén todas completadas
+    await syncProgressFromSubtasks(ctx, sub.taskId);
     return id;
   },
 });

@@ -65,7 +65,10 @@ export function CompleteButton({
         e.stopPropagation();
         void handleToggle();
       }}
+      data-no-dnd
       onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
       aria-label={isCompleted ? "Marcar como pendiente" : "Marcar como completada"}
       title={isCompleted ? "Desmarcar" : "Marcar completada"}
       className={cn(

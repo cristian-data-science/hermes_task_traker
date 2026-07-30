@@ -23,7 +23,7 @@ export const resetAndSeed = mutation({
         status: v.union(
           v.literal("urgente"),
           v.literal("pendiente"),
-          v.literal("baja"),
+          v.literal("en-curso"),
           v.literal("standby"),
           v.literal("programado"),
           v.literal("completado"),

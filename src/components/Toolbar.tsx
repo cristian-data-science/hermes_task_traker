@@ -6,6 +6,7 @@ import {
   CalendarDays,
   Plus,
   Search,
+  X,
   LogOut,
   KeyRound,
 } from "lucide-react";
@@ -107,8 +108,18 @@ export function Toolbar({
               value={search}
               onChange={(e) => onSearchChange(e.target.value)}
               placeholder="Buscar tareas…"
-              className="input pl-9"
+              className="input pl-9 pr-8"
             />
+            {search && (
+              <button
+                type="button"
+                onClick={() => onSearchChange("")}
+                aria-label="Limpiar búsqueda"
+                className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-faint transition-colors hover:bg-panel2 hover:text-ink"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
 
           <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
@@ -167,8 +178,18 @@ export function Toolbar({
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Buscar tareas…"
-            className="input pl-9"
+            className="input pl-9 pr-8"
           />
+          {search && (
+            <button
+              type="button"
+              onClick={() => onSearchChange("")}
+              aria-label="Limpiar búsqueda"
+              className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-faint transition-colors hover:bg-panel2 hover:text-ink"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
 
         {/* Fila 3: filtros con scroll horizontal en móvil */}

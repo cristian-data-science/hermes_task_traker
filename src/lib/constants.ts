@@ -8,14 +8,15 @@ import {
   Home,
   Flame,
   Clock3,
-  Leaf,
   CirclePause,
   CalendarClock,
   CheckCircle2,
   UserRound,
   Bot,
   type LucideIcon,
+  type LucideProps,
 } from "lucide-react";
+import { EnCursoIcon } from "../components/EnCursoIcon";
 
 export const AREAS = ["patagonia", "datacef", "personal"] as const;
 export type Area = (typeof AREAS)[number];
@@ -43,7 +44,7 @@ export const EXECUTOR_META: Record<
 export const STATUSES = [
   "urgente",
   "pendiente",
-  "baja",
+  "en-curso",
   "standby",
   "programado",
   "completado",
@@ -75,7 +76,7 @@ export const AREA_META: Record<
 /** Metadata visual de cada estado. `tone` es la CSS variable del color. */
 export const STATUS_META: Record<
   Status,
-  { label: string; Icon: LucideIcon; tone: string }
+  { label: string; Icon: React.ComponentType<LucideProps>; tone: string }
 > = {
   urgente: {
     label: "Urgente",
@@ -87,10 +88,10 @@ export const STATUS_META: Record<
     Icon: Clock3,
     tone: "var(--status-pendiente)",
   },
-  baja: {
-    label: "Baja prioridad",
-    Icon: Leaf,
-    tone: "var(--status-baja)",
+  "en-curso": {
+    label: "En curso",
+    Icon: EnCursoIcon,
+    tone: "var(--status-en-curso)",
   },
   standby: {
     label: "Standby",
@@ -112,9 +113,9 @@ export const STATUS_META: Record<
 /** Orden de columnas en el Kanban. */
 export const KANBAN_COLUMNS: Status[] = [
   "urgente",
+  "en-curso",
   "pendiente",
-  "standby",
   "programado",
-  "baja",
   "completado",
+  "standby",
 ];

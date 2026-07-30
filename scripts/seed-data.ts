@@ -12,7 +12,7 @@ export type SeedTask = {
   status:
     | "urgente"
     | "pendiente"
-    | "baja"
+    | "en-curso"
     | "standby"
     | "programado"
     | "completado";
