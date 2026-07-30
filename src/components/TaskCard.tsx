@@ -72,18 +72,16 @@ interface TaskCardProps {
   onClick?: () => void;
   /** Modo compacto para columna Kanban. */
   variant?: "kanban" | "list";
-  draggableProps?: {
-    listeners: Record<string, unknown>;
-    attributes: Record<string, unknown>;
-    setNodeRef: (el: HTMLElement | null) => void;
-    style?: React.CSSProperties;
-    isDragging?: boolean;
-  };
+  /**
+   * Animación `layout` de framer-motion. Desactivar dentro del kanban:
+   * ahí los transforms los maneja dnd-kit (sortable) y ambos chocan.
+   */
+  layoutAnim?: boolean;
 }
 
 /**
  * Tarjeta de tarea.
- * - variant="kanban": usada en columnas (con drag).
+ * - variant="kanban": usada en columnas (el drag lo maneja el wrapper sortable).
  * - variant="list": usada en la vista de lista (sin drag, más info).
  */
 export function TaskCard({
@@ -91,30 +89,21 @@ export function TaskCard({
   subtaskCount,
   onClick,
   variant = "kanban",
-  draggableProps,
+  layoutAnim = true,
 }: TaskCardProps) {
   const isCompleted = task.status === "completado";
 
   return (
     <motion.div
-      ref={draggableProps?.setNodeRef}
-      style={
-        {
-          ...draggableProps?.style,
-          "--tone": statusTone(task.status),
-        } as CSSProperties
-      }
-      {...(draggableProps?.listeners ?? {})}
-      {...(draggableProps?.attributes ?? {})}
-      layout
-      initial={{ opacity: 0, scale: 0.97 }}
-      animate={{
-        opacity: draggableProps?.isDragging ? 0.5 : 1,
-        scale: 1,
-      }}
+      style={{ "--tone": statusTone(task.status) } as CSSProperties}
+      layout={layoutAnim}
+      // Sin animación de entrada en kanban: al cambiar de columna durante el
+      // drag la tarjeta se re-monta y el fade-in provocaría parpadeo.
+      initial={layoutAnim ? { opacity: 0, scale: 0.97 } : false}
+      animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.95 }}
       transition={{ type: "spring", stiffness: 350, damping: 28 }}
-      whileHover={{ y: -2 }}
+      whileHover={layoutAnim ? { y: -2 } : undefined}
       onClick={onClick}
       className={cn(
         "card task-accent group relative cursor-pointer overflow-hidden p-3 transition-shadow hover:shadow-el-lg",

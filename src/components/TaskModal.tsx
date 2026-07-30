@@ -1,7 +1,21 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, Plus, Trash2, Loader2, Check, GripVertical } from "lucide-react";
+import {
+  DndContext,
+  PointerSensor,
+  KeyboardSensor,
+  useSensor,
+  useSensors,
+  closestCenter,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from "@dnd-kit/sortable";
+import { X, Plus, Trash2, Loader2, Check } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -17,6 +31,7 @@ import {
   type Executor,
 } from "../lib/constants";
 import { cn } from "../lib/utils";
+import { SubtaskItem } from "./SubtaskItem";
 
 interface TaskModalProps {
   task?: Doc<"tasks"> | null; // si viene, es edición; si no, crear
@@ -47,6 +62,16 @@ export function TaskModal({
   const createSub = useMutation(api.subtasks.create);
   const toggleSub = useMutation(api.subtasks.toggle);
   const removeSub = useMutation(api.subtasks.remove);
+  const reorderSub = useMutation(api.subtasks.reorder);
+
+  // Sensores para el drag de sub-tareas (activación por desplazamiento
+  // para no interferir con el click del checkbox/eliminar).
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
 
   // Estado del form
   const [title, setTitle] = useState("");
@@ -167,6 +192,25 @@ export function TaskModal({
     if (!task || !newSub.trim()) return;
     await createSub({ taskId: task._id, title: newSub.trim() });
     setNewSub("");
+  }
+
+  /** Reordena sub-tareas al soltar el drag. */
+  async function handleSubDragEnd(e: DragEndEvent) {
+    const { active, over } = e;
+    if (!over || active.id === over.id) return;
+    const ordered = subtasks ?? [];
+    const fromIdx = ordered.findIndex((s) => s._id === active.id);
+    const toIdx = ordered.findIndex((s) => s._id === over.id);
+    if (fromIdx < 0 || toIdx < 0) return;
+    try {
+      await reorderSub({
+        id: active.id as Doc<"subtasks">["_id"],
+        newOrder: toIdx,
+      });
+    } catch (err) {
+      console.error("[subtask reorder]", err);
+      toast.error("No se pudo reordenar");
+    }
   }
 
   return (
@@ -299,45 +343,25 @@ export function TaskModal({
                 <div className="mb-4">
                   <label className="label">Sub-tareas</label>
                   <div className="space-y-1.5">
-                    <AnimatePresence initial={false}>
-                      {subtasks?.map((s) => (
-                        <motion.div
-                          key={s._id}
-                          layout
-                          initial={{ opacity: 0, y: -6 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          exit={{ opacity: 0, x: 12 }}
-                          className="flex items-center gap-2 rounded-el border-el border-line px-2 py-1.5"
-                        >
-                          <GripVertical className="h-3.5 w-3.5 text-faint" />
-                          <button
-                            onClick={() => toggleSub({ id: s._id })}
-                            className={cn(
-                              "flex h-4 w-4 shrink-0 items-center justify-center rounded-el border-el transition-all",
-                              s.done
-                                ? "border-accent bg-accent text-acfg"
-                                : "border-line2",
-                            )}
-                          >
-                            {s.done && <Check className="h-3 w-3" strokeWidth={3} />}
-                          </button>
-                          <span
-                            className={cn(
-                              "flex-1 text-sm",
-                              s.done && "text-faint line-through",
-                            )}
-                          >
-                            {s.title}
-                          </span>
-                          <button
-                            onClick={() => removeSub({ id: s._id })}
-                            className="text-faint transition-colors hover:text-danger"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </motion.div>
-                      ))}
-                    </AnimatePresence>
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={handleSubDragEnd}
+                    >
+                      <SortableContext
+                        items={(subtasks ?? []).map((s) => s._id)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {(subtasks ?? []).map((s) => (
+                          <SubtaskItem
+                            key={s._id}
+                            subtask={s}
+                            onToggle={(id) => toggleSub({ id })}
+                            onRemove={(id) => removeSub({ id })}
+                          />
+                        ))}
+                      </SortableContext>
+                    </DndContext>
                     <div className="flex gap-1.5">
                       <input
                         value={newSub}

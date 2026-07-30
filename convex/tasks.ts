@@ -1,6 +1,11 @@
-import { query, mutation, internalMutation } from "./_generated/server";
+import {
+  query,
+  mutation,
+  internalMutation,
+  type MutationCtx,
+} from "./_generated/server";
 import { v } from "convex/values";
-import type { Doc } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 
 /** Literales de área y estado para reutilizar en validaciones. */
 const areaUnion = v.union(
@@ -65,6 +70,68 @@ export const get = query({
 
 /**
  * =====================
+ *  HELPERS INTERNOS
+ * =====================
+ */
+
+/**
+ * Mueve una tarea al INICIO (order 0) de `newStatus`.
+ * - Compacta la columna origen (reindexa 0..n sin huecos).
+ * - Desplaza las tareas de la columna destino +1 y deja la movida en order 0.
+ * - `extraPatch` permite ajustar campos adicionales (ej. completedAt).
+ *
+ * Se usa para "poner arriba" cuando una tarea cambia de estado por medios
+ * que NO son drag (modal, toggleComplete): lo reciente queda visible arriba.
+ */
+async function moveToTopOfStatus(
+  ctx: MutationCtx,
+  id: Id<"tasks">,
+  oldStatus: Doc<"tasks">["status"],
+  newStatus: Doc<"tasks">["status"],
+  now: number,
+  extraPatch: Record<string, unknown> = {},
+) {
+  if (oldStatus === newStatus) return;
+
+  // 1) Compactar columna origen: quitar la tarea y reindexar 0..n.
+  const sourceCol = await ctx.db
+    .query("tasks")
+    .withIndex("by_status", (q) => q.eq("status", oldStatus))
+    .collect();
+  const sourceSorted = sourceCol
+    .filter((t) => t._id !== id)
+    .sort((a, b) => a.order - b.order);
+  await Promise.all(
+    sourceSorted.map((t, i) =>
+      ctx.db.patch(t._id, { order: i, updatedAt: now }),
+    ),
+  );
+
+  // 2) Insertar al INICIO (order 0) de la columna destino, empujando las
+  //    existentes hacia abajo (+1) para evitar colisiones de order.
+  const destCol = await ctx.db
+    .query("tasks")
+    .withIndex("by_status", (q) => q.eq("status", newStatus))
+    .collect();
+  const destSorted = destCol
+    .filter((t) => t._id !== id)
+    .sort((a, b) => a.order - b.order);
+  await Promise.all(
+    destSorted.map((t, i) =>
+      ctx.db.patch(t._id, { order: i + 1, updatedAt: now }),
+    ),
+  );
+
+  await ctx.db.patch(id, {
+    status: newStatus,
+    order: 0,
+    updatedAt: now,
+    ...extraPatch,
+  });
+}
+
+/**
+ * =====================
  *  MUTATIONS (escritura)
  * =====================
  */
@@ -88,21 +155,27 @@ const taskFields = {
   requestedBy: v.optional(v.string()),
 };
 
-/** Crea una nueva tarea. `order` se asigna al final de su estado. */
+/** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
 export const create = mutation({
   args: taskFields,
   handler: async (ctx, args) => {
     const now = Date.now();
-    // Contar tareas existentes en ese estado para ponerla al final
+    // Desplazar las tareas existentes del estado +1 para dejar order 0 libre
+    // arriba (lo nuevo se ve primero).
     const existing = await ctx.db
       .query("tasks")
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .collect();
-    const order = existing.length;
+    const sorted = existing.sort((a, b) => a.order - b.order);
+    await Promise.all(
+      sorted.map((t, i) =>
+        ctx.db.patch(t._id, { order: i + 1, updatedAt: now }),
+      ),
+    );
 
     const taskId = await ctx.db.insert("tasks", {
       ...args,
-      order,
+      order: 0,
       completedAt:
         args.status === "completado" ? now : undefined,
       createdAt: now,
@@ -136,17 +209,31 @@ export const update = mutation({
     if (!task) throw new Error("Tarea no encontrada");
     const now = Date.now();
 
-    const next: Record<string, unknown> = { ...patch, updatedAt: now };
+    // Separar el cambio de estado del resto del patch.
+    const { status: newStatus, ...restPatch } = patch;
 
-    // Si cambia a "completado", marcar fecha de completado.
+    // Si cambia el estado (desde el modal, NO via drag), mover la tarea
+    // ARRIBA (order 0) de la nueva columna + aplicar el resto de campos.
+    if (newStatus && newStatus !== task.status) {
+      const extra: Record<string, unknown> = { ...restPatch };
+      if (newStatus === "completado" && !task.completedAt) {
+        extra.completedAt = now;
+      }
+      if (newStatus !== "completado") {
+        extra.completedAt = undefined;
+      }
+      await moveToTopOfStatus(ctx, id, task.status, newStatus, now, extra);
+      return id;
+    }
+
+    // Sin cambio de estado: patch plano (mantiene el order actual).
+    const next: Record<string, unknown> = { ...patch, updatedAt: now };
     if (patch.status === "completado" && !task.completedAt) {
       next.completedAt = now;
     }
-    // Si sale de "completado", limpiar la fecha.
     if (patch.status && patch.status !== "completado") {
       next.completedAt = undefined;
     }
-
     await ctx.db.patch(id, next);
     return id;
   },
@@ -272,9 +359,7 @@ export const reorderWithinStatus = mutation({
 
 /**
  * Marca/desmarca una tarea como completada rápidamente.
- * Reasigna `order` para que la tarea vaya al INICIO (order 0) de la columna
- * destino — así lo más recientemente completado queda arriba — y compacta la
- * columna origen para no dejar huecos ni colisiones de orden.
+ * Usa moveToTopOfStatus para que quede ARRIBA (order 0) de la columna destino.
  */
 export const toggleComplete = mutation({
   args: { id: v.id("tasks") },
@@ -283,46 +368,9 @@ export const toggleComplete = mutation({
     if (!task) throw new Error("Tarea no encontrada");
     const now = Date.now();
     const oldStatus = task.status;
-    const newStatus: "completado" | "pendiente" =
-      oldStatus === "completado" ? "pendiente" : "completado";
-
-    // Misma columna no debería darse (toggle siempre cruza), pero por seguridad.
-    if (oldStatus === newStatus) return id;
-
-    // 1) Compactar columna origen: quitar la tarea y reindexar 0..n.
-    const sourceCol = await ctx.db
-      .query("tasks")
-      .withIndex("by_status", (q) => q.eq("status", oldStatus))
-      .collect();
-    const sourceSorted = sourceCol
-      .filter((t) => t._id !== id)
-      .sort((a, b) => a.order - b.order);
-    await Promise.all(
-      sourceSorted.map((t, i) =>
-        ctx.db.patch(t._id, { order: i, updatedAt: now }),
-      ),
-    );
-
-    // 2) Insertar al INICIO (order 0) de la columna destino, empujando las
-    //    existentes hacia abajo (+1) para evitar colisiones de order.
-    const destCol = await ctx.db
-      .query("tasks")
-      .withIndex("by_status", (q) => q.eq("status", newStatus))
-      .collect();
-    const destSorted = destCol
-      .filter((t) => t._id !== id)
-      .sort((a, b) => a.order - b.order);
-    await Promise.all(
-      destSorted.map((t, i) =>
-        ctx.db.patch(t._id, { order: i + 1, updatedAt: now }),
-      ),
-    );
-
-    await ctx.db.patch(id, {
-      status: newStatus,
-      order: 0,
+    const newStatus = oldStatus === "completado" ? "pendiente" : "completado";
+    await moveToTopOfStatus(ctx, id, oldStatus, newStatus, now, {
       completedAt: newStatus === "completado" ? now : undefined,
-      updatedAt: now,
     });
     return id;
   },
