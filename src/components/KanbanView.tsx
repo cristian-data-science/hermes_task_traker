@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -85,15 +84,14 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
     return map;
   }, [tasks, taskMap]);
 
-  const [cols, setCols] = useState<Cols>(serverCols);
+  // Estado optimista SOLO durante el drag; fuera de él, las columnas se
+  // derivan directamente del servidor (sin estado stale que se
+  // dessincronice al filtrar/buscar).
+  const [optimisticCols, setOptimisticCols] = useState<Cols | null>(null);
+  const cols: Cols = optimisticCols ?? serverCols;
   const latestServer = useRef(serverCols);
   const pending = useRef(false);
   latestServer.current = serverCols;
-
-  // Sincronizar con el servidor solo cuando no hay drag ni mutación en vuelo
-  useEffect(() => {
-    if (!activeId && !pending.current) setCols(serverCols);
-  }, [serverCols, activeId]);
 
   function findContainer(id: string): Status | null {
     if ((KANBAN_COLUMNS as string[]).includes(id)) return id as Status;
@@ -129,9 +127,10 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
     setOverCol(to);
     if (from === to) return;
 
-    setCols((prev) => {
-      const fromItems = prev[from].filter((i) => i !== String(active.id));
-      const toItems = [...prev[to]];
+    setOptimisticCols((prev) => {
+      const base = prev ?? latestServer.current;
+      const fromItems = base[from].filter((i) => i !== String(active.id));
+      const toItems = [...base[to]];
 
       let idx = toItems.indexOf(String(over.id));
       if (idx === -1) {
@@ -146,7 +145,7 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
         if (below) idx += 1;
       }
       toItems.splice(idx, 0, String(active.id));
-      return { ...prev, [from]: fromItems, [to]: toItems };
+      return { ...base, [from]: fromItems, [to]: toItems };
     });
   }
 
@@ -169,7 +168,10 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
         const newIdx = finalItems.indexOf(String(over.id));
         if (oldIdx !== -1 && newIdx !== -1 && oldIdx !== newIdx) {
           finalItems = arrayMove(finalItems, oldIdx, newIdx);
-          setCols((prev) => ({ ...prev, [container]: finalItems }));
+          setOptimisticCols((prev) => {
+            const base = prev ?? latestServer.current;
+            return { ...base, [container]: finalItems };
+          });
         }
       }
     }
@@ -193,7 +195,7 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
       .catch((err) => {
         console.error(err);
         toast.error("No se pudo mover la tarea");
-        setCols(latestServer.current); // revertir
+        setOptimisticCols(null); // revertir al estado del servidor
       })
       .finally(() => {
         pending.current = false;
@@ -203,7 +205,7 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
   function handleDragCancel() {
     setActiveId(null);
     setOverCol(null);
-    setCols(latestServer.current);
+    setOptimisticCols(null);
   }
 
   const activeTask = activeId ? taskMap[activeId] : null;
