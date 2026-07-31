@@ -3,6 +3,7 @@ import {
   useContext,
   useState,
   useMemo,
+  useEffect,
   type ReactNode,
 } from "react";
 import { useAction, useQuery } from "convex/react";
@@ -87,17 +88,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const isLoading = token !== null && valid === undefined;
-  // Si había token pero la sesión dejó de ser válida (caducó...), limpiar el
-  // token para forzar login.
   const isAuthenticated = valid === true;
-  if (token !== null && valid === false) {
-    setSessionToken(null);
-  }
+
+  // Si había token pero la sesión dejó de ser válida (caducó, se cambió el
+  // método de auth, sesión revocada...), limpiar el token en un efecto (no
+  // durante el render) para forzar login. Así los componentes hijos nunca
+  // disparan queries con un token ya invalidado.
+  useEffect(() => {
+    if (token !== null && valid === false) {
+      setSessionToken(null);
+    }
+  }, [token, valid]);
+
+  // Token "efectivo": null mientras no esté confirmado válido, para que las
+  // queries hijas usen "skip" en vez de lanzarse con un token muerto.
+  const effectiveToken = isAuthenticated ? token : null;
 
   const value = useMemo<AuthContextValue>(
-    () => ({ token, isLoading, isAuthenticated, signIn, signOut }),
+    () => ({
+      token: effectiveToken,
+      isLoading,
+      isAuthenticated,
+      signIn,
+      signOut,
+    }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [token, valid],
+    [effectiveToken, isLoading, isAuthenticated, valid],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
