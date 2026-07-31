@@ -8,6 +8,22 @@
       name="description"
       content="Cris Agent Task — Panel personal de tareas en tiempo real"
     />
+    <!--
+      Content Security Policy:
+       - default-src 'self': nada por defecto salvo el propio origen.
+       - script-src: self + el hash del script inline del tema (anti-flash).
+         Bloquea la ejecución de scripts inyectados por terceros (mitiga XSS).
+       - connect-src: self + Convex (WebSocket/HTTPS) para los datos.
+       - style-src/font-src/img: self + Google Fonts (estáticos).
+      NOTA: HSTS y X-Frame-Options deben configurarse en el hosting
+      (Vercel/Netlify/Convex Hosting) vía cabeceras HTTP; no se pueden
+      forzar con <meta>.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-E8/woXC1mYRzlXMBSV1OVriw9lWXXQpv5bgnuPq+LOo='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://*.convex.site; base-uri 'self'; frame-ancestors 'none';"
+    />
+    <meta name="referrer" content="no-referrer" />
     <title>Cris Agent Task</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

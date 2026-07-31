@@ -1,33 +1,44 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Loader2, Lock, ArrowRight, ShieldCheck } from "lucide-react";
+import { Loader2, ArrowRight, ShieldCheck, FileKey2, UploadCloud } from "lucide-react";
 import toast from "react-hot-toast";
 import { BrandMark } from "./Toolbar";
 
 /**
- * Pantalla de login: solo contraseña (app personal).
+ * Pantalla de login por archivo de clave RSA (rsa_key.p8).
+ *
+ * El usuario arrastra (o selecciona) su clave privada. El navegador la usa para
+ * firmar un challenge; la clave nunca se envía al servidor.
  */
 export function LoginScreen({
   signIn,
 }: {
-  signIn: (password: string) => Promise<unknown>;
+  signIn: (file: File) => Promise<unknown>;
 }) {
-  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  async function handleSubmit(e?: React.FormEvent | React.MouseEvent) {
-    e?.preventDefault();
-    if (!password) return;
+  async function handleFile(file: File) {
     setSubmitting(true);
     try {
-      await signIn(password);
+      await signIn(file);
       toast.success("Bienvenido, Cristian");
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Error");
-      setPassword("");
+      const msg =
+        err instanceof Error ? err.message : "No se pudo verificar la clave";
+      toast.error(msg);
     } finally {
       setSubmitting(false);
     }
+  }
+
+  /** Filtra los archivos soltados: solo el primero, preferentemente .p8 / .pem. */
+  function onDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) void handleFile(file);
   }
 
   return (
@@ -66,43 +77,67 @@ export function LoginScreen({
         </div>
 
         <div className="card p-6 sm:p-8">
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label className="label">Contraseña</label>
-              <div className="relative">
-                <Lock className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
-                <input
-                  type="password"
-                  required
-                  autoFocus
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="input pl-9"
-                  autoComplete="current-password"
-                />
-              </div>
-            </div>
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".p8,.pem,.key,text/plain,application/x-pem-file"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void handleFile(file);
+              // reset para poder seleccionar el mismo archivo otra vez
+              e.target.value = "";
+            }}
+          />
 
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={submitting}
-              className="btn-primary w-full"
-            >
-              {submitting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <ArrowRight className="h-4 w-4" />
-              )}
-              Entrar
-            </button>
-          </form>
+          {/* Zona de arrastrar y soltar la clave privada */}
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault();
+              setDragOver(true);
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={onDrop}
+            disabled={submitting}
+            className={[
+              "flex w-full flex-col items-center justify-center gap-3 rounded-el border-2 border-dashed p-8 text-center transition-colors",
+              dragOver
+                ? "border-accent bg-[color-mix(in_srgb,var(--accent)_10%,transparent)]"
+                : "border-line hover:border-accent/60 hover:bg-panel2",
+            ].join(" ")}
+          >
+            {submitting ? (
+              <Loader2 className="h-8 w-8 animate-spin text-accent" />
+            ) : dragOver ? (
+              <FileKey2 className="h-8 w-8 text-accent" />
+            ) : (
+              <UploadCloud className="h-8 w-8 text-mute" />
+            )}
+            <span className="text-sm font-medium text-ink">
+              {submitting
+                ? "Verificando clave…"
+                : "Arrastra aquí tu archivo de clave"}
+            </span>
+            <span className="flex items-center gap-1 text-xs text-faint">
+              o haz clic para seleccionar
+            </span>
+            <span className="mt-1 flex items-center gap-1 rounded-full border border-line px-2 py-0.5 font-mono text-[10px] text-mute">
+              <FileKey2 className="h-3 w-3" />
+              rsa_key.p8
+            </span>
+          </button>
+
+          <p className="mt-4 flex items-center justify-center gap-1.5 text-center text-xs text-faint">
+            <ArrowRight className="h-3.5 w-3.5" />
+            La clave se usa solo en este navegador para firmar el acceso
+          </p>
         </div>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-xs text-faint">
           <ShieldCheck className="h-3.5 w-3.5" />
-          App personal · acceso restringido
+          App personal · acceso por clave RSA
         </p>
       </motion.div>
     </div>

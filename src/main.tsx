@@ -6,12 +6,13 @@ import { Toaster } from "react-hot-toast";
 import App from "./App.tsx";
 import "./index.css";
 
-// Capturar errores globales y mostrarlos en pantalla
+// Capturar errores globales. En producción no volcamos el stack completo
+// (fuga de información de implementación); solo en desarrollo.
 window.addEventListener("error", (e) => {
-  console.error("[GLOBAL ERROR]", e.message, e.error);
+  if (import.meta.env.DEV) console.error("[GLOBAL ERROR]", e.message, e.error);
 });
 window.addEventListener("unhandledrejection", (e) => {
-  console.error("[UNHANDLED REJECTION]", e.reason);
+  if (import.meta.env.DEV) console.error("[UNHANDLED REJECTION]", e.reason);
 });
 
 const convex = new ConvexReactClient(import.meta.env.VITE_CONVEX_URL);

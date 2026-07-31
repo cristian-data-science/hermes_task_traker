@@ -26,6 +26,10 @@ build
 .env.local
 .env.*.local
 
+# Claves RSA (privada + pública). NUNCA se commitean.
+# La privada (rsa_key.p8) es lo que arrastras para iniciar sesión.
+keys/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

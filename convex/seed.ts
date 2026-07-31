@@ -1,17 +1,23 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
+import { requireAdminToken } from "./authGuard";
 
 /**
  * Mutation de seed: borra todas las tareas/sub-tareas existentes
  * y crea las del snapshot inicial del archivo tareas-pendientes.md.
  *
- * Se invoca desde el script `npm run seed` (scripts/seed.ts).
- * Es una mutation pública de un solo uso (no se expone en la UI).
+ * Se invoca desde el script `npm run seed` (scripts/seed.ts), que pasa el
+ * `HERMES_ADMIN_TOKEN` leído de `.env.local`.
+ *
+ * 🔒 Requiere `adminToken`: sin él, cualquiera podría vaciar la base de datos
+ *    llamando a esta mutation desde Internet. El token se valida contra la
+ *    env var HERMES_ADMIN_TOKEN del servidor (comparación timing-safe).
  *
  * ⚠️ Borra TODA la data existente antes de importar.
  */
 export const resetAndSeed = mutation({
   args: {
+    adminToken: v.string(),
     tasks: v.array(
       v.object({
         title: v.string(),
@@ -51,7 +57,10 @@ export const resetAndSeed = mutation({
       }),
     ),
   },
-  handler: async (ctx, { tasks }) => {
+  handler: async (ctx, { adminToken, tasks }) => {
+    // 0) Verificar token de administración ANTES de cualquier borrado.
+    requireAdminToken(adminToken);
+
     // 1) Borrar todo lo existente
     const existingTasks = await ctx.db.query("tasks").collect();
     const existingSubs = await ctx.db.query("subtasks").collect();

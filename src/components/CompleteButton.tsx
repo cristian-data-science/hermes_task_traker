@@ -4,6 +4,7 @@ import { Check, CheckCircle2 } from "lucide-react";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
 import { cn } from "../lib/utils";
+import { useAuth } from "../hooks/useAuth";
 
 interface CompleteButtonProps {
   task: Doc<"tasks">;
@@ -25,14 +26,15 @@ export function CompleteButton({
   className,
 }: CompleteButtonProps) {
   const toggleComplete = useMutation(api.tasks.toggleComplete);
+  const { token } = useAuth();
   const isCompleted = task.status === "completado";
 
   async function handleToggle() {
     const wasCompleted = task.status === "completado";
     try {
-      await toggleComplete({ id: task._id });
+      await toggleComplete({ id: task._id, sessionToken: token! });
     } catch (e) {
-      console.error("[toggleComplete]", e);
+      if (import.meta.env.DEV) console.error("[toggleComplete]", e);
       toast.error("No se pudo actualizar la tarea");
       return;
     }
@@ -44,10 +46,10 @@ export function CompleteButton({
             onUndo={async () => {
               toast.dismiss(t.id);
               try {
-                await toggleComplete({ id: task._id });
+                await toggleComplete({ id: task._id, sessionToken: token! });
                 toast.success("Tarea restaurada");
               } catch (e) {
-                console.error("[toggleComplete undo]", e);
+                if (import.meta.env.DEV) console.error("[toggleComplete undo]", e);
                 toast.error("No se pudo deshacer");
               }
             }}

@@ -5,20 +5,26 @@ import { internal } from "./_generated/api";
 import { v } from "convex/values";
 
 /**
- * Auth simple y segura para uso personal.
+ * Autenticación por challenge-response RSA (sin contraseña).
  *
- * Contraseña:
- *  - Se guarda hasheada (PBKDF2) en la tabla `settings` (key="passwordHash").
- *  - Si no existe ese registro, se usa la variable de entorno HERMES_PASSWORD
- *    (texto plano) como fallback inicial.
- *  - Se puede cambiar desde la app con changePassword (pide la actual).
+ * Flujo:
+ *  1. El cliente pide un challenge → createChallenge() devuelve un nonce
+ *     aleatorio y lo guarda en la tabla `challenges` (válido 60 s, un solo uso).
+ *  2. El cliente firma el nonce con su CLAVE PRIVADA (rsa_key.p8) en el
+ *     navegador (Web Crypto). La clave privada NUNCA se envía al servidor.
+ *  3. El cliente llama a signInWithRsa(challenge, signature) → el servidor
+ *     verifica la firma con la CLAVE PÚBLICA (HERMES_RSA_PUBLIC_KEY, secreto de
+ *     Convex). Si es válida y el challenge no está usado ni caducado, emite un
+ *     token de sesión.
  *
- * Sesión: token opaco de 32 bytes hex, 30 días, en tabla `sessions`.
+ * Seguridad:
+ *  - El challenge es de un solo uso (anti-replay) y caduca rápido.
+ *  - La firma es RSASSA-PKCS1-v1_5 + SHA-256 (estándar, verificable con Web Crypto).
+ *  - El secreto HERMES_RSA_PUBLIC_KEY vive solo en el servidor.
  */
 
 const SESSION_DURATION_MS = 30 * 24 * 60 * 60 * 1000;
-const PBKDF2_ITERATIONS = 100_000;
-const PBKDF2_KEYLEN = 32;
+const CHALLENGE_TTL_MS = 60 * 1000;
 
 function getCrypto() {
   return require("node:crypto" as string) as typeof import("node:crypto");
@@ -28,65 +34,61 @@ function generateToken(): string {
   return getCrypto().randomBytes(32).toString("hex");
 }
 
-/** Hash PBKDF2. Formato: saltHex:iterations:hashHex */
-function hashPassword(password: string): string {
-  const crypto = getCrypto();
-  const salt = crypto.randomBytes(16);
-  const hash = crypto.pbkdf2Sync(password, salt, PBKDF2_ITERATIONS, PBKDF2_KEYLEN, "sha256");
-  return `${salt.toString("hex")}:${PBKDF2_ITERATIONS}:${hash.toString("hex")}`;
-}
-
-/** Verifica una contraseña contra un hash PBKDF2 (timing-safe). */
-function verifyPassword(password: string, stored: string): boolean {
-  const crypto = getCrypto();
-  const parts = stored.split(":");
-  if (parts.length !== 3) return false;
-  const [saltHex, iterStr, hashHex] = parts;
-  const iterations = parseInt(iterStr, 10);
-  const salt = Buffer.from(saltHex, "hex");
-  const expectedHash = Buffer.from(hashHex, "hex");
-  const actualHash = crypto.pbkdf2Sync(password, salt, iterations, PBKDF2_KEYLEN, "sha256");
-  if (actualHash.length !== expectedHash.length) return false;
-  return crypto.timingSafeEqual(actualHash, expectedHash);
-}
+/**
+ * Emite un challenge de login. Pública: cualquier cliente puede pedirla,
+ * pero el challenge solo sirve una vez y caduca en 60 s.
+ */
+export const createChallenge = action({
+  args: {},
+  handler: async (ctx): Promise<{ challenge: string }> => {
+    const challenge = getCrypto().randomBytes(32).toString("hex");
+    const now = Date.now();
+    await ctx.runMutation(internal.authQuery._createChallenge, {
+      challenge,
+      expiresAt: now + CHALLENGE_TTL_MS,
+      now,
+    });
+    return { challenge };
+  },
+});
 
 /**
- * Obtiene la contraseña esperada como hash, usando la DB o la env var.
- * Devuelve { hash, isFromEnv }:
- *  - si hay registro en settings → hash = valor de la DB
- *  - si no → hash = hashPassword(HERMES_PASSWORD) (env var como texto plano)
+ * Verifica la firma RSA del challenge y, si es válida, crea una sesión.
+ *
+ * @param challenge  nonce obtenido de createChallenge().
+ * @param signature  firma RSASSA-PKCS1-v1_5(SHA-256) en base64.
  */
-async function getExpectedPassword(ctx: any): Promise<{ hash: string; isFromEnv: boolean }> {
-  const stored = await ctx.runQuery(internal.authQuery._getSetting, { key: "passwordHash" });
-  if (stored) {
-    return { hash: stored, isFromEnv: false };
-  }
-  const env = process.env.HERMES_PASSWORD;
-  if (!env) {
-    throw new Error("Auth no configurada: falta HERMES_PASSWORD y no hay hash en la DB");
-  }
-  return { hash: hashPassword(env), isFromEnv: true };
-}
-
-/**
- * Inicia sesión. Lanza error si la contraseña es incorrecta.
- * Si era la contraseña de la env var y aún no estaba en la DB, la persiste.
- */
-export const signIn = action({
-  args: { password: v.string() },
-  handler: async (ctx, { password }): Promise<{ token: string }> => {
-    const { hash, isFromEnv } = await getExpectedPassword(ctx);
-    if (!verifyPassword(password, hash)) {
-      throw new Error("Contraseña incorrecta");
-    }
-    // Si venía de la env var, lo persistimos en la DB como hash.
-    if (isFromEnv) {
-      await ctx.runMutation(internal.authQuery._setSetting, {
-        key: "passwordHash",
-        value: hash,
-      });
+export const signInWithRsa = action({
+  args: { challenge: v.string(), signature: v.string() },
+  handler: async (ctx, { challenge, signature }): Promise<{ token: string }> => {
+    const crypto = getCrypto();
+    const publicKeyPem = process.env.HERMES_RSA_PUBLIC_KEY;
+    if (!publicKeyPem) {
+      throw new Error("Auth no configurada: falta HERMES_RSA_PUBLIC_KEY");
     }
 
+    // 1) Validar el challenge: existe, no caducado, no usado.
+    const row = await ctx.runQuery(internal.authQuery._getChallenge, { challenge });
+    if (!row) throw new Error("Challenge inválido");
+    if (row.used) throw new Error("Challenge ya usado");
+    if (row.expiresAt < Date.now()) throw new Error("Challenge expirado");
+
+    // 2) Verificar la firma con la clave pública.
+    const verifier = crypto.createVerify("RSA-SHA256");
+    verifier.update(challenge);
+    verifier.end();
+    let valid = false;
+    try {
+      valid = verifier.verify(publicKeyPem, signature, "base64");
+    } catch {
+      valid = false;
+    }
+    if (!valid) throw new Error("Firma RSA inválida");
+
+    // 3) Marcar el challenge como usado (anti-replay).
+    await ctx.runMutation(internal.authQuery._markChallengeUsed, { challenge });
+
+    // 4) Emitir la sesión.
     const now = Date.now();
     const token = generateToken();
     await ctx.runMutation(internal.authQuery._createSession, {
@@ -103,31 +105,6 @@ export const signOut = action({
   args: { token: v.string() },
   handler: async (ctx, { token }): Promise<null> => {
     await ctx.runMutation(internal.authQuery._deleteSession, { token });
-    return null;
-  },
-});
-
-/**
- * Cambia la contraseña. Pide la actual para verificar.
- * La nueva se guarda hasheada (PBKDF2) en la DB.
- */
-export const changePassword = action({
-  args: {
-    currentPassword: v.string(),
-    newPassword: v.string(),
-  },
-  handler: async (ctx, { currentPassword, newPassword }): Promise<null> => {
-    if (newPassword.length < 6) {
-      throw new Error("La nueva contraseña debe tener al menos 6 caracteres");
-    }
-    const { hash } = await getExpectedPassword(ctx);
-    if (!verifyPassword(currentPassword, hash)) {
-      throw new Error("La contraseña actual es incorrecta");
-    }
-    await ctx.runMutation(internal.authQuery._setSetting, {
-      key: "passwordHash",
-      value: hashPassword(newPassword),
-    });
     return null;
   },
 });

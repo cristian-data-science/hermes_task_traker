@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useAuth } from "./hooks/useAuth";
+import { useAuth, AuthProvider } from "./hooks/useAuth";
 import { useTheme, type ThemeId } from "./hooks/useTheme";
 import { api } from "~/convex/_generated/api";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -12,12 +12,20 @@ import { KanbanView } from "./components/KanbanView";
 import { ListView } from "./components/ListView";
 import { CalendarView } from "./components/CalendarView";
 import { TaskModal } from "./components/TaskModal";
-import { ChangePasswordModal } from "./components/ChangePasswordModal";
 import { ThemedBackground } from "./components/ThemedBackground";
 import { Loader2, ClipboardList } from "lucide-react";
 
 export default function App() {
-  const { isLoading, isAuthenticated, signIn, signOut, changePassword } = useAuth();
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
+  );
+}
+
+/** Capa interna: consume el contexto de auth para decidir login vs dashboard. */
+function AppShell() {
+  const { isLoading, isAuthenticated, signIn, signOut } = useAuth();
   const { theme, setTheme } = useTheme();
 
   return (
@@ -36,7 +44,6 @@ export default function App() {
           theme={theme}
           onThemeChange={setTheme}
           onLogout={() => void signOut()}
-          onChangePassword={changePassword}
         />
       )}
     </>
@@ -48,14 +55,13 @@ function Dashboard({
   theme,
   onThemeChange,
   onLogout,
-  onChangePassword,
 }: {
   theme: ThemeId;
   onThemeChange: (t: ThemeId) => void;
   onLogout: () => void;
-  onChangePassword: (current: string, next: string) => Promise<void>;
 }) {
-  const tasks = useQuery(api.tasks.list, {}) ?? [];
+  const { token } = useAuth();
+  const tasks = useQuery(api.tasks.list, token ? { sessionToken: token } : "skip") ?? [];
 
   // Estado UI
   const [view, setView] = useState<ViewMode>("kanban");
@@ -64,7 +70,6 @@ function Dashboard({
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
   const [modalOpen, setModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Doc<"tasks"> | null>(null);
-  const [pwModalOpen, setPwModalOpen] = useState(false);
   const [newDefaults, setNewDefaults] = useState<{
     status?: Status;
     area?: Area;
@@ -112,7 +117,6 @@ function Dashboard({
         theme={theme}
         onThemeChange={onThemeChange}
         onLogout={onLogout}
-        onChangePassword={() => setPwModalOpen(true)}
         totalCount={tasks.length}
         pendingCount={pendingCount}
       />
@@ -170,12 +174,6 @@ function Dashboard({
         onClose={() => setModalOpen(false)}
         defaultStatus={newDefaults.status}
         defaultArea={newDefaults.area}
-      />
-
-      <ChangePasswordModal
-        open={pwModalOpen}
-        onClose={() => setPwModalOpen(false)}
-        onChangePassword={onChangePassword}
       />
     </div>
   );

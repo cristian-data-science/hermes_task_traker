@@ -15,6 +15,7 @@ import { AreaBadge, StatusBadge } from "./Badges";
 import { CompleteButton } from "./CompleteButton";
 import { EXECUTOR_META } from "../lib/constants";
 import { cn, statusTone, formatRelative } from "../lib/utils";
+import { useAuth } from "../hooks/useAuth";
 
 /** Slider rápido de progreso 0-100 (commit al soltar). */
 export function ProgressSlider({
@@ -25,6 +26,7 @@ export function ProgressSlider({
   className?: string;
 }) {
   const update = useMutation(api.tasks.update);
+  const { token } = useAuth();
   const [val, setVal] = useState(task.progress ?? 0);
 
   useEffect(() => {
@@ -33,7 +35,7 @@ export function ProgressSlider({
 
   function commit() {
     if (val !== (task.progress ?? 0)) {
-      void update({ id: task._id, progress: val });
+      void update({ id: task._id, progress: val, sessionToken: token! });
     }
   }
 

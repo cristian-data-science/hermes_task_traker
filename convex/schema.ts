@@ -4,9 +4,16 @@ import { v } from "convex/values";
 /**
  * Modelo de datos de Hermes Task Tracker
  *
- * Auth: 1 sola contraseña (variable de entorno HERMES_PASSWORD en Convex).
- * No hay tabla de usuarios ni hashes guardados en la DB.
- * La sesión es un token opaco en la tabla `sessions`.
+ * Auth: challenge-response RSA. El login no usa contraseña.
+ *  - El backend guarda la CLAVE PÚBLICA en HERMES_RSA_PUBLIC_KEY (secreto Convex).
+ *  - El cliente firma un challenge con su CLAVE PRIVADA (rsa_key.p8), que nunca
+ *    se envía al servidor.
+ *  - La sesión es un token opaco en la tabla `sessions`.
+ *
+ * Hardening:
+ *  - `tasks.deletedAt` / `subtasks.deletedAt`: borrado lógico (soft-delete).
+ *    Las queries filtran `deletedAt === undefined`.
+ *  - `challenges`: nonce de un solo uso y caducable (anti-replay).
  */
 
 export const areas = ["patagonia", "datacef", "personal"] as const;
@@ -52,6 +59,8 @@ export default defineSchema({
     requestedBy: v.optional(v.string()),
     order: v.number(),
     completedAt: v.optional(v.number()),
+    /** Borrado lógico: timestamp cuando se eliminó, o undefined si está activa. */
+    deletedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -64,6 +73,8 @@ export default defineSchema({
     title: v.string(),
     done: v.boolean(),
     completedAt: v.optional(v.number()),
+    /** Borrado lógico: timestamp cuando se eliminó, o undefined si está activa. */
+    deletedAt: v.optional(v.number()),
     order: v.number(),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -77,11 +88,22 @@ export default defineSchema({
   }).index("by_token", ["token"]),
 
   // ===== Settings (clave-valor) =====
-  // Guarda la contraseña hasheada (PBKDF2) para poder cambiarla desde la app.
-  // Si no existe el registro `passwordHash`, se usa la env var HERMES_PASSWORD.
+  // No guarda contraseñas. Reservado para configuración futura.
   settings: defineTable({
     key: v.string(),
     value: v.string(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
+
+  // ===== Challenges de login (challenge-response RSA) =====
+  // El backend emite un nonce aleatorio por intento de login. El cliente lo
+  // firma con la CLAVE PRIVADA (rsa_key.p8) y el servidor verifica la firma
+  // contra la CLAVE PÚBLICA (HERMES_RSA_PUBLIC_KEY).
+  // ⚅ De un solo uso: se consume al verificar, caduca a los 60 s.
+  challenges: defineTable({
+    challenge: v.string(),
+    expiresAt: v.number(),
+    used: v.boolean(),
+    createdAt: v.number(),
+  }).index("by_challenge", ["challenge"]),
 });

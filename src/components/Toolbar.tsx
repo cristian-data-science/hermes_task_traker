@@ -8,7 +8,6 @@ import {
   Search,
   X,
   LogOut,
-  KeyRound,
 } from "lucide-react";
 import {
   AREAS,
@@ -36,7 +35,6 @@ interface ToolbarProps {
   theme: ThemeId;
   onThemeChange: (t: ThemeId) => void;
   onLogout: () => void;
-  onChangePassword: () => void;
   totalCount: number;
   pendingCount: number;
 }
@@ -77,7 +75,6 @@ export function Toolbar({
   theme,
   onThemeChange,
   onLogout,
-  onChangePassword,
   totalCount,
   pendingCount,
 }: ToolbarProps) {
@@ -151,14 +148,6 @@ export function Toolbar({
             <button onClick={onNewTask} className="btn-primary px-2.5 sm:px-3.5">
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">Nueva</span>
-            </button>
-
-            <button
-              onClick={onChangePassword}
-              className="btn-ghost hidden p-2 sm:inline-flex"
-              title="Cambiar contraseña"
-            >
-              <KeyRound className="h-4 w-4" />
             </button>
 
             <button
@@ -239,14 +228,6 @@ export function Toolbar({
           })}
 
           {/* Accesos rápidos en móvil al final de los chips */}
-          <button
-            onClick={onChangePassword}
-            className="chip shrink-0 sm:hidden"
-            title="Cambiar contraseña"
-          >
-            <KeyRound className="h-3.5 w-3.5" />
-            Clave
-          </button>
           <button
             onClick={onLogout}
             className="chip shrink-0 sm:hidden"
