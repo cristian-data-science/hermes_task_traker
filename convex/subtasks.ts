@@ -2,6 +2,13 @@ import { query, mutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
+import { requireAuth } from "./authGuard";
+
+/** Argumento de sesión obligatorio en toda función pública. */
+const sessionArg = { sessionToken: v.string() };
+
+/** Límite de longitud para el título de una sub-tarea. */
+const SUBTITLE_MAX = 200;
 
 /**
  * Sincroniza el progreso de la tarea padre con sus sub-tareas.
@@ -11,6 +18,8 @@ import type { MutationCtx } from "./_generated/server";
  *  - Si venía en 100% y se desmarca alguna → recalcula al % real
  *    (así el slider no se queda "mintiendo" en 100).
  *  - En cualquier otro caso se respeta el valor manual del slider.
+ *
+ * Solo considera sub-tareas activas (no borradas).
  */
 async function syncProgressFromSubtasks(
   ctx: MutationCtx,
@@ -20,15 +29,16 @@ async function syncProgressFromSubtasks(
     .query("subtasks")
     .withIndex("by_task", (q) => q.eq("taskId", taskId))
     .collect();
-  if (subs.length === 0) return;
+  const active = subs.filter((s) => s.deletedAt === undefined);
+  if (active.length === 0) return;
 
-  const done = subs.filter((s) => s.done).length;
-  const pct = Math.round((done / subs.length) * 100);
+  const done = active.filter((s) => s.done).length;
+  const pct = Math.round((done / active.length) * 100);
 
   const task = await ctx.db.get(taskId);
-  if (!task) return;
+  if (!task || task.deletedAt !== undefined) return;
 
-  const allDone = done === subs.length;
+  const allDone = done === active.length;
   const wasFull = (task.progress ?? 0) === 100;
   if (!allDone && !wasFull) return; // respetar el valor manual
 
@@ -40,13 +50,16 @@ async function syncProgressFromSubtasks(
 /**
  * Devuelve los conteos de sub-tareas {done, total} agrupados por taskId.
  * Una sola query para alimentar a todos los TaskCards.
+ * Solo cuenta sub-tareas activas (no borradas).
  */
 export const allCounts = query({
-  args: {},
-  handler: async (ctx) => {
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
     const all = await ctx.db.query("subtasks").collect();
     const map: Record<string, { done: number; total: number }> = {};
     for (const s of all) {
+      if (s.deletedAt !== undefined) continue;
       const key = s.taskId;
       if (!map[key]) map[key] = { done: 0, total: 0 };
       map[key].total += 1;
@@ -56,31 +69,34 @@ export const allCounts = query({
   },
 });
 
-/** Lista las sub-tareas de una tarea, ordenadas. */
+/** Lista las sub-tareas activas de una tarea, ordenadas. */
 export const listByTask = query({
-  args: { taskId: v.id("tasks") },
-  handler: async (ctx, { taskId }): Promise<Doc<"subtasks">[]> => {
-    return await ctx.db
+  args: { ...sessionArg, taskId: v.id("tasks") },
+  handler: async (ctx, { sessionToken, taskId }): Promise<Doc<"subtasks">[]> => {
+    await requireAuth(ctx, sessionToken);
+    const all = await ctx.db
       .query("subtasks")
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .order("asc")
       .collect();
+    return all.filter((s) => s.deletedAt === undefined);
   },
 });
 
 /** Crea una sub-tarea al final de la lista de la tarea padre. */
 export const create = mutation({
-  args: { taskId: v.id("tasks"), title: v.string() },
-  handler: async (ctx, { taskId, title }) => {
+  args: { ...sessionArg, taskId: v.id("tasks"), title: v.string() },
+  handler: async (ctx, { sessionToken, taskId, title }) => {
+    await requireAuth(ctx, sessionToken);
     const now = Date.now();
     const existing = await ctx.db
       .query("subtasks")
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .collect();
-    const order = existing.length;
+    const order = existing.filter((s) => s.deletedAt === undefined).length;
     const id = await ctx.db.insert("subtasks", {
       taskId,
-      title,
+      title: title.slice(0, SUBTITLE_MAX),
       done: false,
       order,
       createdAt: now,
@@ -94,19 +110,22 @@ export const create = mutation({
 
 /** Actualiza el título de una sub-tarea. */
 export const rename = mutation({
-  args: { id: v.id("subtasks"), title: v.string() },
-  handler: async (ctx, { id, title }) => {
-    await ctx.db.patch(id, { title, updatedAt: Date.now() });
+  args: { ...sessionArg, id: v.id("subtasks"), title: v.string() },
+  handler: async (ctx, { sessionToken, id, title }) => {
+    await requireAuth(ctx, sessionToken);
+    await ctx.db.patch(id, { title: title.slice(0, SUBTITLE_MAX), updatedAt: Date.now() });
     return id;
   },
 });
 
 /** Marca/desmarca una sub-tarea como completada. */
 export const toggle = mutation({
-  args: { id: v.id("subtasks") },
-  handler: async (ctx, { id }) => {
+  args: { ...sessionArg, id: v.id("subtasks") },
+  handler: async (ctx, { sessionToken, id }) => {
+    await requireAuth(ctx, sessionToken);
     const sub = await ctx.db.get(id);
-    if (!sub) throw new Error("Sub-tarea no encontrada");
+    if (!sub || sub.deletedAt !== undefined)
+      throw new Error("Sub-tarea no encontrada");
     const now = Date.now();
     const done = !sub.done;
     await ctx.db.patch(id, {
@@ -120,20 +139,27 @@ export const toggle = mutation({
   },
 });
 
-/** Elimina una sub-tarea y recompacta el orden de las restantes. */
+/**
+ * Elimina una sub-tarea (borrado lógico) y recompacta el orden de las restantes.
+ * Marca `deletedAt` en vez de borrar físicamente, para que sea recuperable.
+ */
 export const remove = mutation({
-  args: { id: v.id("subtasks") },
-  handler: async (ctx, { id }) => {
+  args: { ...sessionArg, id: v.id("subtasks") },
+  handler: async (ctx, { sessionToken, id }) => {
+    await requireAuth(ctx, sessionToken);
     const sub = await ctx.db.get(id);
-    if (!sub) return id;
-    await ctx.db.delete(id);
+    if (!sub || sub.deletedAt !== undefined) return id;
+    const now = Date.now();
+    await ctx.db.patch(id, { deletedAt: now, updatedAt: now });
 
-    // Recompactar orden de las restantes
+    // Recompactar orden de las restantes (activas)
     const siblings = await ctx.db
       .query("subtasks")
       .withIndex("by_task", (q) => q.eq("taskId", sub.taskId))
       .collect()
-      .then((r) => r.sort((a, b) => a.order - b.order));
+      .then((r) =>
+        r.filter((s) => s.deletedAt === undefined).sort((a, b) => a.order - b.order),
+      );
     await Promise.all(
       siblings.map((s, i) =>
         ctx.db.patch(s._id, { order: i, updatedAt: Date.now() }),
@@ -148,12 +174,15 @@ export const remove = mutation({
 /** Reordena sub-tareas dentro de una tarea (drag). */
 export const reorder = mutation({
   args: {
+    ...sessionArg,
     id: v.id("subtasks"),
     newOrder: v.number(),
   },
-  handler: async (ctx, { id, newOrder }) => {
+  handler: async (ctx, { sessionToken, id, newOrder }) => {
+    await requireAuth(ctx, sessionToken);
     const sub = await ctx.db.get(id);
-    if (!sub) throw new Error("Sub-tarea no encontrada");
+    if (!sub || sub.deletedAt !== undefined)
+      throw new Error("Sub-tarea no encontrada");
     const now = Date.now();
 
     const siblings = (
@@ -162,7 +191,7 @@ export const reorder = mutation({
         .withIndex("by_task", (q) => q.eq("taskId", sub.taskId))
         .collect()
     )
-      .filter((s) => s._id !== id)
+      .filter((s) => s._id !== id && s.deletedAt === undefined)
       .sort((a, b) => a.order - b.order);
 
     siblings.splice(newOrder, 0, null as unknown as Doc<"subtasks">);

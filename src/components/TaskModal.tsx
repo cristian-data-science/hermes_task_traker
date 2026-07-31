@@ -32,6 +32,7 @@ import {
 } from "../lib/constants";
 import { cn } from "../lib/utils";
 import { SubtaskItem } from "./SubtaskItem";
+import { useAuth } from "../hooks/useAuth";
 
 interface TaskModalProps {
   task?: Doc<"tasks"> | null; // si viene, es edición; si no, crear
@@ -50,6 +51,7 @@ export function TaskModal({
   defaultArea = "personal",
 }: TaskModalProps) {
   const isEdit = !!task;
+  const { token } = useAuth();
   const createTask = useMutation(api.tasks.create);
   const updateTask = useMutation(api.tasks.update);
   const removeTask = useMutation(api.tasks.remove);
@@ -57,7 +59,7 @@ export function TaskModal({
   // Sub-tareas
   const subtasks = useQuery(
     api.subtasks.listByTask,
-    task ? { taskId: task._id } : "skip",
+    task ? { taskId: task._id, sessionToken: token! } : "skip",
   );
   const createSub = useMutation(api.subtasks.create);
   const toggleSub = useMutation(api.subtasks.toggle);
@@ -153,17 +155,17 @@ export function TaskModal({
         requestedBy: requestedBy.trim() || undefined,
       };
       if (isEdit && task) {
-        await updateTask({ id: task._id, ...payload });
+        await updateTask({ id: task._id, sessionToken: token!, ...payload });
         toast.success("Tarea actualizada");
       } else {
-        await createTask(payload);
+        await createTask({ sessionToken: token!, ...payload });
         toast.success("Tarea creada");
       }
       // Invalidar el borrador: la próxima apertura empieza limpio.
       lastCtx.current = null;
       onClose();
     } catch (err) {
-      console.error(err);
+      if (import.meta.env.DEV) console.error(err);
       toast.error(err instanceof Error ? err.message : "Error al guardar");
     } finally {
       setSaving(false);
@@ -172,11 +174,11 @@ export function TaskModal({
 
   async function handleDelete() {
     if (!task) return;
-    if (!confirm(`¿Eliminar "${task.title}"? Esta acción no se puede deshacer.`))
+    if (!confirm(`¿Eliminar "${task.title}"?`))
       return;
     setSaving(true);
     try {
-      await removeTask({ id: task._id });
+      await removeTask({ id: task._id, sessionToken: token! });
       toast.success("Tarea eliminada");
       // Invalidar el borrador: la tarea ya no existe.
       lastCtx.current = null;
@@ -190,7 +192,7 @@ export function TaskModal({
 
   async function handleAddSub() {
     if (!task || !newSub.trim()) return;
-    await createSub({ taskId: task._id, title: newSub.trim() });
+    await createSub({ taskId: task._id, title: newSub.trim(), sessionToken: token! });
     setNewSub("");
   }
 
@@ -206,9 +208,10 @@ export function TaskModal({
       await reorderSub({
         id: active.id as Doc<"subtasks">["_id"],
         newOrder: toIdx,
+        sessionToken: token!,
       });
     } catch (err) {
-      console.error("[subtask reorder]", err);
+      if (import.meta.env.DEV) console.error("[subtask reorder]", err);
       toast.error("No se pudo reordenar");
     }
   }
@@ -356,8 +359,8 @@ export function TaskModal({
                           <SubtaskItem
                             key={s._id}
                             subtask={s}
-                            onToggle={(id) => toggleSub({ id })}
-                            onRemove={(id) => removeSub({ id })}
+                            onToggle={(id) => toggleSub({ id, sessionToken: token! })}
+                            onRemove={(id) => removeSub({ id, sessionToken: token! })}
                           />
                         ))}
                       </SortableContext>

@@ -37,6 +37,7 @@ import { TaskCard } from "./TaskCard";
 import { StatusDot } from "./Badges";
 import { useSubtaskCounts } from "../hooks/useSubtaskCounts";
 import { useHiddenColumns } from "../hooks/useHiddenColumns";
+import { useAuth } from "../hooks/useAuth";
 import { MouseSensor, TouchSensor } from "../lib/dndSensors";
 import { cn } from "../lib/utils";
 
@@ -61,6 +62,7 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
   const changeStatus = useMutation(api.tasks.changeStatus);
   const reorderWithinStatus = useMutation(api.tasks.reorderWithinStatus);
   const counts = useSubtaskCounts(tasks);
+  const { token } = useAuth();
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<Status | null>(null);
@@ -190,12 +192,17 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
           id: task._id as Id<"tasks">,
           newStatus: container,
           newOrder,
+          sessionToken: token!,
         })
-      : reorderWithinStatus({ id: task._id as Id<"tasks">, newOrder });
+      : reorderWithinStatus({
+          id: task._id as Id<"tasks">,
+          newOrder,
+          sessionToken: token!,
+        });
 
     mutation
       .catch((err) => {
-        console.error(err);
+        if (import.meta.env.DEV) console.error(err);
         toast.error("No se pudo mover la tarea");
       })
       .finally(() => {

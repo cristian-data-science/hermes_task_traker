@@ -9,6 +9,7 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as authGuard from "../authGuard.js";
 import type * as authQuery from "../authQuery.js";
 import type * as seed from "../seed.js";
 import type * as subtasks from "../subtasks.js";
@@ -22,6 +23,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  authGuard: typeof authGuard;
   authQuery: typeof authQuery;
   seed: typeof seed;
   subtasks: typeof subtasks;

@@ -47,30 +47,44 @@ export const _deleteSession = internalMutation({
   },
 });
 
-/** Helper interno: lee un setting por clave. */
-export const _getSetting = internalQuery({
-  args: { key: v.string() },
-  handler: async (ctx, { key }) => {
-    const row = await ctx.db
-      .query("settings")
-      .withIndex("by_key", (q) => q.eq("key", key))
-      .first();
-    return row?.value ?? null;
+// ===== Helpers de challenges de login (challenge-response RSA) =====
+
+/** Helper interno: crea un challenge de login (nonce de un solo uso). */
+export const _createChallenge = internalMutation({
+  args: { challenge: v.string(), expiresAt: v.number(), now: v.number() },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("challenges", {
+      challenge: args.challenge,
+      expiresAt: args.expiresAt,
+      used: false,
+      createdAt: args.now,
+    });
+    return null;
   },
 });
 
-/** Helper interno: upsert de un setting. */
-export const _setSetting = internalMutation({
-  args: { key: v.string(), value: v.string() },
-  handler: async (ctx, { key, value }) => {
-    const existing = await ctx.db
-      .query("settings")
-      .withIndex("by_key", (q) => q.eq("key", key))
+/** Helper interno: lee un challenge por su nonce. */
+export const _getChallenge = internalQuery({
+  args: { challenge: v.string() },
+  handler: async (ctx, { challenge }) => {
+    const row = await ctx.db
+      .query("challenges")
+      .withIndex("by_challenge", (q) => q.eq("challenge", challenge))
       .first();
-    if (existing) {
-      await ctx.db.patch(existing._id, { value, updatedAt: Date.now() });
-    } else {
-      await ctx.db.insert("settings", { key, value, updatedAt: Date.now() });
+    return row ?? null;
+  },
+});
+
+/** Helper interno: marca un challenge como usado (anti-replay). */
+export const _markChallengeUsed = internalMutation({
+  args: { challenge: v.string() },
+  handler: async (ctx, { challenge }) => {
+    const row = await ctx.db
+      .query("challenges")
+      .withIndex("by_challenge", (q) => q.eq("challenge", challenge))
+      .first();
+    if (row) {
+      await ctx.db.patch(row._id, { used: true });
     }
     return null;
   },

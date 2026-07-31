@@ -6,6 +6,7 @@ import {
 } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
+import { requireAuth } from "./authGuard";
 
 /** Literales de área y estado para reutilizar en validaciones. */
 const areaUnion = v.union(
@@ -22,49 +23,91 @@ const statusUnion = v.union(
   v.literal("completado"),
 );
 
+/** Argumento de sesión obligatorio en toda función pública. */
+const sessionArg = { sessionToken: v.string() };
+
+/** Límites de longitud para textos libres (anti-abuso de almacenamiento). */
+const TITLE_MAX = 200;
+const NOTES_MAX = 5000;
+const TEXT_MAX = 100;
+
+/** Sanea y valida los campos de texto antes de persistirlos. */
+function sanitizeTaskText(input: {
+  title?: string;
+  notes?: string;
+  requestedBy?: string;
+}) {
+  const out: Record<string, string> = {};
+  if (input.title !== undefined) {
+    out.title = input.title.slice(0, TITLE_MAX);
+  }
+  if (input.notes !== undefined) {
+    out.notes = input.notes.slice(0, NOTES_MAX);
+  }
+  if (input.requestedBy !== undefined) {
+    out.requestedBy = input.requestedBy.slice(0, TEXT_MAX);
+  }
+  return out;
+}
+
+/** Clamp del progreso al rango válido 0-100 (no confiar en el HTML). */
+function clampProgress(n: number | undefined): number | undefined {
+  if (n === undefined) return undefined;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
 /**
  * =====================
  *  QUERIES (lectura)
  * =====================
  */
 
-/** Lista todas las tareas, ordenadas por orden. */
+/** Lista todas las tareas activas (no borradas), ordenadas por orden. */
 export const list = query({
-  args: {},
-  handler: async (ctx): Promise<Doc<"tasks">[]> => {
-    return await ctx.db.query("tasks").order("asc").collect();
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }): Promise<Doc<"tasks">[]> => {
+    await requireAuth(ctx, sessionToken);
+    const all = await ctx.db.query("tasks").order("asc").collect();
+    return all.filter((t) => t.deletedAt === undefined);
   },
 });
 
-/** Lista las tareas de una área concreta. */
+/** Lista las tareas activas de una área concreta. */
 export const listByArea = query({
-  args: { area: areaUnion },
-  handler: async (ctx, { area }) => {
-    return await ctx.db
+  args: { ...sessionArg, area: areaUnion },
+  handler: async (ctx, { sessionToken, area }) => {
+    await requireAuth(ctx, sessionToken);
+    const all = await ctx.db
       .query("tasks")
       .withIndex("by_area", (q) => q.eq("area", area))
       .order("asc")
       .collect();
+    return all.filter((t) => t.deletedAt === undefined);
   },
 });
 
-/** Lista las tareas por estado (para columnas del Kanban). */
+/** Lista las tareas activas por estado (para columnas del Kanban). */
 export const listByStatus = query({
-  args: { status: statusUnion },
-  handler: async (ctx, { status }) => {
-    return await ctx.db
+  args: { ...sessionArg, status: statusUnion },
+  handler: async (ctx, { sessionToken, status }) => {
+    await requireAuth(ctx, sessionToken);
+    const all = await ctx.db
       .query("tasks")
       .withIndex("by_status", (q) => q.eq("status", status))
       .order("asc")
       .collect();
+    return all.filter((t) => t.deletedAt === undefined);
   },
 });
 
-/** Obtiene una tarea por id. */
+/** Obtiene una tarea por id (null si está borrada). */
 export const get = query({
-  args: { id: v.id("tasks") },
-  handler: async (ctx, { id }) => {
-    return await ctx.db.get(id);
+  args: { ...sessionArg, id: v.id("tasks") },
+  handler: async (ctx, { sessionToken, id }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(id);
+    if (!task || task.deletedAt !== undefined) return null;
+    return task;
   },
 });
 
@@ -99,7 +142,7 @@ async function moveToTopOfStatus(
     .withIndex("by_status", (q) => q.eq("status", oldStatus))
     .collect();
   const sourceSorted = sourceCol
-    .filter((t) => t._id !== id)
+    .filter((t) => t._id !== id && t.deletedAt === undefined)
     .sort((a, b) => a.order - b.order);
   await Promise.all(
     sourceSorted.map((t, i) =>
@@ -114,7 +157,7 @@ async function moveToTopOfStatus(
     .withIndex("by_status", (q) => q.eq("status", newStatus))
     .collect();
   const destSorted = destCol
-    .filter((t) => t._id !== id)
+    .filter((t) => t._id !== id && t.deletedAt === undefined)
     .sort((a, b) => a.order - b.order);
   await Promise.all(
     destSorted.map((t, i) =>
@@ -138,6 +181,7 @@ async function moveToTopOfStatus(
 
 /** Tipo para los campos editables de una tarea. */
 const taskFields = {
+  ...sessionArg,
   title: v.string(),
   area: areaUnion,
   status: statusUnion,
@@ -159,14 +203,18 @@ const taskFields = {
 export const create = mutation({
   args: taskFields,
   handler: async (ctx, args) => {
+    await requireAuth(ctx, args.sessionToken);
     const now = Date.now();
+    const sanitized = sanitizeTaskText(args);
     // Desplazar las tareas existentes del estado +1 para dejar order 0 libre
     // arriba (lo nuevo se ve primero).
     const existing = await ctx.db
       .query("tasks")
       .withIndex("by_status", (q) => q.eq("status", args.status))
       .collect();
-    const sorted = existing.sort((a, b) => a.order - b.order);
+    const sorted = existing
+      .filter((t) => t.deletedAt === undefined)
+      .sort((a, b) => a.order - b.order);
     await Promise.all(
       sorted.map((t, i) =>
         ctx.db.patch(t._id, { order: i + 1, updatedAt: now }),
@@ -174,10 +222,20 @@ export const create = mutation({
     );
 
     const taskId = await ctx.db.insert("tasks", {
-      ...args,
+      title: sanitized.title ?? args.title,
+      area: args.area,
+      status: args.status,
+      notes: sanitized.notes ?? args.notes,
+      executor: args.executor,
+      estimate: args.estimate,
+      dueDate: args.dueDate,
+      progress: clampProgress(args.progress),
+      standbyFrom: args.standbyFrom,
+      standbyUntil: args.standbyUntil,
+      scheduledDates: args.scheduledDates,
+      requestedBy: sanitized.requestedBy ?? args.requestedBy,
       order: 0,
-      completedAt:
-        args.status === "completado" ? now : undefined,
+      completedAt: args.status === "completado" ? now : undefined,
       createdAt: now,
       updatedAt: now,
     });
@@ -188,6 +246,7 @@ export const create = mutation({
 /** Actualiza una tarea existente. Solo muta `updatedAt` y los campos pasados. */
 export const update = mutation({
   args: {
+    ...sessionArg,
     id: v.id("tasks"),
     title: v.optional(v.string()),
     area: v.optional(areaUnion),
@@ -204,10 +263,20 @@ export const update = mutation({
     scheduledDates: v.optional(v.string()),
     requestedBy: v.optional(v.string()),
   },
-  handler: async (ctx, { id, ...patch }) => {
+  handler: async (ctx, { sessionToken, id, ...patch }) => {
+    await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(id);
-    if (!task) throw new Error("Tarea no encontrada");
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
     const now = Date.now();
+
+    // Sanea textos y clamp del progreso antes de aplicarlos.
+    const sanitized = sanitizeTaskText(patch);
+    if (sanitized.title !== undefined) patch.title = sanitized.title;
+    if (sanitized.notes !== undefined) patch.notes = sanitized.notes;
+    if (sanitized.requestedBy !== undefined)
+      patch.requestedBy = sanitized.requestedBy;
+    if (patch.progress !== undefined) patch.progress = clampProgress(patch.progress);
 
     // Separar el cambio de estado del resto del patch.
     const { status: newStatus, ...restPatch } = patch;
@@ -239,17 +308,27 @@ export const update = mutation({
   },
 });
 
-/** Elimina una tarea y todas sus sub-tareas. */
+/**
+ * Elimina una tarea (borrado lógico / soft-delete) y oculta sus sub-tareas.
+ * Marca `deletedAt` en la tarea y todas sus sub-tareas, sin borrar físicamente.
+ * Esto hace el borrado recuperable frente a accidentes o abuso.
+ */
 export const remove = mutation({
-  args: { id: v.id("tasks") },
-  handler: async (ctx, { id }) => {
-    // Borrar sub-tareas asociadas
+  args: { ...sessionArg, id: v.id("tasks") },
+  handler: async (ctx, { sessionToken, id }) => {
+    await requireAuth(ctx, sessionToken);
+    const now = Date.now();
+    // Marcar sub-tareas asociadas como borradas
     const subtasks = await ctx.db
       .query("subtasks")
       .withIndex("by_task", (q) => q.eq("taskId", id))
       .collect();
-    await Promise.all(subtasks.map((s) => ctx.db.delete(s._id)));
-    await ctx.db.delete(id);
+    await Promise.all(
+      subtasks
+        .filter((s) => s.deletedAt === undefined)
+        .map((s) => ctx.db.patch(s._id, { deletedAt: now, updatedAt: now })),
+    );
+    await ctx.db.patch(id, { deletedAt: now, updatedAt: now });
     return id;
   },
 });
@@ -264,13 +343,16 @@ export const remove = mutation({
  */
 export const changeStatus = mutation({
   args: {
+    ...sessionArg,
     id: v.id("tasks"),
     newStatus: statusUnion,
     newOrder: v.number(),
   },
-  handler: async (ctx, { id, newStatus, newOrder }) => {
+  handler: async (ctx, { sessionToken, id, newStatus, newOrder }) => {
+    await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(id);
-    if (!task) throw new Error("Tarea no encontrada");
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
     const now = Date.now();
     const oldStatus = task.status;
 
@@ -281,7 +363,7 @@ export const changeStatus = mutation({
         .withIndex("by_status", (q) => q.eq("status", oldStatus))
         .collect();
       const sorted = sourceCol
-        .filter((t) => t._id !== id)
+        .filter((t) => t._id !== id && t.deletedAt === undefined)
         .sort((a, b) => a.order - b.order);
       await Promise.all(
         sorted.map((t, i) => ctx.db.patch(t._id, { order: i, updatedAt: now })),
@@ -294,7 +376,7 @@ export const changeStatus = mutation({
       .withIndex("by_status", (q) => q.eq("status", newStatus))
       .collect();
     const destSorted = destCol
-      .filter((t) => t._id !== id)
+      .filter((t) => t._id !== id && t.deletedAt === undefined)
       .sort((a, b) => a.order - b.order);
 
     // Insertar en newOrder y reindexar
@@ -328,12 +410,15 @@ export const changeStatus = mutation({
  */
 export const reorderWithinStatus = mutation({
   args: {
+    ...sessionArg,
     id: v.id("tasks"),
     newOrder: v.number(),
   },
-  handler: async (ctx, { id, newOrder }) => {
+  handler: async (ctx, { sessionToken, id, newOrder }) => {
+    await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(id);
-    if (!task) throw new Error("Tarea no encontrada");
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
     const status = task.status;
     const now = Date.now();
 
@@ -342,7 +427,7 @@ export const reorderWithinStatus = mutation({
       .withIndex("by_status", (q) => q.eq("status", status))
       .collect();
     const sorted = col
-      .filter((t) => t._id !== id)
+      .filter((t) => t._id !== id && t.deletedAt === undefined)
       .sort((a, b) => a.order - b.order);
 
     sorted.splice(newOrder, 0, null as unknown as Doc<"tasks">);
@@ -362,10 +447,12 @@ export const reorderWithinStatus = mutation({
  * Usa moveToTopOfStatus para que quede ARRIBA (order 0) de la columna destino.
  */
 export const toggleComplete = mutation({
-  args: { id: v.id("tasks") },
-  handler: async (ctx, { id }) => {
+  args: { ...sessionArg, id: v.id("tasks") },
+  handler: async (ctx, { sessionToken, id }) => {
+    await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(id);
-    if (!task) throw new Error("Tarea no encontrada");
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
     const now = Date.now();
     const oldStatus = task.status;
     const newStatus = oldStatus === "completado" ? "pendiente" : "completado";
@@ -377,7 +464,7 @@ export const toggleComplete = mutation({
       ...(completing ? { progress: 100 } : {}),
     });
 
-    // Marcar completada también marca todas sus sub-tareas
+    // Marcar completada también marca todas sus sub-tareas (no borradas)
     if (completing) {
       const subs = await ctx.db
         .query("subtasks")
@@ -385,7 +472,7 @@ export const toggleComplete = mutation({
         .collect();
       await Promise.all(
         subs
-          .filter((s) => !s.done)
+          .filter((s) => !s.done && s.deletedAt === undefined)
           .map((s) =>
             ctx.db.patch(s._id, { done: true, completedAt: now, updatedAt: now }),
           ),
