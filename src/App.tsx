@@ -12,6 +12,8 @@ import { KanbanView } from "./components/KanbanView";
 import { ListView } from "./components/ListView";
 import { CalendarView } from "./components/CalendarView";
 import { TaskModal } from "./components/TaskModal";
+import { ClickUpSettings } from "./components/ClickUpSettings";
+import { InboundSyncModal } from "./components/InboundSyncModal";
 import { ThemedBackground } from "./components/ThemedBackground";
 import { Loader2, ClipboardList } from "lucide-react";
 
@@ -69,6 +71,8 @@ function Dashboard({
   const [areaFilter, setAreaFilter] = useState<Area | "all">("all");
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
   const [modalOpen, setModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [inboundOpen, setInboundOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Doc<"tasks"> | null>(null);
   const [newDefaults, setNewDefaults] = useState<{
     status?: Status;
@@ -119,6 +123,8 @@ function Dashboard({
         onLogout={onLogout}
         totalCount={tasks.length}
         pendingCount={pendingCount}
+        onOpenSettings={() => setSettingsOpen(true)}
+        onOpenInboundSync={() => setInboundOpen(true)}
       />
 
       <main className="mx-auto max-w-[1600px] px-2.5 py-3 sm:px-6 sm:py-4 lg:px-8">
@@ -174,6 +180,16 @@ function Dashboard({
         onClose={() => setModalOpen(false)}
         defaultStatus={newDefaults.status}
         defaultArea={newDefaults.area}
+      />
+
+      <ClickUpSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
+
+      <InboundSyncModal
+        open={inboundOpen}
+        onClose={() => setInboundOpen(false)}
       />
     </div>
   );

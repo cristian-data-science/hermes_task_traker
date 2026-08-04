@@ -8,6 +8,8 @@ import {
   Search,
   X,
   LogOut,
+  Settings,
+  RefreshCw,
 } from "lucide-react";
 import {
   AREAS,
@@ -37,6 +39,8 @@ interface ToolbarProps {
   onLogout: () => void;
   totalCount: number;
   pendingCount: number;
+  onOpenSettings: () => void;
+  onOpenInboundSync: () => void;
 }
 
 /** Logo de Cris Agent Task: prompt de terminal + cursor. */
@@ -77,6 +81,8 @@ export function Toolbar({
   onLogout,
   totalCount,
   pendingCount,
+  onOpenSettings,
+  onOpenInboundSync,
 }: ToolbarProps) {
   return (
     <header
@@ -144,6 +150,25 @@ export function Toolbar({
 
             {/* Selector de tema (4 temas) */}
             <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
+
+            {/* Sync reversa desde ClickUp */}
+            <button
+              onClick={onOpenInboundSync}
+              className="btn-ghost p-2 hover:text-accent"
+              title="Sincronizar desde ClickUp"
+              aria-label="Sincronizar desde ClickUp"
+            >
+              <RefreshCw className="h-4 w-4" />
+            </button>
+
+            <button
+              onClick={onOpenSettings}
+              className="btn-ghost p-2 hover:text-accent"
+              title="Configuración ClickUp"
+              aria-label="Configuración ClickUp"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
 
             <button onClick={onNewTask} className="btn-primary px-2.5 sm:px-3.5">
               <Plus className="h-4 w-4" />

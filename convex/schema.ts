@@ -63,10 +63,31 @@ export default defineSchema({
     deletedAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    // ===== Integración ClickUp (solo área `patagonia`) =====
+    /** id de la tarea en ClickUp. Vacío = no sincronizada. */
+    clickupId: v.optional(v.string()),
+    /**
+     * Nodo padre en ClickUp. Vacío → la tarea cae en la List "Mesa Técnica"
+     * (tarea suelta). Seteado → la tarea se anida bajo ese nodo (rama de un
+     * proyecto, ej. "alcance" dentro de Ley de Datos).
+     */
+    clickupParentId: v.optional(v.string()),
+    /** URL directa a la tarea en ClickUp (para el badge/link en la UI). */
+    clickupUrl: v.optional(v.string()),
+    /** Timestamp del último sync exitoso con ClickUp. */
+    clickupSyncedAt: v.optional(v.number()),
+    /** Último error de sync (vacío = ok). Se muestra en la UI como aviso. */
+    clickupSyncError: v.optional(v.string()),
+    /**
+     * Si el usuario descartó esta tarea del modal de sync reversa (inbound).
+     * Evita que reaparezca como "nueva" en futuros escaneos.
+     */
+    clickupInboundIgnored: v.optional(v.boolean()),
   })
     .index("by_status", ["status", "order"])
     .index("by_area", ["area", "order"])
-    .index("by_area_status", ["area", "status", "order"]),
+    .index("by_area_status", ["area", "status", "order"])
+    .index("by_clickup_id", ["clickupId"]),
 
   subtasks: defineTable({
     taskId: v.id("tasks"),

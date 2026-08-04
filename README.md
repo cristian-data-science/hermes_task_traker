@@ -117,6 +117,87 @@ Es de uso personal.
 > propio para cookies `HttpOnly`. Esto cumple tu requisito: la sesión persiste
 > en el navegador habitual, pero se pide el `.p8` en incógnito u otro navegador.
 
+## 🔗 Integración ClickUp (solo Patagonia)
+
+Las tareas del área **Patagonia** se sincronizan con ClickUp automáticamente.
+Las áreas **Datacef** y **Personal** nunca tocan ClickUp.
+
+### Cómo funciona
+
+**Outbound (Hermes → ClickUp), automático:**
+Al crear/editar/completar/eliminar una tarea de Patagonia, se refleja en ClickUp.
+Al crear, elegís el destino:
+- **Mesa Técnica** → la tarea va a la list "Tareas mesa técnica" (tarea suelta).
+- **Proyecto** → elegís proyecto + rama (ej. Ley de Datos → alcance / desarrollo /
+  puesta en marcha) y la tarea se anida bajo esa rama.
+
+**Inbound (ClickUp → Hermes), manual y selectivo:**
+El botón ⟳ **"Sincronizar desde ClickUp"** (en el Toolbar) escanea dos fuentes
+y abre un modal con dos secciones:
+- **Nuevas**: tareas que existen en ClickUp pero no en Hermes.
+- **Cambios de estado**: tareas mapeadas cuyo estado cambió en ClickUp.
+
+Las dos fuentes de escaneo se combinan y deduplican:
+1. **Lists/proyectos trackeados** en configuración (Mesa Técnica, Ley de Datos, etc.).
+2. **TODAS las tareas asignadas a Cristian Gutiérrez** en el workspace entero,
+   sin importar en qué list/folder estén. Si a Cris le asignan una tarea en
+   cualquier parte de ClickUp, aparece en el modal — independientemente de la
+   configuración trackeada.
+
+Cada ítem tiene un checkbox y un selector de estado. Aprobás lo que quieras
+(item por item o en bulk) y lo demás se marca como ignorado para que no
+reaparezca. **Nada se aplica sin tu aprobación explícita.**
+
+**Responsable en ClickUp:** toda tarea que Hermes envía a ClickUp queda asignada
+a **Cristian Gutiérrez**, sin importar el ejecutor interno (Cris o Claw) de
+Hermes.
+
+### Configuración
+
+**1. Secret del token** (una sola vez):
+```bash
+npx convex env set CLICKUP_API_KEY "pk_tu_token_personal"
+```
+El token **nunca** llega al navegador: todas las llamadas a ClickUp se hacen
+server-side desde actions de Convex (`convex/clickup.ts`).
+
+**2. Mapeo de destinos** (`settings` key `clickup.config`):
+La config vive en la DB como JSON, editable desde el panel ⚙️ de ClickUp
+(toggle on/off + checkboxes de inbound por proyecto). Estructura:
+```json
+{
+  "mesaTecnica": { "listId": "901418067371", "inbound": true },
+  "projects": [{
+    "id": "ley-de-datos",
+    "label": "Ley de Datos",
+    "listId": "901412131396",
+    "inbound": true,
+    "destinations": [
+      { "id": "alcance", "label": "Levantamiento y alcance", "parentId": "86b67yvgr" },
+      { "id": "desarrollo", "label": "Desarrollo / App Web", "parentId": "86b67yvhh" },
+      { "id": "puesta-en-marcha", "label": "Despliegue y cumplimiento", "parentId": "86bb2xvgr" }
+    ]
+  }]
+}
+```
+Para añadir otro proyecto, agregás un objeto a `projects` con sus destinos
+—sin tocar código.
+
+**3. Toggle global**: el panel ⚙️ permite pausar todo el sync outbound
+(`clickup.enabled`). Las eliminaciones en Hermes **desvinculan** (limpian
+`clickupId`) sin borrar en ClickUp, para no romper lo que ve el equipo.
+
+### Mapeo de estados
+
+Hermes tiene 6 estados; ClickUp usa 3. El outbound pierde granularidad; el
+inbound sugiere un estado sobreescribible en el modal:
+
+| Hermes | ClickUp |
+|---|---|
+| `completado` | `complete` |
+| `en-curso` | `in progress` |
+| `urgente`/`pendiente`/`standby`/`programado` | `to do` |
+
 ## 🌍 Deploy a producción
 
 El backend se deploya con:
@@ -153,16 +234,23 @@ hermes_task_traker/
 │   ├── schema.ts            # Esquema de la DB (tasks, subtasks, sessions, settings, challenges)
 │   ├── tasks.ts             # CRUD + reorder + changeStatus (protegidos con sesión)
 │   ├── subtasks.ts          # CRUD + reorder + allCounts (protegidos con sesión)
+│   ├── clickup.ts           # Integración ClickUp: syncTask (outbound) + getInboundDiff/submitInbound
+│   ├── clickupMutations.ts  # Mutaciones internas de ClickUp (persistencia V8, no Node)
+│   ├── clickupConfig.ts     # Tipos + config default del mapeo ClickUp (IDs verificados)
+│   ├── settings.ts          # API pública de settings (config ClickUp + _checkSession)
 │   ├── seed.ts              # Mutation de importación (protegida con admin token)
 │   └── _generated/          # Tipos generados por Convex (auto)
 ├── src/
 │   ├── components/
 │   │   ├── LoginScreen.tsx    # Pantalla de login
-│   │   ├── Toolbar.tsx        # Header + filtros + conmutador de vistas
+│   │   ├── Toolbar.tsx        # Header + filtros + botones ClickUp (sync/settings)
 │   │   ├── KanbanView.tsx     # Vista Kanban con drag & drop
 │   │   ├── ListView.tsx       # Vista lista agrupada por área
-│   │   ├── TaskCard.tsx       # Tarjeta de tarea
-│   │   ├── TaskModal.tsx      # Modal crear/editar con sub-tareas
+│   │   ├── TaskCard.tsx       # Tarjeta de tarea (con badge ClickUp)
+│   │   ├── TaskModal.tsx      # Modal crear/editar con sub-tareas + destino ClickUp
+│   │   ├── ClickUpDestinationPicker.tsx  # Selector Mesa Técnica | Proyecto → rama
+│   │   ├── ClickUpSettings.tsx           # Panel de config ClickUp (toggle + inbound)
+│   │   ├── InboundSyncModal.tsx          # Modal de sync reversa (diff + aprobación)
 │   │   └── Badges.tsx         # Badges de estado y área
 │   ├── hooks/                 # useAuth (Provider+Context, login RSA), useTheme, useSubtaskCounts
 │   ├── lib/                   # constants, utils, rsa (firma del challenge en el navegador)
@@ -178,14 +266,17 @@ hermes_task_traker/
 
 **`tasks`**: title, area (patagonia/datacef/personal), status (6 estados),
 notes, estimate, dueDate, progress, standbyFrom/Until, scheduledDates,
-requestedBy, order, completedAt, deletedAt (soft-delete), timestamps.
+requestedBy, order, completedAt, deletedAt (soft-delete), timestamps,
+**+ campos ClickUp** (solo Patagonia): clickupId, clickupParentId, clickupUrl,
+clickupSyncedAt, clickupSyncError, clickupInboundIgnored.
 
 **`subtasks`**: taskId, title, done, completedAt, deletedAt (soft-delete),
 order, timestamps.
 
 **`sessions`**: token, expiresAt, createdAt (sesiones activas, verificadas en cada llamada).
 
-**`settings`**: key/value (reservado para configuración futura).
+**`settings`**: key/value. Almacena la config de ClickUp (`clickup.config`,
+`clickup.enabled`, timestamps de último sync).
 
 **`challenges`**: challenge, expiresAt, used (nonce de un solo uso para el login RSA).
 

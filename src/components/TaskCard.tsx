@@ -8,6 +8,8 @@ import {
   AlertTriangle,
   CheckCircle2,
   User,
+  ExternalLink,
+  RefreshCw,
 } from "lucide-react";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -216,6 +218,45 @@ export function TaskCard({
           <span className="inline-flex items-center gap-1">
             <User className="h-3 w-3" />
             {task.requestedBy}
+          </span>
+        )}
+
+        {/* Badge ClickUp: link externo si está sincronizada, o aviso de error */}
+        {task.clickupUrl && (
+          <a
+            href={task.clickupUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-no-dnd
+            onClick={(e) => e.stopPropagation()}
+            title={
+              task.clickupSyncError
+                ? `ClickUp: error de sync — ${task.clickupSyncError}`
+                : "Ver en ClickUp"
+            }
+            className={cn(
+              "inline-flex items-center gap-1",
+              task.clickupSyncError
+                ? "text-danger"
+                : "text-mute hover:text-accent",
+            )}
+          >
+            {task.clickupSyncError ? (
+              <AlertTriangle className="h-3 w-3" />
+            ) : (
+              <ExternalLink className="h-3 w-3" />
+            )}
+            ClickUp
+          </a>
+        )}
+        {/* Pendiente de sync (sin error, sin clickupId, área patagonia) */}
+        {!task.clickupUrl && !task.clickupSyncError && task.area === "patagonia" && (
+          <span
+            className="inline-flex items-center gap-1 text-faint"
+            title="Pendiente de sincronizar con ClickUp"
+          >
+            <RefreshCw className="h-3 w-3" />
+            sync…
           </span>
         )}
       </div>

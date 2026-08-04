@@ -11,7 +11,11 @@
 import type * as auth from "../auth.js";
 import type * as authGuard from "../authGuard.js";
 import type * as authQuery from "../authQuery.js";
+import type * as clickup from "../clickup.js";
+import type * as clickupConfig from "../clickupConfig.js";
+import type * as clickupMutations from "../clickupMutations.js";
 import type * as seed from "../seed.js";
+import type * as settings from "../settings.js";
 import type * as subtasks from "../subtasks.js";
 import type * as tasks from "../tasks.js";
 
@@ -25,7 +29,11 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   authGuard: typeof authGuard;
   authQuery: typeof authQuery;
+  clickup: typeof clickup;
+  clickupConfig: typeof clickupConfig;
+  clickupMutations: typeof clickupMutations;
   seed: typeof seed;
+  settings: typeof settings;
   subtasks: typeof subtasks;
   tasks: typeof tasks;
 }>;
