@@ -32,6 +32,7 @@ import {
 } from "../lib/constants";
 import { cn } from "../lib/utils";
 import { SubtaskItem } from "./SubtaskItem";
+import { DatePicker } from "./DatePicker";
 import { useAuth } from "../hooks/useAuth";
 
 interface TaskModalProps {
@@ -416,11 +417,11 @@ export function TaskModal({
                 </div>
                 <div>
                   <label className="label">Fecha de entrega</label>
-                  <input
+                  <DatePicker
                     value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
+                    onChange={setDueDate}
                     placeholder="2026-07-29, mañana…"
-                    className="input"
+                    label="Calendario de fecha de entrega"
                   />
                 </div>
               </div>
@@ -457,20 +458,20 @@ export function TaskModal({
                 <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <label className="label">Standby desde</label>
-                    <input
+                    <DatePicker
                       value={standbyFrom}
-                      onChange={(e) => setStandbyFrom(e.target.value)}
+                      onChange={setStandbyFrom}
                       placeholder="08-jul-2026"
-                      className="input"
+                      label="Calendario de standby desde"
                     />
                   </div>
                   <div>
                     <label className="label">Pasa a pendiente el</label>
-                    <input
+                    <DatePicker
                       value={standbyUntil}
-                      onChange={(e) => setStandbyUntil(e.target.value)}
+                      onChange={setStandbyUntil}
                       placeholder="29-jul-2026"
-                      className="input"
+                      label="Calendario de pasa a pendiente el"
                     />
                   </div>
                 </div>
