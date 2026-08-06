@@ -9,6 +9,7 @@ import {
   X,
   LogOut,
   Settings,
+  Inbox,
 } from "lucide-react";
 import {
   AREAS,
@@ -41,6 +42,8 @@ interface ToolbarProps {
   /** Áreas ocultas (no se muestran sus chips de filtro). */
   hiddenAreas: string[];
   onOpenSettings: () => void;
+  /** Abre la bandeja de tareas de ClickUp asignadas a mí y sin trackear. */
+  onOpenAssignedInbox: () => void;
 }
 
 /** Logo de Cris Agent Task: prompt de terminal + cursor. */
@@ -83,6 +86,7 @@ export function Toolbar({
   pendingCount,
   hiddenAreas,
   onOpenSettings,
+  onOpenAssignedInbox,
 }: ToolbarProps) {
   return (
     <header
@@ -150,6 +154,15 @@ export function Toolbar({
 
             {/* Selector de tema (4 temas) */}
             <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
+
+            <button
+              onClick={onOpenAssignedInbox}
+              className="btn-ghost p-2 hover:text-accent"
+              title="Asignadas a mí en ClickUp sin trackear"
+              aria-label="Asignadas a mí en ClickUp sin trackear"
+            >
+              <Inbox className="h-4 w-4" />
+            </button>
 
             <button
               onClick={onOpenSettings}

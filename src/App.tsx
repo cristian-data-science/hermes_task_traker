@@ -12,6 +12,7 @@ import { KanbanView } from "./components/KanbanView";
 import { ListView } from "./components/ListView";
 import { CalendarView } from "./components/CalendarView";
 import { TaskModal } from "./components/TaskModal";
+import { AssignedInboxModal } from "./components/AssignedInboxModal";
 import { ClickUpSettings } from "./components/ClickUpSettings";
 import { ClickUpSyncPage } from "./components/ClickUpSyncPage";
 import { ThemedBackground } from "./components/ThemedBackground";
@@ -77,6 +78,7 @@ function Dashboard({
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
   const [modalOpen, setModalOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [assignedInboxOpen, setAssignedInboxOpen] = useState(false);
   /** Página activa: tablero de tareas o página de sync ClickUp. */
   const [page, setPage] = useState<"board" | "clickup-sync">("board");
   const [editingTask, setEditingTask] = useState<Doc<"tasks"> | null>(null);
@@ -135,6 +137,12 @@ function Dashboard({
         pendingCount={pendingCount}
         hiddenAreas={hiddenAreas}
         onOpenSettings={() => setSettingsOpen(true)}
+        onOpenAssignedInbox={() => setAssignedInboxOpen(true)}
+      />
+
+      <AssignedInboxModal
+        open={assignedInboxOpen}
+        onClose={() => setAssignedInboxOpen(false)}
       />
 
       {page === "clickup-sync" ? (

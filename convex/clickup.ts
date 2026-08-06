@@ -778,15 +778,15 @@ export const discoverProjects = action({
     const folders: any[] = fdata?.folders ?? [];
 
     const discovered: DiscoveredProject[] = [];
-    for (const folder of folders) {
+    // Folders en el orden de ClickUp.
+    for (const folder of sortByClickUpOrder([...folders])) {
       const folderId: string = folder.id;
       const folderName: string = folder.name ?? "Sin nombre";
-      // Lists dentro del folder (ClickUp las embebe en el response).
-      const folderLists: { id: string; name: string }[] = (
-        folder.lists ?? []
-      )
-        .filter((l: any) => !l.archived)
-        .map((l: any) => ({ id: l.id, name: l.name }));
+      // Lists dentro del folder (ClickUp las embebe en el response), también
+      // en el orden de ClickUp.
+      const folderLists: { id: string; name: string }[] = sortByClickUpOrder(
+        (folder.lists ?? []).filter((l: any) => !l.archived),
+      ).map((l: any) => ({ id: l.id, name: l.name }));
       // Si el folder no tiene lists propias (es contenedor), lo saltamos: no es
       // un destino válido para crear tareas.
       if (folderLists.length === 0) continue;
@@ -806,14 +806,10 @@ export const discoverProjects = action({
       });
     }
 
-    // Ordenar: no integrados primero, luego alfabético.
-    discovered.sort((a, b) => {
-      if (a.alreadyIntegrated !== b.alreadyIntegrated) {
-        return a.alreadyIntegrated ? 1 : -1;
-      }
-      return a.folderName.localeCompare(b.folderName);
-    });
-
+    // Se respeta el orden de ClickUp: antes se reordenaba alfabéticamente
+    // (no integrados primero), lo que hacía que el selector no coincidiera con
+    // lo que el usuario ve en ClickUp — y que "Administrativo" quedara siempre
+    // arriba de todo.
     return { discovered };
   },
 });
@@ -872,7 +868,7 @@ export const listProjectRoots = action({
       sessionToken,
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
-    const roots: ClickupRootTask[] = [];
+    const rawRoots: any[] = [];
     let page = 0;
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -881,19 +877,17 @@ export const listProjectRoots = action({
       );
       const tasks: any[] = data?.tasks ?? [];
       if (tasks.length === 0) break;
-      for (const t of tasks) {
-        // Raíces = tareas sin parent.
-        if (!t.parent) {
-          roots.push({
-            id: t.id,
-            name: t.name,
-            status: t.status?.status ?? "to do",
-          });
-        }
-      }
+      // Raíces = tareas sin parent.
+      for (const t of tasks) if (!t.parent) rawRoots.push(t);
       if (tasks.length < 100) break;
       page++;
     }
+    // Mismo orden que en ClickUp.
+    const roots: ClickupRootTask[] = sortByClickUpOrder(rawRoots).map((t) => ({
+      id: t.id,
+      name: t.name,
+      status: t.status?.status ?? "to do",
+    }));
     return { roots };
   },
 });
@@ -932,7 +926,7 @@ export const listTaskChildren = action({
       sessionToken,
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
-    const children: ClickupTreeNode[] = [];
+    const rawChildren: any[] = [];
     let page = 0;
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -942,18 +936,18 @@ export const listTaskChildren = action({
       const tasks: any[] = data?.tasks ?? [];
       if (tasks.length === 0) break;
       // Filtrar client-side: solo hijas directas reales de parentId.
-      for (const t of tasks) {
-        if (t.parent === parentId) {
-          children.push({
-            id: t.id,
-            name: t.name,
-            status: t.status?.status ?? "to do",
-          });
-        }
-      }
+      for (const t of tasks) if (t.parent === parentId) rawChildren.push(t);
       if (tasks.length < 100) break;
       page++;
     }
+    // Mismo orden que en ClickUp.
+    const children: ClickupTreeNode[] = sortByClickUpOrder(rawChildren).map(
+      (t) => ({
+        id: t.id,
+        name: t.name,
+        status: t.status?.status ?? "to do",
+      }),
+    );
     return { children };
   },
 });
@@ -1058,6 +1052,34 @@ export interface WorkspaceTree {
 /** Máximo de páginas por list (100 tareas c/u). Tope defensivo. */
 const MAX_LIST_PAGES = 20;
 
+// ============================================================
+//  Orden de ClickUp
+// ============================================================
+/**
+ * `orderindex` es el campo con el que ClickUp ordena manualmente folders,
+ * lists y tareas dentro de su padre: es el orden que ve el usuario en la app.
+ * Viene como número o como string decimal según el endpoint, y puede faltar.
+ *
+ * Ordenar por él es lo que hace que el árbol de Hermes se lea igual que
+ * ClickUp (FASE 1, FASE 2, FASE 3…) en vez del orden arbitrario en que la API
+ * devuelve las tareas.
+ */
+function orderIndexOf(x: any): number {
+  const raw = x?.orderindex;
+  // Ojo: Number(null) y Number("") son 0, no NaN. Sin este chequeo, un nodo
+  // sin orderindex se iba al TOPE de la lista en vez de al final.
+  if (raw === null || raw === undefined || raw === "") {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER;
+}
+
+/** Ordena in-place por orderindex ascendente (estable: empates conservan orden). */
+function sortByClickUpOrder<T>(items: T[]): T[] {
+  return items.sort((a, b) => orderIndexOf(a) - orderIndexOf(b));
+}
+
 /** Trae TODAS las tareas de una list (con subtareas), paginando. */
 async function fetchAllListTasks(listId: string): Promise<any[]> {
   const all: any[] = [];
@@ -1094,11 +1116,14 @@ export const getWorkspaceTree = action({
       listName: string;
       promise: Promise<any>;
     }[] = [];
-    const folderData = foldersRaw
+    // Folders y lists también en el orden de ClickUp.
+    const folderData = sortByClickUpOrder([...foldersRaw])
       .map((folder) => ({
         id: folder.id,
         name: folder.name ?? "Sin nombre",
-        lists: (folder.lists ?? []).filter((l: any) => !l.archived),
+        lists: sortByClickUpOrder(
+          (folder.lists ?? []).filter((l: any) => !l.archived),
+        ),
       }))
       .filter((f: any) => f.lists.length > 0);
 
@@ -1119,7 +1144,9 @@ export const getWorkspaceTree = action({
     // Ensablar por folder.
     const foldersByLists = new Map<number, WorkspaceList[]>();
     allListFetches.forEach((fetchInfo, i) => {
-      const raw: any[] = results[i] ?? [];
+      // Mismo orden que en ClickUp. Al recorrer el array ya ordenado, tanto
+      // las raíces como las hijas quedan en ese orden dentro de su padre.
+      const raw: any[] = sortByClickUpOrder([...(results[i] ?? [])]);
 
       // 1) Indexar todas las tareas de la list por id.
       const byId = new Map<string, WorkspaceTask>();
@@ -1491,5 +1518,141 @@ export const resolveTaskPath = action({
     }
 
     return { listId, listName, folderId, folderName, path };
+  },
+});
+
+// ============================================================
+//  BANDEJA: tareas asignadas a mí que no estoy trackeando
+// ============================================================
+
+/** Una tarea de ClickUp asignada a Cris que todavía no está en el Kanban. */
+export interface AssignedUntrackedTask {
+  id: string;
+  name: string;
+  status: string;
+  /** Nombre del folder y de la list donde vive. */
+  folderName: string;
+  listName: string;
+  listId: string;
+  /** Ancestros dentro de la list, de la raíz hacia abajo (sin la tarea). */
+  ancestors: string[];
+  /** Id del padre directo, o null si es una tarea raíz de la list. */
+  parentId: string | null;
+  /** Fecha de vencimiento (YYYY-MM-DD) si tiene. */
+  dueDate?: string;
+}
+
+/**
+ * Lista las tareas de ClickUp ASIGNADAS a Cris que NO están en el Kanban.
+ *
+ * Solo devuelve HOJAS: una tarea con subtareas es un contenedor (un proyecto o
+ * una fase), y traerla al tablero arrastraría todo su árbol conceptualmente sin
+ * ser una unidad de trabajo. El filtro de hojas se calcula sobre TODAS las
+ * tareas de la list (no solo las asignadas), porque si no una fase con
+ * subtareas ajenas parecería una hoja.
+ *
+ * Se excluyen las ya importadas y también las descartadas explícitamente
+ * (clickupInboundIgnored): si el usuario ya dijo que no la quiere, no se la
+ * volvemos a ofrecer.
+ *
+ * Pública (action) con auth.
+ */
+export const listAssignedUntracked = action({
+  args: { sessionToken: v.string() },
+  handler: async (
+    ctx,
+    { sessionToken },
+  ): Promise<{ tasks: AssignedUntrackedTask[]; scanned: number }> => {
+    const ok = await ctx.runQuery(internal.settings._checkSession, {
+      sessionToken,
+    });
+    if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+
+    // 1) Qué hay ya en Hermes (incluye borradas/ignoradas: no reofrecerlas).
+    const existing = await ctx.runQuery(
+      internal.clickupMutations._listMappedForInbound,
+      {},
+    );
+    const known = new Set(existing.allEntries.map((e) => e.clickupId));
+
+    // 2) Estructura del space (mismo camino que getWorkspaceTree).
+    const fdata = await clickupFetch(
+      `/space/${CLICKUP_SPACE_ID}/folder?archived=false`,
+    );
+    const folderData = sortByClickUpOrder([...(fdata?.folders ?? [])])
+      .map((folder: any) => ({
+        id: folder.id,
+        name: folder.name ?? "Sin nombre",
+        lists: sortByClickUpOrder(
+          (folder.lists ?? []).filter((l: any) => !l.archived),
+        ),
+      }))
+      .filter((f: any) => f.lists.length > 0);
+
+    const fetches: {
+      folderName: string;
+      listId: string;
+      listName: string;
+      promise: Promise<any>;
+    }[] = [];
+    for (const folder of folderData) {
+      for (const list of folder.lists as any[]) {
+        fetches.push({
+          folderName: folder.name,
+          listId: list.id,
+          listName: list.name,
+          promise: fetchAllListTasks(list.id).catch(() => null),
+        });
+      }
+    }
+    const results = await Promise.all(fetches.map((f) => f.promise));
+
+    // 3) Por list: detectar hojas y quedarse con las asignadas no conocidas.
+    const out: AssignedUntrackedTask[] = [];
+    let scanned = 0;
+    fetches.forEach((info, i) => {
+      const raw: any[] = sortByClickUpOrder([...(results[i] ?? [])]);
+      scanned += raw.length;
+
+      const byId = new Map<string, any>(raw.map((t) => [t.id, t]));
+      const parentIds = new Set<string>();
+      for (const t of raw) if (t.parent) parentIds.add(t.parent);
+
+      for (const t of raw) {
+        if (parentIds.has(t.id)) continue; // tiene subtareas → contenedor
+        if (known.has(t.id)) continue; // ya está en Hermes
+        const assignees: any[] = t.assignees ?? [];
+        const mine = assignees.some(
+          (a) => String(a?.id) === String(CLICKUP_USER_ID),
+        );
+        if (!mine) continue;
+
+        // Cadena de ancestros dentro de la list (nombres, raíz → abajo).
+        const ancestors: string[] = [];
+        const seen = new Set<string>([t.id]);
+        let cur = t.parent ? byId.get(t.parent) : undefined;
+        while (cur && !seen.has(cur.id) && ancestors.length < 12) {
+          seen.add(cur.id);
+          ancestors.unshift(cur.name ?? "(sin nombre)");
+          cur = cur.parent ? byId.get(cur.parent) : undefined;
+        }
+
+        out.push({
+          id: t.id,
+          name: t.name ?? "(sin nombre)",
+          status: t.status?.status ?? "to do",
+          folderName: info.folderName,
+          listName: info.listName,
+          listId: info.listId,
+          ancestors,
+          parentId: t.parent ?? null,
+          dueDate: t.due_date
+            ? new Date(Number(t.due_date)).toISOString().slice(0, 10)
+            : undefined,
+        });
+      }
+    });
+
+    return { tasks: out, scanned };
   },
 });

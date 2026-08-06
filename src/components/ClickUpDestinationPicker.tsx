@@ -549,6 +549,7 @@ export function ClickUpDestinationPicker({
                   value={value}
                   listId={effectiveListId}
                   expandPath={expandPath}
+                  taskClickupId={taskClickupId}
                   onChange={(parentId, lid) => {
                     onChange(parentId, lid);
                     if (parentId) pushRecent(parentId);
@@ -616,6 +617,7 @@ function FolderTreeSection({
   value,
   listId,
   expandPath,
+  taskClickupId,
   onChange,
 }: {
   folder: AvailableFolder;
@@ -623,6 +625,8 @@ function FolderTreeSection({
   listId?: string;
   /** Ruta de ancestros a abrir al montar (destino guardado). */
   expandPath?: string[];
+  /** clickupId de la tarea editada, para marcarla en el árbol. */
+  taskClickupId?: string;
   onChange: (parentId: string | undefined, listId?: string) => void;
 }) {
   const lists =
@@ -664,6 +668,7 @@ function FolderTreeSection({
         // Solo auto-expandimos si el árbol es el de la list del destino
         // guardado; si el usuario cambió de list, la ruta ya no aplica.
         expandPath={selectedListId === listId ? expandPath : undefined}
+        taskClickupId={taskClickupId}
         onSelect={(parentId) => {
           onChange(parentId ? parentId : undefined, selectedListId);
         }}

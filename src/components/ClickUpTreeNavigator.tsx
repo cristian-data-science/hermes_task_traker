@@ -26,6 +26,11 @@ interface ClickUpTreeNavigatorProps {
    * destino guardado, en vez de mostrar únicamente las raíces.
    */
   expandPath?: string[];
+  /**
+   * clickupId de la tarea que se está editando. Ese nodo se marca como "esta
+   * tarea" y no se puede elegir como su propio padre.
+   */
+  taskClickupId?: string;
 }
 
 type TreeNode = {
@@ -49,6 +54,7 @@ export function ClickUpTreeNavigator({
   selectedParentId,
   onSelect,
   expandPath,
+  taskClickupId,
 }: ClickUpTreeNavigatorProps) {
   const { token } = useAuth();
   const listProjectRoots = useAction(api.clickup.listProjectRoots);
@@ -163,6 +169,7 @@ export function ClickUpTreeNavigator({
               autoExpandPath={
                 expandPath && expandPath[0] === node.id ? expandPath : undefined
               }
+              taskClickupId={taskClickupId}
             />
           ))}
           </div>
@@ -228,6 +235,8 @@ interface TreeBranchProps {
    * nodo, la rama se abre sola al montar y pasa el resto a sus hijas.
    */
   autoExpandPath?: string[];
+  /** clickupId de la tarea que se está editando (para marcarla). */
+  taskClickupId?: string;
 }
 
 function TreeBranch({
@@ -237,12 +246,16 @@ function TreeBranch({
   loadChildren,
   depth,
   autoExpandPath,
+  taskClickupId,
 }: TreeBranchProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<TreeNode[]>([]);
   const [loadingChildren, setLoadingChildren] = useState(false);
   const [childrenLoaded, setChildrenLoaded] = useState(false);
 
+  /** ESTE nodo es la tarea que se está editando (no su padre). */
+  const isThisTask = !!taskClickupId && node.id === taskClickupId;
+  /** Nodo elegido como PADRE: la tarea cuelga de acá. */
   const isSelected = selectedParentId === node.id;
   /** Sub-ruta que le toca a las hijas (consumimos nuestro propio id). */
   const childPath =
@@ -255,7 +268,7 @@ function TreeBranch({
    * El picker deja de pasar la ruta si el usuario re-ancla en otro lado, así
    * que el rastro se apaga solo y nunca marca una ubicación que ya no es.
    */
-  const isOnPath = !!childPath && !isSelected;
+  const isOnPath = !!childPath && !isSelected && !isThisTask;
   // Estamos en la rama guardada → abrir. Incluye al nodo final (el padre de la
   // tarea): así se ve la tarea misma colgando ahí, que es la confirmación
   // visual de "acá la creé". La recursión termina sola porque el último nodo
@@ -289,14 +302,16 @@ function TreeBranch({
     void expand();
   }, [shouldAutoExpand, expand]);
 
-  // Traer a la vista el nodo anclado al abrir (una sola vez).
+  // Traer a la vista al abrir (una sola vez). Prioriza la tarea misma; si no
+  // está en el árbol (todavía no sincronizada), el nodo padre.
   const rowRef = useRef<HTMLDivElement>(null);
   const scrolledRef = useRef(false);
+  const shouldScroll = isThisTask || (isSelected && !taskClickupId);
   useEffect(() => {
-    if (!isSelected || scrolledRef.current || !rowRef.current) return;
+    if (!shouldScroll || scrolledRef.current || !rowRef.current) return;
     scrolledRef.current = true;
     rowRef.current.scrollIntoView({ block: "nearest" });
-  }, [isSelected]);
+  }, [shouldScroll]);
 
   function handleToggle() {
     if (expanded) {
@@ -314,11 +329,15 @@ function TreeBranch({
           // border-l-2 siempre presente (transparente si no aplica) para que
           // resaltar no desplace las filas.
           "flex items-stretch rounded border-l-2 text-xs transition-colors",
-          isSelected
-            ? "border-accent bg-accent/20 ring-1 ring-accent/60"
-            : isOnPath
-              ? "border-accent/40 bg-accent/[0.06]"
-              : "border-transparent hover:bg-panel2",
+          isThisTask
+            ? // LA tarea: el resaltado fuerte va acá, no en el padre.
+              "border-accent bg-accent/25 ring-1 ring-accent"
+            : isSelected
+              ? // El padre del que cuelga: marcado, pero en segundo plano.
+                "border-accent/60 bg-accent/10"
+              : isOnPath
+                ? "border-accent/40 bg-accent/[0.06]"
+                : "border-transparent hover:bg-panel2",
         )}
         style={{ paddingLeft: `${depth * 12}px` }}
       >
@@ -328,7 +347,7 @@ function TreeBranch({
           onClick={handleToggle}
           className={cn(
             "grid w-5 shrink-0 place-items-center hover:text-ink",
-            isSelected || isOnPath ? "text-accent" : "text-mute",
+            isThisTask || isSelected || isOnPath ? "text-accent" : "text-mute",
           )}
           title={expanded ? "Contraer" : "Expandir subtareas"}
         >
@@ -343,27 +362,45 @@ function TreeBranch({
         {/* Nombre = clic ANCLA aquí (la tarea queda como hija de este nodo) */}
         <button
           type="button"
-          onClick={() => onSelect(node.id)}
-          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2 text-left"
-          title={`Anclar la tarea como hija de "${node.name}"`}
+          // Una tarea no puede ser su propio padre: el nodo de la tarea no
+          // se puede elegir como destino.
+          onClick={() => !isThisTask && onSelect(node.id)}
+          disabled={isThisTask}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2 text-left",
+            isThisTask && "cursor-default",
+          )}
+          title={
+            isThisTask
+              ? "Esta es la tarea que estás editando"
+              : `Anclar la tarea como hija de "${node.name}"`
+          }
         >
           <span
             className={cn(
               "min-w-0 flex-1 truncate",
-              isSelected
+              isThisTask
                 ? "font-bold text-accent"
-                : isOnPath
+                : isSelected
                   ? "font-medium text-ink"
-                  : "text-ink",
+                  : isOnPath
+                    ? "font-medium text-ink"
+                    : "text-ink",
             )}
             title={node.name}
           >
             {node.name}
           </span>
-          {isSelected && (
+          {isThisTask ? (
             <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-acfg">
-              ✓ acá está la tarea
+              ◀ esta tarea
             </span>
+          ) : (
+            isSelected && (
+              <span className="shrink-0 text-[9px] font-medium uppercase tracking-wide text-accent">
+                cuelga acá
+              </span>
+            )
           )}
         </button>
       </div>
@@ -382,6 +419,7 @@ function TreeBranch({
               autoExpandPath={
                 childPath && childPath[0] === child.id ? childPath : undefined
               }
+              taskClickupId={taskClickupId}
             />
           ))}
         </div>
