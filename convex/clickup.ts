@@ -362,18 +362,26 @@ export const syncTask = internalAction({
 
         // Anidar bajo el parent si corresponde (requiere PUT separado: el
         // `parent` en el POST de creación se ignora — pitfall de ClickUp).
+        //
+        // OJO: al anidarla, ClickUp la MUEVE a la list del parent, que puede
+        // no ser `dest.listId`. Persistimos la list que devuelve la respuesta,
+        // no la que pedimos: guardar la supuesta dejaba el clickupListId
+        // apuntando a otra list (típicamente Mesa Técnica) y el selector
+        // reabría la tarea en el proyecto equivocado.
+        let finalListId = dest.listId;
         if (dest.parentId) {
-          await clickupFetch(`/task/${newId}`, {
+          const nested = await clickupFetch(`/task/${newId}`, {
             method: "PUT",
             body: JSON.stringify({ parent: dest.parentId }),
           });
+          if (nested?.list?.id) finalListId = nested.list.id;
         }
 
         await ctx.runMutation(internal.clickupMutations._markSynced, {
           taskId,
           clickupId: newId,
           clickupUrl: newUrl,
-          clickupListId: dest.listId,
+          clickupListId: finalListId,
         });
       } else {
         // ===== UPDATE (incluye status/complete) =====

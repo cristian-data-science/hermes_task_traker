@@ -136,7 +136,15 @@ export function ClickUpDestinationPicker({
   );
   const [resolvingPath, setResolvingPath] = useState(false);
 
-  const effectiveListId = listId ?? resolvedListId;
+  /**
+   * List efectiva del árbol. Mientras el usuario no navegue, gana la resuelta
+   * contra ClickUp (el `listId` persistido puede estar sucio, ver arriba). En
+   * cuanto elige folder/list a mano, manda la prop, que refleja su elección.
+   */
+  const userChangedList = listId !== initialListIdRef.current;
+  const effectiveListId = userChangedList
+    ? listId
+    : (resolvedListId ?? listId);
 
   /**
    * Resuelve, una única vez, dónde vive el destino que ya tiene la tarea:
@@ -170,7 +178,13 @@ export function ClickUpDestinationPicker({
         }
         if (info) {
           if (info.path.length > 0) setSavedPath(info);
-          if (!lid && info.listId) {
+          // La verdad la tiene ClickUp, NO el clickupListId persistido.
+          // Ese campo lo pisa _markSynced con la list donde se INTENTÓ crear
+          // la tarea, que para un parent no mapeado en config era la de Mesa
+          // Técnica; ClickUp después la movía a la list del parent. Por eso
+          // había tareas de Ley de Datos que reabrían en "Mesa Técnica
+          // Interna". Si ClickUp nos dice la list real, esa manda.
+          if (info.listId) {
             lid = info.listId;
             setResolvedListId(lid);
           }
