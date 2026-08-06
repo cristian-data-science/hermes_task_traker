@@ -428,8 +428,11 @@ export function ClickUpDestinationPicker({
                   <span
                     className={cn(
                       "text-[11px] leading-tight",
+                      // El último nivel es donde cuelga la tarea: mismo acento
+                      // que el nodo resaltado en el árbol, para que la vista
+                      // salte de un lado al otro sin buscar.
                       i === breadcrumb.length - 1
-                        ? "font-semibold text-ink"
+                        ? "rounded bg-accent/15 px-1 py-0.5 font-bold text-accent"
                         : "text-mute",
                     )}
                   >

@@ -130,15 +130,22 @@ export function ClickUpTreeNavigator({
             type="button"
             onClick={() => onSelect("")}
             className={cn(
-              "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs",
+              "flex w-full items-center gap-1.5 rounded border-l-2 px-2 py-1 text-left text-xs",
               // Sin parent (undefined o "") = tarea plana en esta list.
               !selectedParentId
-                ? "bg-accent/15 font-medium text-ink ring-1 ring-accent/40"
-                : "text-mute hover:bg-panel2",
+                ? "border-accent bg-accent/20 font-bold text-accent ring-1 ring-accent/60"
+                : "border-transparent text-mute hover:bg-panel2",
             )}
           >
-            <CornerDownRight className="h-3 w-3" />
-            plano (nivel 0, sin anidar)
+            <CornerDownRight className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">
+              plano (nivel 0, sin anidar)
+            </span>
+            {!selectedParentId && (
+              <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-acfg">
+                ✓ acá está la tarea
+              </span>
+            )}
           </button>
           {roots.map((node) => (
             <TreeBranch
@@ -242,6 +249,13 @@ function TreeBranch({
     autoExpandPath && autoExpandPath[0] === node.id
       ? autoExpandPath.slice(1)
       : undefined;
+  /**
+   * Este nodo forma parte de la ruta del destino guardado. Se resalta suave
+   * para que la rama se lea de un vistazo desde la raíz hasta el ancla.
+   * El picker deja de pasar la ruta si el usuario re-ancla en otro lado, así
+   * que el rastro se apaga solo y nunca marca una ubicación que ya no es.
+   */
+  const isOnPath = !!childPath && !isSelected;
   // Estamos en la rama guardada → abrir. Incluye al nodo final (el padre de la
   // tarea): así se ve la tarea misma colgando ahí, que es la confirmación
   // visual de "acá la creé". La recursión termina sola porque el último nodo
@@ -297,10 +311,14 @@ function TreeBranch({
       <div
         ref={rowRef}
         className={cn(
-          "flex items-stretch rounded text-xs",
+          // border-l-2 siempre presente (transparente si no aplica) para que
+          // resaltar no desplace las filas.
+          "flex items-stretch rounded border-l-2 text-xs transition-colors",
           isSelected
-            ? "bg-accent/15 ring-1 ring-accent/40"
-            : "hover:bg-panel2",
+            ? "border-accent bg-accent/20 ring-1 ring-accent/60"
+            : isOnPath
+              ? "border-accent/40 bg-accent/[0.06]"
+              : "border-transparent hover:bg-panel2",
         )}
         style={{ paddingLeft: `${depth * 12}px` }}
       >
@@ -308,7 +326,10 @@ function TreeBranch({
         <button
           type="button"
           onClick={handleToggle}
-          className="grid w-5 shrink-0 place-items-center text-mute hover:text-ink"
+          className={cn(
+            "grid w-5 shrink-0 place-items-center hover:text-ink",
+            isSelected || isOnPath ? "text-accent" : "text-mute",
+          )}
           title={expanded ? "Contraer" : "Expandir subtareas"}
         >
           {loadingChildren ? (
@@ -323,18 +344,25 @@ function TreeBranch({
         <button
           type="button"
           onClick={() => onSelect(node.id)}
-          className={cn(
-            "flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2 text-left",
-            isSelected ? "font-semibold text-ink" : "text-ink",
-          )}
+          className="flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2 text-left"
           title={`Anclar la tarea como hija de "${node.name}"`}
         >
-          <span className="min-w-0 flex-1 truncate" title={node.name}>
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate",
+              isSelected
+                ? "font-bold text-accent"
+                : isOnPath
+                  ? "font-medium text-ink"
+                  : "text-ink",
+            )}
+            title={node.name}
+          >
             {node.name}
           </span>
           {isSelected && (
-            <span className="shrink-0 text-[10px] font-bold text-accent">
-              ✓ hija de este nodo
+            <span className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-acfg">
+              ✓ acá está la tarea
             </span>
           )}
         </button>
