@@ -8,6 +8,7 @@ import {
   Search,
   X,
   LogOut,
+  Settings,
 } from "lucide-react";
 import {
   AREAS,
@@ -37,6 +38,9 @@ interface ToolbarProps {
   onLogout: () => void;
   totalCount: number;
   pendingCount: number;
+  /** Áreas ocultas (no se muestran sus chips de filtro). */
+  hiddenAreas: string[];
+  onOpenSettings: () => void;
 }
 
 /** Logo de Cris Agent Task: prompt de terminal + cursor. */
@@ -77,6 +81,8 @@ export function Toolbar({
   onLogout,
   totalCount,
   pendingCount,
+  hiddenAreas,
+  onOpenSettings,
 }: ToolbarProps) {
   return (
     <header
@@ -145,6 +151,15 @@ export function Toolbar({
             {/* Selector de tema (4 temas) */}
             <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
 
+            <button
+              onClick={onOpenSettings}
+              className="btn-ghost p-2 hover:text-accent"
+              title="ClickUp"
+              aria-label="ClickUp"
+            >
+              <Settings className="h-4 w-4" />
+            </button>
+
             <button onClick={onNewTask} className="btn-primary px-2.5 sm:px-3.5">
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">Nueva</span>
@@ -189,7 +204,7 @@ export function Toolbar({
           >
             Todas las áreas
           </FilterChip>
-          {AREAS.map((a) => {
+          {AREAS.filter((a) => !hiddenAreas.includes(a)).map((a) => {
             const meta = AREA_META[a];
             return (
               <FilterChip

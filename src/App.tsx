@@ -12,6 +12,8 @@ import { KanbanView } from "./components/KanbanView";
 import { ListView } from "./components/ListView";
 import { CalendarView } from "./components/CalendarView";
 import { TaskModal } from "./components/TaskModal";
+import { ClickUpSettings } from "./components/ClickUpSettings";
+import { ClickUpSyncPage } from "./components/ClickUpSyncPage";
 import { ThemedBackground } from "./components/ThemedBackground";
 import { Loader2, ClipboardList } from "lucide-react";
 
@@ -62,6 +64,11 @@ function Dashboard({
 }) {
   const { token } = useAuth();
   const tasks = useQuery(api.tasks.list, token ? { sessionToken: token } : "skip") ?? [];
+  const clickupState = useQuery(
+    api.settings.getClickupState,
+    token ? { sessionToken: token } : "skip",
+  );
+  const hiddenAreas = clickupState?.hiddenAreas ?? [];
 
   // Estado UI
   const [view, setView] = useState<ViewMode>("kanban");
@@ -69,16 +76,21 @@ function Dashboard({
   const [areaFilter, setAreaFilter] = useState<Area | "all">("all");
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
   const [modalOpen, setModalOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  /** Página activa: tablero de tareas o página de sync ClickUp. */
+  const [page, setPage] = useState<"board" | "clickup-sync">("board");
   const [editingTask, setEditingTask] = useState<Doc<"tasks"> | null>(null);
   const [newDefaults, setNewDefaults] = useState<{
     status?: Status;
     area?: Area;
   }>({});
 
-  // Filtrado
+  // Filtrado (incluye ocultar áreas marcadas como ocultas — solo visualización)
   const filteredTasks = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const hiddenSet = new Set(hiddenAreas);
     return tasks.filter((t) => {
+      if (hiddenSet.has(t.area)) return false;
       if (areaFilter !== "all" && t.area !== areaFilter) return false;
       if (statusFilter !== "all" && t.status !== statusFilter) return false;
       if (q) {
@@ -87,9 +99,11 @@ function Dashboard({
       }
       return true;
     });
-  }, [tasks, search, areaFilter, statusFilter]);
+  }, [tasks, search, areaFilter, statusFilter, hiddenAreas]);
 
-  const pendingCount = tasks.filter((t) => t.status !== "completado").length;
+  const pendingCount = tasks.filter(
+    (t) => t.status !== "completado" && !hiddenAreas.includes(t.area),
+  ).length;
 
   function openNew(status?: Status, area?: Area) {
     setEditingTask(null);
@@ -103,7 +117,7 @@ function Dashboard({
   }
 
   return (
-    <div className="min-h-screen">
+    <div className={page === "clickup-sync" ? "flex h-screen flex-col overflow-hidden" : "min-h-screen"}>
       <Toolbar
         view={view}
         onViewChange={setView}
@@ -117,10 +131,15 @@ function Dashboard({
         theme={theme}
         onThemeChange={onThemeChange}
         onLogout={onLogout}
-        totalCount={tasks.length}
+        totalCount={filteredTasks.length}
         pendingCount={pendingCount}
+        hiddenAreas={hiddenAreas}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
+      {page === "clickup-sync" ? (
+        <ClickUpSyncPage onBack={() => setPage("board")} />
+      ) : (
       <main className="mx-auto max-w-[1600px] px-2.5 py-3 sm:px-6 sm:py-4 lg:px-8">
         <AnimatePresence mode="wait">
           <motion.div
@@ -167,6 +186,7 @@ function Dashboard({
           </motion.div>
         )}
       </main>
+      )}
 
       <TaskModal
         task={editingTask}
@@ -174,6 +194,13 @@ function Dashboard({
         onClose={() => setModalOpen(false)}
         defaultStatus={newDefaults.status}
         defaultArea={newDefaults.area}
+        hiddenAreas={hiddenAreas}
+      />
+
+      <ClickUpSettings
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        onGoToSync={() => setPage("clickup-sync")}
       />
     </div>
   );

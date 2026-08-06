@@ -1,0 +1,312 @@
+import { useEffect, useState, useCallback } from "react";
+import { useAction } from "convex/react";
+import {
+  ChevronRight,
+  ChevronDown,
+  Loader2,
+  Plus,
+  Check,
+  CornerDownRight,
+} from "lucide-react";
+import toast from "react-hot-toast";
+import { api } from "~/convex/_generated/api";
+import { useAuth } from "../hooks/useAuth";
+import { cn } from "../lib/utils";
+
+interface ClickUpTreeNavigatorProps {
+  /** List de ClickUp cuyas raíces se van a navegar. */
+  listId: string;
+  /** parentId actualmente elegido (para marcar el nodo activo). */
+  selectedParentId: string | undefined;
+  /** Callback al elegir un nodo. Devuelve el parentId del nodo elegido. */
+  onSelect: (parentId: string) => void;
+}
+
+type TreeNode = {
+  id: string;
+  name: string;
+  status: string;
+};
+
+/**
+ * Navegador de árbol plegable para elegir dónde cae una tarea en ClickUp.
+ *
+ * Carga las raíces (nivel 0) de la list. Cada nodo es plegable: al expandir,
+ * trae sus hijas directas (listTaskChildren) on-demand. El usuario clickea
+ * "Anclar aquí" en el nodo exacto donde quiere que caiga la tarea.
+ *
+ * Botón "+ Crear raíz" al pie: crea una nueva tarea raíz en ClickUp
+ * (createRootTask) y la ancla automáticamente.
+ */
+export function ClickUpTreeNavigator({
+  listId,
+  selectedParentId,
+  onSelect,
+}: ClickUpTreeNavigatorProps) {
+  const { token } = useAuth();
+  const listProjectRoots = useAction(api.clickup.listProjectRoots);
+  const listTaskChildren = useAction(api.clickup.listTaskChildren);
+  const createRootTask = useAction(api.clickup.createRootTask);
+
+  const [roots, setRoots] = useState<TreeNode[]>([]);
+  const [loadingRoots, setLoadingRoots] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [newRootName, setNewRootName] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
+
+  // Cargar raíces al montar o cambiar de list.
+  const loadRoots = useCallback(async () => {
+    if (!token || !listId) return;
+    setLoadingRoots(true);
+    try {
+      const result = await listProjectRoots({ sessionToken: token, listId });
+      setRoots(result.roots);
+    } catch (err) {
+      toast.error("No se pudieron cargar las tareas de ClickUp");
+    } finally {
+      setLoadingRoots(false);
+    }
+  }, [token, listId, listProjectRoots]);
+
+  useEffect(() => {
+    void loadRoots();
+  }, [loadRoots]);
+
+  async function handleCreateRoot() {
+    const name = newRootName.trim();
+    if (!token || !name) return;
+    setCreating(true);
+    try {
+      const result = await createRootTask({
+        sessionToken: token,
+        listId,
+        name,
+      });
+      // Añadir la nueva raíz al árbol y anclarla.
+      setRoots((r) => [
+        ...r,
+        { id: result.id, name: result.name, status: "to do" },
+      ]);
+      onSelect(result.id);
+      setNewRootName("");
+      setShowCreate(false);
+      toast.success(`Raíz "${result.name}" creada en ClickUp`);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudo crear la raíz",
+      );
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  return (
+    <div className="rounded-el border-el border-line bg-panel p-2">
+      {loadingRoots ? (
+        <div className="flex items-center gap-1.5 px-2 py-2 text-xs text-mute">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Cargando tareas de ClickUp…
+        </div>
+      ) : roots.length === 0 ? (
+        <p className="px-2 py-2 text-[11px] text-mute">
+          No hay tareas-raíz en esta list.
+        </p>
+      ) : (
+        <div className="space-y-0.5">
+          <p className="px-1 pb-1 text-[10px] leading-snug text-faint">
+            Elegí dónde cae la tarea. Clic en un nombre = la tarea queda como su
+            <strong> hija</strong>. Clic en <ChevronRight className="inline h-2.5 w-2.5" /> para ver subtareas y bajar de nivel.
+          </p>
+          <div className="max-h-56 space-y-0.5 overflow-y-auto">
+          {/* Opción "plano" = sin parent (nivel 0, suelta) */}
+          <button
+            type="button"
+            onClick={() => onSelect("")}
+            className={cn(
+              "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs",
+              selectedParentId === ""
+                ? "bg-accent/15 font-medium text-ink ring-1 ring-accent/40"
+                : "text-mute hover:bg-panel2",
+            )}
+          >
+            <CornerDownRight className="h-3 w-3" />
+            plano (nivel 0, sin anidar)
+          </button>
+          {roots.map((node) => (
+            <TreeBranch
+              key={node.id}
+              node={node}
+              listId={listId}
+              selectedParentId={selectedParentId}
+              onSelect={onSelect}
+              loadChildren={(parentId) =>
+                listTaskChildren({ sessionToken: token!, listId, parentId })
+              }
+              depth={0}
+            />
+          ))}
+          </div>
+        </div>
+      )}
+
+      {/* Crear raíz nueva */}
+      <div className="mt-2 border-t border-line pt-2">
+        {showCreate ? (
+          <div className="flex items-center gap-1.5">
+            <input
+              autoFocus
+              value={newRootName}
+              onChange={(e) => setNewRootName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void handleCreateRoot();
+                }
+              }}
+              placeholder="[CatchUp] - 11.08.26"
+              className="input min-w-0 flex-1 py-1 text-xs"
+            />
+            <button
+              onClick={handleCreateRoot}
+              disabled={creating || !newRootName.trim()}
+              className="btn-primary shrink-0 px-2 py-1 text-[11px]"
+            >
+              {creating ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Check className="h-3 w-3" />
+              )}
+              Crear
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setShowCreate(true)}
+            className="inline-flex items-center gap-1 text-[11px] text-accent hover:underline"
+          >
+            <Plus className="h-3 w-3" /> Crear raíz nueva
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ===== Un nodo del árbol (recursivo) =====
+
+interface TreeBranchProps {
+  node: TreeNode;
+  listId: string;
+  selectedParentId: string | undefined;
+  onSelect: (parentId: string) => void;
+  loadChildren: (
+    parentId: string,
+  ) => Promise<{ children: TreeNode[] }>;
+  depth: number;
+}
+
+function TreeBranch({
+  node,
+  selectedParentId,
+  onSelect,
+  loadChildren,
+  depth,
+}: TreeBranchProps) {
+  const [expanded, setExpanded] = useState(false);
+  const [children, setChildren] = useState<TreeNode[]>([]);
+  const [loadingChildren, setLoadingChildren] = useState(false);
+  const [childrenLoaded, setChildrenLoaded] = useState(false);
+
+  const isSelected = selectedParentId === node.id;
+
+  async function handleExpand() {
+    const next = !expanded;
+    setExpanded(next);
+    if (next && !childrenLoaded) {
+      setLoadingChildren(true);
+      try {
+        const result = await loadChildren(node.id);
+        setChildren(result.children);
+        setChildrenLoaded(true);
+      } catch (err) {
+        toast.error("No se pudieron cargar las subtareas");
+        setExpanded(false);
+      } finally {
+        setLoadingChildren(false);
+      }
+    }
+  }
+
+  return (
+    <div>
+      <div
+        className={cn(
+          "flex items-stretch rounded text-xs",
+          isSelected
+            ? "bg-accent/15 ring-1 ring-accent/40"
+            : "hover:bg-panel2",
+        )}
+        style={{ paddingLeft: `${depth * 12}px` }}
+      >
+        {/* Toggle de expandir (siempre visible, separado del click de anclar) */}
+        <button
+          type="button"
+          onClick={handleExpand}
+          className="grid w-5 shrink-0 place-items-center text-mute hover:text-ink"
+          title={expanded ? "Contraer" : "Expandir subtareas"}
+        >
+          {loadingChildren ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : expanded ? (
+            <ChevronDown className="h-3 w-3" />
+          ) : (
+            <ChevronRight className="h-3 w-3" />
+          )}
+        </button>
+        {/* Nombre = clic ANCLA aquí (la tarea queda como hija de este nodo) */}
+        <button
+          type="button"
+          onClick={() => onSelect(node.id)}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-1.5 py-1 pr-2 text-left",
+            isSelected ? "font-semibold text-ink" : "text-ink",
+          )}
+          title={`Anclar la tarea como hija de "${node.name}"`}
+        >
+          <span className="min-w-0 flex-1 truncate" title={node.name}>
+            {node.name}
+          </span>
+          {isSelected && (
+            <span className="shrink-0 text-[10px] font-bold text-accent">
+              ✓ hija de este nodo
+            </span>
+          )}
+        </button>
+      </div>
+      {/* Hijas (recursivo) */}
+      {expanded && childrenLoaded && children.length > 0 && (
+        <div>
+          {children.map((child) => (
+            <TreeBranch
+              key={child.id}
+              node={child}
+              listId={""}
+              selectedParentId={selectedParentId}
+              onSelect={onSelect}
+              loadChildren={loadChildren}
+              depth={depth + 1}
+            />
+          ))}
+        </div>
+      )}
+      {expanded && childrenLoaded && children.length === 0 && (
+        <p
+          className="px-2 py-0.5 text-[10px] text-faint"
+          style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}
+        >
+          sin subtareas
+        </p>
+      )}
+    </div>
+  );
+}

@@ -2,11 +2,13 @@ import {
   query,
   mutation,
   internalMutation,
+  internalQuery,
   type MutationCtx,
 } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
+import { internal } from "./_generated/api";
 
 /** Literales de área y estado para reutilizar en validaciones. */
 const areaUnion = v.union(
@@ -197,6 +199,13 @@ const taskFields = {
   standbyUntil: v.optional(v.string()),
   scheduledDates: v.optional(v.string()),
   requestedBy: v.optional(v.string()),
+  /**
+   * Destino ClickUp (solo área patagonia). Vacío → Mesa Técnica (tarea suelta).
+   * Seteado → id del nodo padre bajo el que anidar la tarea en ClickUp.
+   */
+  clickupParentId: v.optional(v.string()),
+  /** List de ClickUp del destino (para reconstruir el selector al editar). */
+  clickupListId: v.optional(v.string()),
 };
 
 /** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
@@ -234,11 +243,24 @@ export const create = mutation({
       standbyUntil: args.standbyUntil,
       scheduledDates: args.scheduledDates,
       requestedBy: sanitized.requestedBy ?? args.requestedBy,
+      clickupParentId: args.clickupParentId,
+      clickupListId: args.clickupListId,
       order: 0,
       completedAt: args.status === "completado" ? now : undefined,
       createdAt: now,
       updatedAt: now,
     });
+
+    // ===== Sync ClickUp outbound (solo patagonia) =====
+    // El handler del scheduler valida enabled/área internamente; agendamos
+    // sin más para que corra en background sin bloquear el retorno.
+    if (args.area === "patagonia") {
+      await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
+        sessionToken: args.sessionToken,
+        taskId,
+        op: "create",
+      });
+    }
     return taskId;
   },
 });
@@ -262,6 +284,8 @@ export const update = mutation({
     standbyUntil: v.optional(v.string()),
     scheduledDates: v.optional(v.string()),
     requestedBy: v.optional(v.string()),
+    clickupParentId: v.optional(v.string()),
+    clickupListId: v.optional(v.string()),
   },
   handler: async (ctx, { sessionToken, id, ...patch }) => {
     await requireAuth(ctx, sessionToken);
@@ -278,8 +302,49 @@ export const update = mutation({
       patch.requestedBy = sanitized.requestedBy;
     if (patch.progress !== undefined) patch.progress = clampProgress(patch.progress);
 
+    // Campos de texto opcional (fechas, estimación, standby, etc.): un string
+    // vacío explícito significa "vaciar el campo". Lo persistimos como
+    // undefined para que desaparezca, en vez de ignorarlo. Esto permite limpiar
+    // una fecha al editar (el DatePicker emite "" al limpiar).
+    for (const f of [
+      "dueDate",
+      "estimate",
+      "standbyFrom",
+      "standbyUntil",
+      "scheduledDates",
+      "notes",
+      "requestedBy",
+    ] as const) {
+      if ((patch as Record<string, unknown>)[f] === "") {
+        (patch as Record<string, unknown>)[f] = undefined;
+      }
+    }
+
     // Separar el cambio de estado del resto del patch.
     const { status: newStatus, ...restPatch } = patch;
+
+    // Si cambia el destino ClickUp y la tarea ya estaba sincronizada, la
+    // desvinculamos para que el próximo sync la recree en el nuevo destino.
+    if (
+      task.clickupId &&
+      patch.clickupParentId !== undefined &&
+      patch.clickupParentId !== task.clickupParentId
+    ) {
+      await ctx.db.patch(id, {
+        clickupId: undefined,
+        clickupUrl: undefined,
+        clickupSyncedAt: undefined,
+      });
+    }
+
+    // Determina el op de sync según qué cambió. Si cambia de área fuera de
+    // patagonia, no hay nada que sincronizar (lo manejamos tras el patch).
+    let syncOp: "update" | "status" | null = null;
+    if (newStatus && newStatus !== task.status) {
+      syncOp = "status";
+    } else {
+      syncOp = "update";
+    }
 
     // Si cambia el estado (desde el modal, NO via drag), mover la tarea
     // ARRIBA (order 0) de la nueva columna + aplicar el resto de campos.
@@ -292,18 +357,36 @@ export const update = mutation({
         extra.completedAt = undefined;
       }
       await moveToTopOfStatus(ctx, id, task.status, newStatus, now, extra);
-      return id;
+    } else {
+      // Sin cambio de estado: patch plano (mantiene el order actual).
+      const next: Record<string, unknown> = { ...patch, updatedAt: now };
+      if (patch.status === "completado" && !task.completedAt) {
+        next.completedAt = now;
+      }
+      if (patch.status && patch.status !== "completado") {
+        next.completedAt = undefined;
+      }
+      await ctx.db.patch(id, next);
     }
 
-    // Sin cambio de estado: patch plano (mantiene el order actual).
-    const next: Record<string, unknown> = { ...patch, updatedAt: now };
-    if (patch.status === "completado" && !task.completedAt) {
-      next.completedAt = now;
+    // ===== Sync ClickUp outbound (solo patagonia) =====
+    // El área final puede haber cambiado: releemos para decidir.
+    const updated = await ctx.db.get(id);
+    if (updated && updated.area === "patagonia") {
+      await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
+        sessionToken,
+        taskId: id,
+        op: syncOp ?? "update",
+      });
+    } else if (updated && updated.clickupId) {
+      // Salió de patagonia pero estaba sincronizada: desvincular sin borrar.
+      await ctx.db.patch(id, {
+        clickupId: undefined,
+        clickupUrl: undefined,
+        clickupSyncedAt: now,
+        clickupSyncError: undefined,
+      });
     }
-    if (patch.status && patch.status !== "completado") {
-      next.completedAt = undefined;
-    }
-    await ctx.db.patch(id, next);
     return id;
   },
 });
@@ -318,6 +401,9 @@ export const remove = mutation({
   handler: async (ctx, { sessionToken, id }) => {
     await requireAuth(ctx, sessionToken);
     const now = Date.now();
+    const task = await ctx.db.get(id);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
     // Marcar sub-tareas asociadas como borradas
     const subtasks = await ctx.db
       .query("subtasks")
@@ -329,6 +415,17 @@ export const remove = mutation({
         .map((s) => ctx.db.patch(s._id, { deletedAt: now, updatedAt: now })),
     );
     await ctx.db.patch(id, { deletedAt: now, updatedAt: now });
+
+    // ===== Sync ClickUp: eliminar en ClickUp si estaba sincronizada =====
+    // Al borrar en Hermes, borramos también en ClickUp (la tarea vino de acá).
+    // El handler de op="delete" hace DELETE a ClickUp y desvincula la tarea.
+    if (task.area === "patagonia") {
+      await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
+        sessionToken,
+        taskId: id,
+        op: "delete",
+      });
+    }
     return id;
   },
 });
@@ -401,6 +498,15 @@ export const changeStatus = mutation({
       }
     });
     await Promise.all(updates);
+
+    // ===== Sync ClickUp outbound (solo patagonia, solo si hubo cambio real) =====
+    if (oldStatus !== newStatus && task.area === "patagonia" && task.clickupId) {
+      await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
+        sessionToken,
+        taskId: id,
+        op: "status",
+      });
+    }
     return id;
   },
 });
@@ -478,6 +584,15 @@ export const toggleComplete = mutation({
           ),
       );
     }
+
+    // ===== Sync ClickUp outbound (solo patagonia) =====
+    if (task.area === "patagonia" && task.clickupId) {
+      await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
+        sessionToken,
+        taskId: id,
+        op: "complete",
+      });
+    }
     return id;
   },
 });
@@ -510,5 +625,18 @@ export const _createForSeed = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+  },
+});
+
+/**
+ * Query interna (sin auth) usada por el scheduler de ClickUp para leer la
+ * tarea a sincronizar. El caller (mutación) YA validó la sesión.
+ */
+export const _getInternal = internalQuery({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const task = await ctx.db.get(taskId);
+    if (!task) return null;
+    return task;
   },
 });

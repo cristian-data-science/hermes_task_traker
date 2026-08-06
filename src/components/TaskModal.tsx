@@ -15,7 +15,7 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { X, Plus, Trash2, Loader2, Check } from "lucide-react";
+import { X, Plus, Trash2, Loader2, Check, ExternalLink, AlertTriangle } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -33,6 +33,7 @@ import {
 import { cn } from "../lib/utils";
 import { SubtaskItem } from "./SubtaskItem";
 import { DatePicker } from "./DatePicker";
+import { ClickUpDestinationPicker } from "./ClickUpDestinationPicker";
 import { useAuth } from "../hooks/useAuth";
 
 interface TaskModalProps {
@@ -42,6 +43,8 @@ interface TaskModalProps {
   /** Estado/área por defecto al crear (opcional). */
   defaultStatus?: Status;
   defaultArea?: Area;
+  /** Áreas ocultas (no se muestran en el selector al crear). */
+  hiddenAreas?: string[];
 }
 
 export function TaskModal({
@@ -49,9 +52,15 @@ export function TaskModal({
   open,
   onClose,
   defaultStatus = "pendiente",
-  defaultArea = "personal",
+  defaultArea = "patagonia",
+  hiddenAreas = [],
 }: TaskModalProps) {
   const isEdit = !!task;
+  // Áreas visibles en el selector: las ocultas no aparecen al crear. Al editar
+  // una tarea de un área oculta, la seguimos mostrando para no perder el dato.
+  const visibleAreas = AREAS.filter(
+    (a) => isEdit || !hiddenAreas.includes(a),
+  );
   const { token } = useAuth();
   const createTask = useMutation(api.tasks.create);
   const updateTask = useMutation(api.tasks.update);
@@ -78,7 +87,12 @@ export function TaskModal({
 
   // Estado del form
   const [title, setTitle] = useState("");
-  const [area, setArea] = useState<Area>(defaultArea);
+  // Si el área por defecto está oculta, caer a la primera visible.
+  const [area, setArea] = useState<Area>(
+    hiddenAreas.includes(defaultArea)
+      ? (visibleAreas[0] ?? defaultArea)
+      : defaultArea,
+  );
   const [status, setStatus] = useState<Status>(defaultStatus);
   const [executor, setExecutor] = useState<Executor>("cris");
   const [notes, setNotes] = useState("");
@@ -91,6 +105,12 @@ export function TaskModal({
   const [requestedBy, setRequestedBy] = useState("");
   const [saving, setSaving] = useState(false);
   const [newSub, setNewSub] = useState("");
+  const [clickupParentId, setClickupParentId] = useState<string | undefined>(
+    undefined,
+  );
+  const [clickupListId, setClickupListId] = useState<string | undefined>(
+    undefined,
+  );
 
   // Cargar datos solo cuando CAMBIA el contexto (otra tarea, o editar↔nueva),
   // no cada vez que se reabre el modal. Así, si lo cerrás por misclic mientras
@@ -117,9 +137,15 @@ export function TaskModal({
       setStandbyUntil(task.standbyUntil ?? "");
       setScheduledDates(task.scheduledDates ?? "");
       setRequestedBy(task.requestedBy ?? "");
+      setClickupParentId(task.clickupParentId);
+      setClickupListId(task.clickupListId);
     } else {
       setTitle("");
-      setArea(defaultArea);
+      setArea(
+        hiddenAreas.includes(defaultArea)
+          ? (visibleAreas[0] ?? defaultArea)
+          : defaultArea,
+      );
       setStatus(defaultStatus);
       setExecutor("cris");
       setNotes("");
@@ -130,6 +156,8 @@ export function TaskModal({
       setStandbyUntil("");
       setScheduledDates("");
       setRequestedBy("");
+      setClickupParentId(undefined);
+      setClickupListId(undefined);
     }
     setNewSub("");
   }, [open, task, defaultArea, defaultStatus, ctxKey]);
@@ -141,19 +169,27 @@ export function TaskModal({
     }
     setSaving(true);
     try {
+      // Al EDITAR: mandamos los strings vacíos explícitamente (no undefined)
+      // para que el backend sepa que hay que VACIAR esos campos (ej. limpiar
+      // una fecha). Al CREAR: undefined para no setear campos vacíos.
+      const blank = isEdit ? "" : undefined;
       const payload = {
         title: title.trim(),
         area,
         status,
         executor,
-        notes: notes.trim() || undefined,
-        estimate: estimate.trim() || undefined,
-        dueDate: dueDate.trim() || undefined,
+        notes: notes.trim() || blank,
+        estimate: estimate.trim() || blank,
+        dueDate: dueDate.trim() || blank,
         progress: progress === "" ? undefined : Number(progress),
-        standbyFrom: standbyFrom.trim() || undefined,
-        standbyUntil: standbyUntil.trim() || undefined,
-        scheduledDates: scheduledDates.trim() || undefined,
-        requestedBy: requestedBy.trim() || undefined,
+        standbyFrom: standbyFrom.trim() || blank,
+        standbyUntil: standbyUntil.trim() || blank,
+        scheduledDates: scheduledDates.trim() || blank,
+        requestedBy: requestedBy.trim() || blank,
+        // Destino ClickUp solo aplica a Patagonia; las otras áreas lo ignoran.
+        ...(area === "patagonia"
+          ? { clickupParentId, clickupListId }
+          : {}),
       };
       if (isEdit && task) {
         await updateTask({ id: task._id, sessionToken: token!, ...payload });
@@ -266,8 +302,11 @@ export function TaskModal({
               <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
                 <div>
                   <label className="label">Área</label>
-                  <div className="grid grid-cols-3 gap-1">
-                    {AREAS.map((a) => {
+                  <div
+                    className="grid gap-1"
+                    style={{ gridTemplateColumns: `repeat(${visibleAreas.length}, minmax(0, 1fr))` }}
+                  >
+                    {visibleAreas.map((a) => {
                       const meta = AREA_META[a];
                       const active = area === a;
                       return (
@@ -341,6 +380,41 @@ export function TaskModal({
                   </div>
                 </div>
               </div>
+
+              {/* Destino ClickUp (solo Patagonia) */}
+              {area === "patagonia" && (
+                <div className="mb-4">
+                  <ClickUpDestinationPicker
+                    value={clickupParentId}
+                    listId={clickupListId}
+                    onChange={(parentId, lid) => {
+                      setClickupParentId(parentId);
+                      setClickupListId(lid);
+                    }}
+                  />
+                  {/* Estado de sync / link si la tarea ya está sincronizada */}
+                  {isEdit && task?.clickupUrl && (
+                    <div className="mt-2 flex items-center gap-2 text-xs">
+                      {task.clickupSyncError ? (
+                        <span className="inline-flex items-center gap-1 text-danger">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          Error de sync: {task.clickupSyncError}
+                        </span>
+                      ) : (
+                        <a
+                          href={task.clickupUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-accent hover:underline"
+                        >
+                          <ExternalLink className="h-3.5 w-3.5" />
+                          Ver en ClickUp
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Sub-tareas (solo en edición) */}
               {isEdit && (
