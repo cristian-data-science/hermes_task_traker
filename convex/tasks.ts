@@ -373,6 +373,9 @@ export const update = mutation({
       const extra: Record<string, unknown> = { ...restPatch };
       if (newStatus === "completado" && !task.completedAt) {
         extra.completedAt = now;
+        // Completar desde el modal también implica 100%, salvo que el propio
+        // patch traiga un progreso explícito.
+        if (restPatch.progress === undefined) extra.progress = 100;
       }
       if (newStatus !== "completado") {
         extra.completedAt = undefined;
@@ -383,6 +386,9 @@ export const update = mutation({
       const next: Record<string, unknown> = { ...patch, updatedAt: now };
       if (patch.status === "completado" && !task.completedAt) {
         next.completedAt = now;
+        // Mismo criterio que al arrastrar o usar el botón rápido: completada
+        // implica 100%, salvo que el propio patch traiga otro progreso.
+        if (patch.progress === undefined) next.progress = 100;
       }
       if (patch.status && patch.status !== "completado") {
         next.completedAt = undefined;
@@ -508,8 +514,11 @@ export const changeStatus = mutation({
             status: newStatus,
             order: i,
             updatedAt: now,
-            completedAt:
-              newStatus === "completado" ? now : undefined,
+            completedAt: newStatus === "completado" ? now : undefined,
+            // Completar es completar, venga de donde venga: arrastrar a la
+            // columna dejaba el progreso como estaba y quedaban tareas
+            // completadas mostrando 40%. Solo `toggleComplete` lo forzaba.
+            ...(newStatus === "completado" ? { progress: 100 } : {}),
           }),
         );
       } else {

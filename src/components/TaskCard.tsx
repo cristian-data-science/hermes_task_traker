@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties, useRef } from "react";
 import { motion } from "framer-motion";
 import { useMutation } from "convex/react";
 import {
@@ -30,12 +30,21 @@ export function ProgressSlider({
   const update = useMutation(api.tasks.update);
   const { token } = useAuth();
   const [val, setVal] = useState(task.progress ?? 0);
+  /**
+   * true mientras el usuario está arrastrando. Bloquea la sincronización desde
+   * el servidor: `task.progress` es una query reactiva de Convex y puede
+   * cambiar en medio del gesto (otro dispositivo, o el recálculo automático al
+   * tildar una subtarea), lo que hacía saltar el slider bajo el dedo.
+   */
+  const dragging = useRef(false);
 
   useEffect(() => {
+    if (dragging.current) return;
     setVal(task.progress ?? 0);
   }, [task.progress]);
 
   function commit() {
+    dragging.current = false;
     if (val !== (task.progress ?? 0)) {
       void update({ id: task._id, progress: val, sessionToken: token! });
     }
@@ -59,6 +68,9 @@ export function ProgressSlider({
         max={100}
         step={5}
         value={val}
+        onPointerDown={() => {
+          dragging.current = true;
+        }}
         onChange={(e) => setVal(Number(e.target.value))}
         onPointerUp={commit}
         onKeyUp={commit}

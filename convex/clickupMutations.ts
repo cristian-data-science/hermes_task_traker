@@ -244,20 +244,39 @@ export const _restoreInboundTask = internalMutation({
   },
 });
 
-/** Actualiza el responsable de una tarea (executor + clickupAssignee). */
+/**
+ * Actualiza el responsable de una tarea (executor + clickupAssignee).
+ *
+ * `preserveExistingExecutor` protege la elección manual del usuario: `executor`
+ * (Cris / Claw) es un campo de Hermes, distinto del responsable real en
+ * ClickUp (`clickupAssignee`). Con el flag activo, solo se rellena si está
+ * vacío. Sin él, un `undefined` acá BORRA el campo — que es exactamente lo que
+ * hacía la re-sincronización masiva de responsables sobre todas las tareas.
+ */
 export const _updateAssignee = internalMutation({
   args: {
     taskId: v.id("tasks"),
     executor: v.optional(v.string()),
     clickupAssignee: v.optional(v.string()),
+    preserveExistingExecutor: v.optional(v.boolean()),
   },
-  handler: async (ctx, { taskId, executor, clickupAssignee }) => {
+  handler: async (
+    ctx,
+    { taskId, executor, clickupAssignee, preserveExistingExecutor },
+  ) => {
     const now = Date.now();
-    await ctx.db.patch(taskId, {
-      executor: executor as "cris" | "claw" | undefined,
+    const patch: Record<string, unknown> = {
       clickupAssignee,
       updatedAt: now,
-    });
+    };
+    if (preserveExistingExecutor) {
+      const task = await ctx.db.get(taskId);
+      // Solo completar si no había nada elegido.
+      if (!task?.executor && executor) patch.executor = executor;
+    } else {
+      patch.executor = executor;
+    }
+    await ctx.db.patch(taskId, patch);
   },
 });
 
@@ -300,5 +319,50 @@ export const _ignoreInbound = internalMutation({
         updatedAt: now,
       });
     }
+  },
+});
+
+/**
+ * Revierte un alta reciente hecha desde la bandeja de asignadas: BORRA de
+ * verdad las tareas recién importadas (y sus subtareas), en vez de marcarlas
+ * como ignoradas.
+ *
+ * El soft-delete de `_ignoreInbound` no sirve como "deshacer": deja la tarea
+ * marcada como descartada, así que nunca volvería a aparecer en la bandeja.
+ * Deshacer tiene que dejar todo como si el alta no hubiera pasado, incluida la
+ * posibilidad de volver a agregarla.
+ *
+ * Guarda de seguridad: solo borra tareas creadas hace menos de MAX_AGE_MS. Un
+ * "deshacer" tardío (pestaña vieja, doble click a destiempo) no puede destruir
+ * una tarea con trabajo encima.
+ */
+export const _undoInboundAdd = internalMutation({
+  args: { clickupIds: v.array(v.string()) },
+  handler: async (ctx, { clickupIds }) => {
+    const MAX_AGE_MS = 15 * 60 * 1000;
+    const now = Date.now();
+    let removed = 0;
+    let skipped = 0;
+    for (const clickupId of clickupIds) {
+      const task = await ctx.db
+        .query("tasks")
+        .withIndex("by_clickup_id", (q) => q.eq("clickupId", clickupId))
+        .first();
+      if (!task) continue;
+      if (now - task.createdAt > MAX_AGE_MS) {
+        skipped++;
+        continue;
+      }
+      // Borrar primero las subtareas: si no, quedarían huérfanas apuntando a
+      // una tarea inexistente.
+      const subs = await ctx.db
+        .query("subtasks")
+        .withIndex("by_task", (q) => q.eq("taskId", task._id))
+        .collect();
+      for (const s of subs) await ctx.db.delete(s._id);
+      await ctx.db.delete(task._id);
+      removed++;
+    }
+    return { removed, skipped };
   },
 });

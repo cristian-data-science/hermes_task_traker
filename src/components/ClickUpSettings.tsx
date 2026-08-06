@@ -39,8 +39,20 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
     setSyncingAssignees(true);
     try {
       const result = await syncAssignees({ sessionToken: token! });
-      const fixed = (result as { fixed: number }).fixed;
-      toast.success(`${fixed} responsable${fixed !== 1 ? "s" : ""} actualizado${fixed !== 1 ? "s" : ""}`);
+      const { fixed, failed } = result as {
+        fixed: number;
+        failed: { clickupId: string; error: string }[];
+      };
+      toast.success(
+        `${fixed} responsable${fixed !== 1 ? "s" : ""} actualizado${fixed !== 1 ? "s" : ""}`,
+      );
+      // Los fallos por tarea ya no se descartan: antes solo se veía el
+      // contador de éxitos y no había forma de saber que otras fallaron.
+      if (failed?.length > 0) {
+        toast.error(
+          `${failed.length} tarea${failed.length !== 1 ? "s" : ""} no se pudo${failed.length !== 1 ? "ieron" : ""} leer de ClickUp`,
+        );
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Error al sincronizar");
     } finally {

@@ -85,10 +85,22 @@ export const _setSubscriptions = internalMutation({
       .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_SUBSCRIPTIONS))
       .first();
     let current: { nodeType: string; id: string; label: string }[] = [];
-    try {
-      current = row?.value ? JSON.parse(row.value) : [];
-    } catch {
-      current = [];
+    if (row?.value) {
+      try {
+        const parsed = JSON.parse(row.value);
+        if (!Array.isArray(parsed)) throw new Error("no es un array");
+        current = parsed;
+      } catch (err) {
+        // Antes esto caía a [] y seguía de largo: la escritura siguiente
+        // REEMPLAZABA todas las suscripciones por las de esta llamada, sin
+        // dejar rastro. Es preferible fallar ruidosamente que perderlas.
+        throw new Error(
+          `Las suscripciones guardadas están corruptas y no se pueden leer; ` +
+            `no se modificó nada. Detalle: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+        );
+      }
     }
     // Quitar.
     const removeSet = new Set(removeIds);
@@ -192,9 +204,24 @@ export const setConfig = mutation({
   args: { ...sessionArg, config: v.string() },
   handler: async (ctx, { sessionToken, config }) => {
     await requireAuth(ctx, sessionToken);
-    // Validar que el JSON parsea a una ClickupConfig mínimamente bien.
-    parseClickupConfig(config);
-    await upsertSetting(ctx, SETTINGS_KEY_CONFIG, config);
+    // `parseClickupConfig` NUNCA lanza: ante un JSON inválido devuelve la
+    // config por defecto. Llamarla y descartar el resultado no validaba nada,
+    // y después se persistía el string crudo tal cual. Ahora se valida de
+    // verdad y se guarda lo parseado y normalizado.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(config);
+    } catch {
+      throw new Error("La config de ClickUp no es JSON válido");
+    }
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("La config de ClickUp debe ser un objeto");
+    }
+    const normalized = parseClickupConfig(config);
+    if (!normalized.mesaTecnica?.listId) {
+      throw new Error("La config de ClickUp no tiene una Mesa Técnica válida");
+    }
+    await upsertSetting(ctx, SETTINGS_KEY_CONFIG, JSON.stringify(normalized));
   },
 });
 

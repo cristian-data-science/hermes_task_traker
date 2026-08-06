@@ -12,6 +12,7 @@ import {
   Plus,
   RefreshCw,
   Search,
+  Undo2,
   X,
 } from "lucide-react";
 import toast from "react-hot-toast";
@@ -38,6 +39,15 @@ interface InboxNode {
   count: number;
 }
 
+/** Alta pendiente de confirmación. */
+interface PendingAdd {
+  tasks: AssignedUntrackedTask[];
+  /** Texto para el diálogo: '"Corregir login"' o '12 tareas de "FASE 1"'. */
+  label: string;
+  /** key del grupo, si el alta vino de un botón de rama. */
+  groupKey?: string;
+}
+
 /** Todas las tareas de una rama, incluidas las de sus descendientes. */
 function collectTasks(node: InboxNode): AssignedUntrackedTask[] {
   return [...node.tasks, ...node.children.flatMap(collectTasks)];
@@ -59,6 +69,7 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
   const { token } = useAuth();
   const listAssigned = useAction(api.clickup.listAssignedUntracked);
   const applySubs = useAction(api.clickup.applySubscriptions);
+  const undoAdd = useAction(api.clickup.undoAssignedAdd);
 
   const [tasks, setTasks] = useState<AssignedUntrackedTask[]>([]);
   const [loading, setLoading] = useState(false);
@@ -72,6 +83,8 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
   const [scanned, setScanned] = useState(0);
   /** key del grupo con un alta masiva en curso. */
   const [bulkBusy, setBulkBusy] = useState<string | null>(null);
+  /** Alta pendiente de confirmar (doble check antes de tocar el tablero). */
+  const [confirming, setConfirming] = useState<PendingAdd | null>(null);
 
   const load = useCallback(
     async () => {
@@ -108,55 +121,133 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
     void load();
   }, [open, load]);
 
-  async function handleAdd(task: AssignedUntrackedTask) {
-    if (!token || adding.has(task.id) || added.has(task.id)) return;
-    setAdding((prev) => new Set(prev).add(task.id));
+  /** Pide confirmación antes de tocar el tablero. Nada se agrega sin doble check. */
+  function requestAdd(batch: AssignedUntrackedTask[], label: string, groupKey?: string) {
+    const clean = batch.filter((t) => !added.has(t.id) && !adding.has(t.id));
+    if (clean.length === 0) return;
+    setConfirming({ tasks: clean, label, groupKey });
+  }
+
+  /**
+   * Ejecuta el alta ya confirmada y ofrece deshacer.
+   *
+   * El "Deshacer" no es cosmético: llama a undoAssignedAdd, que borra las
+   * tareas recién creadas y quita las suscripciones, dejando todo como estaba
+   * (y volviendo a ofrecerlas en la bandeja). No toca nada en ClickUp.
+   */
+  async function performAdd(req: PendingAdd) {
+    if (!token) return;
+    const batch = req.tasks;
+    const ids = batch.map((t) => t.id);
+    setConfirming(null);
+    if (req.groupKey) setBulkBusy(req.groupKey);
+    setAdding((prev) => {
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
     try {
-      // Importa la tarea Y persiste la suscripción en una sola operación.
+      // Importa las tareas Y persiste las suscripciones en una sola operación.
       const result = await applySubs({
         sessionToken: token,
-        add: [
-          {
-            nodeType: "task" as const,
-            id: task.id,
-            label: [
-              task.listName,
-              ...task.ancestors.map((a) => a.name),
-              task.name,
-            ].join(" · "),
-          },
-        ],
+        add: batch.map((t) => ({
+          nodeType: "task" as const,
+          id: t.id,
+          label: [t.listName, ...t.ancestors.map((a) => a.name), t.name].join(
+            " · ",
+          ),
+        })),
         remove: [],
       });
-      // No dar por buena la operación sin mirar el resultado: la suscripción
-      // se persiste antes de traer el detalle de ClickUp, así que puede quedar
-      // suscripta SIN llegar al tablero. Antes eso se mostraba como éxito.
-      const failure = result.failed?.[0];
-      if (failure) {
-        toast.error(`No se pudo traer "${task.name}": ${failure.error}`);
-        return;
+
+      // No dar por buena la operación sin mirar el resultado: la suscripción se
+      // persiste ANTES de traer el detalle de ClickUp, así que puede quedar
+      // suscripta sin llegar al tablero.
+      const failedIds = new Set((result.failed ?? []).map((f) => f.id));
+      const ok = batch.filter((t) => !failedIds.has(t.id));
+
+      if (failedIds.size > 0) {
+        const first = result.failed?.[0];
+        toast.error(
+          batch.length === 1
+            ? `No se pudo traer "${batch[0].name}": ${first?.error ?? "error"}`
+            : `${failedIds.size} de ${batch.length} no se pudieron traer de ClickUp`,
+        );
       }
-      const landed = result.tasksImported + result.tasksRestored;
-      if (landed === 0 && result.tasksSkipped === 0) {
-        toast.error(`"${task.name}" no se pudo agregar al tablero`);
-        return;
-      }
-      setAdded((prev) => new Set(prev).add(task.id));
-      toast.success(
-        landed > 0
-          ? `"${task.name}" agregada al tablero`
-          : `"${task.name}" ya estaba en el tablero`,
-      );
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "No se pudo agregar la tarea",
-      );
-    } finally {
-      setAdding((prev) => {
+      if (ok.length === 0) return;
+
+      setAdded((prev) => {
         const next = new Set(prev);
-        next.delete(task.id);
+        ok.forEach((t) => next.add(t.id));
         return next;
       });
+      showUndoToast(ok);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudieron agregar las tareas",
+      );
+    } finally {
+      setBulkBusy(null);
+      setAdding((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+    }
+  }
+
+  /** Toast de éxito con botón Deshacer, visible unos segundos. */
+  function showUndoToast(ok: AssignedUntrackedTask[]) {
+    const label =
+      ok.length === 1
+        ? `"${ok[0].name}" agregada al tablero`
+        : `${ok.length} tareas agregadas al tablero`;
+    toast.custom(
+      (t) => (
+        <div className="flex items-center gap-3 rounded-el border-el border-line bg-panel px-3 py-2 shadow-el-lg">
+          <Check className="h-4 w-4 shrink-0 text-accent" />
+          <span className="text-sm text-ink">{label}</span>
+          <button
+            onClick={() => {
+              toast.dismiss(t.id);
+              void handleUndo(ok);
+            }}
+            className="shrink-0 rounded-el border-el border-line px-2 py-1 text-xs font-medium text-ink hover:bg-panel2"
+          >
+            <Undo2 className="mr-1 inline h-3 w-3" />
+            Deshacer
+          </button>
+        </div>
+      ),
+      { duration: 6000 },
+    );
+  }
+
+  /** Revierte el alta: borra las tareas creadas y quita las suscripciones. */
+  async function handleUndo(batch: AssignedUntrackedTask[]) {
+    if (!token) return;
+    const ids = batch.map((t) => t.id);
+    try {
+      const result = await undoAdd({ sessionToken: token, clickupIds: ids });
+      // Devolverlas a la bandeja solo si de verdad se borraron.
+      setAdded((prev) => {
+        const next = new Set(prev);
+        ids.forEach((id) => next.delete(id));
+        return next;
+      });
+      if (result.skipped > 0) {
+        toast.error(
+          `${result.skipped} no se pudo deshacer (la tarea ya no es reciente)`,
+        );
+      } else {
+        toast.success(
+          result.removed === 1 ? "Alta deshecha" : `${result.removed} altas deshechas`,
+        );
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudo deshacer",
+      );
     }
   }
 
@@ -220,54 +311,6 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
     return roots;
   }, [pending]);
 
-  /** Agrega de una vez todas las tareas de una rama. */
-  async function handleAddMany(node: InboxNode) {
-    if (!token || bulkBusy) return;
-    const batch = collectTasks(node).filter(
-      (t) => !added.has(t.id) && !adding.has(t.id),
-    );
-    if (batch.length === 0) return;
-    setBulkBusy(node.key);
-    try {
-      const result = await applySubs({
-        sessionToken: token,
-        add: batch.map((t) => ({
-          nodeType: "task" as const,
-          id: t.id,
-          label: [
-            t.listName,
-            ...t.ancestors.map((a) => a.name),
-            t.name,
-          ].join(" · "),
-        })),
-        remove: [],
-      });
-      const failedIds = new Set((result.failed ?? []).map((f) => f.id));
-      const ok = batch.filter((t) => !failedIds.has(t.id));
-      if (ok.length > 0) {
-        setAdded((prev) => {
-          const next = new Set(prev);
-          ok.forEach((t) => next.add(t.id));
-          return next;
-        });
-        toast.success(
-          `${ok.length} tarea${ok.length !== 1 ? "s" : ""} agregada${ok.length !== 1 ? "s" : ""} al tablero`,
-        );
-      }
-      if (failedIds.size > 0) {
-        toast.error(
-          `${failedIds.size} no se pudo${failedIds.size !== 1 ? "ieron" : ""} traer de ClickUp`,
-        );
-      }
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : "No se pudieron agregar las tareas",
-      );
-    } finally {
-      setBulkBusy(null);
-    }
-  }
-
   return (
     <AnimatePresence>
       {open && (
@@ -284,7 +327,7 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
             exit={{ opacity: 0, y: 24, scale: 0.98 }}
             transition={{ type: "spring", stiffness: 340, damping: 30 }}
             onClick={(e) => e.stopPropagation()}
-            className="flex max-h-[94dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border-el border-line bg-panel shadow-el-lg sm:max-h-[92vh] sm:rounded-el-lg"
+            className="relative flex max-h-[94dvh] w-full max-w-2xl flex-col overflow-hidden rounded-t-2xl border-el border-line bg-panel shadow-el-lg sm:max-h-[92vh] sm:rounded-el-lg"
           >
             {/* Header */}
             <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-3.5 sm:px-5">
@@ -367,8 +410,16 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
                       node={group}
                       depth={0}
                       adding={adding}
-                      onAdd={handleAdd}
-                      onAddMany={handleAddMany}
+                      onAdd={(task) =>
+                        requestAdd([task], `"${task.name}"`)
+                      }
+                      onAddMany={(node) =>
+                        requestAdd(
+                          collectTasks(node),
+                          `${collectTasks(node).length} tareas de "${node.name}"`,
+                          node.key,
+                        )
+                      }
                       bulkBusy={bulkBusy}
                     />
                   ))}
@@ -391,6 +442,65 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
                 Cerrar
               </button>
             </div>
+
+            {/* Doble check: nada entra al tablero sin confirmación explícita.
+                Se monta dentro del modal (no position:fixed) para no pelear
+                con el overlay de arriba. */}
+            {confirming && (
+              <div
+                className="absolute inset-0 z-10 flex items-center justify-center bg-black/50 p-4"
+                onClick={() => setConfirming(null)}
+              >
+                <div
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full max-w-sm rounded-el border-el border-line bg-panel p-4 shadow-el-lg"
+                >
+                  <h3 className="mb-1 font-display text-base font-semibold text-ink">
+                    ¿Agregar al tablero?
+                  </h3>
+                  <p className="mb-3 text-sm text-mute">
+                    Vas a agregar {confirming.label} al Kanban y quedarán
+                    sincronizadas con ClickUp.
+                  </p>
+                  {confirming.tasks.length > 1 && (
+                    <ul className="mb-3 max-h-40 overflow-y-auto rounded-el border-el border-line bg-panel2 px-2 py-1.5">
+                      {confirming.tasks.slice(0, 12).map((t) => (
+                        <li
+                          key={t.id}
+                          className="truncate py-0.5 text-[11px] text-mute"
+                          title={t.name}
+                        >
+                          • {t.name}
+                        </li>
+                      ))}
+                      {confirming.tasks.length > 12 && (
+                        <li className="py-0.5 text-[11px] text-faint">
+                          …y {confirming.tasks.length - 12} más
+                        </li>
+                      )}
+                    </ul>
+                  )}
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setConfirming(null)}
+                      className="btn px-3 py-1.5 text-sm"
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={() => void performAdd(confirming)}
+                      className="btn-primary px-3 py-1.5 text-sm"
+                    >
+                      <Check className="h-4 w-4" />
+                      Sí, agregar
+                      {confirming.tasks.length > 1
+                        ? ` (${confirming.tasks.length})`
+                        : ""}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </motion.div>
         </motion.div>
       )}

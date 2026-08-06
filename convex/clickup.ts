@@ -534,14 +534,22 @@ export const getInboundDiff = action({
     }
     for (const proj of config.projects) {
       if (!proj.inbound) continue;
-      for (const dest of proj.destinations) {
-        targets.push({
-          listId: proj.listId,
-          label: `${proj.label} · ${dest.label}`,
-        });
-      }
+      // Un target por PROYECTO, no por destino: todos los destinos de un
+      // proyecto comparten el mismo listId, así que armarlos por destino hacía
+      // que se descargara la misma list entera una vez por destino (3 veces
+      // para Ley de Datos). El resultado salía igual porque se deduplica por
+      // id, pero se gastaban 3× las llamadas contra el límite de ClickUp.
+      targets.push({ listId: proj.listId, label: proj.label });
     }
-    for (const target of targets) {
+    // Deduplicar por listId: dos proyectos configurados sobre la misma list
+    // tampoco tienen por qué escanearla dos veces.
+    const seenListIds = new Set<string>();
+    const uniqueTargets = targets.filter((t) => {
+      if (seenListIds.has(t.listId)) return false;
+      seenListIds.add(t.listId);
+      return true;
+    });
+    for (const target of uniqueTargets) {
       let page = 0;
       // eslint-disable-next-line no-constant-condition
       while (true) {
@@ -1083,9 +1091,47 @@ function sortByClickUpOrder<T>(items: T[]): T[] {
 /** Trae TODAS las tareas de una list (con subtareas), paginando. */
 async function fetchAllListTasks(listId: string): Promise<any[]> {
   const all: any[] = [];
+  // Se piden PAGE_BATCH páginas a la vez. La paginación secuencial pagaba un
+  // round-trip completo por página aunque la mayoría viniera vacía; con lotes,
+  // una list de 300 tareas tarda 1 tanda en vez de 4 idas y vueltas.
+  const PAGE_BATCH = 4;
+  for (let base = 0; base < MAX_LIST_PAGES; base += PAGE_BATCH) {
+    const pages = Array.from(
+      { length: Math.min(PAGE_BATCH, MAX_LIST_PAGES - base) },
+      (_, k) => base + k,
+    );
+    const batch = await Promise.all(
+      pages.map((page) =>
+        clickupFetch(
+          `/list/${listId}/task?archived=false&subtasks=true&include_closed=false&page=${page}`,
+        ).catch(() => null),
+      ),
+    );
+    let lastFull = false;
+    for (const data of batch) {
+      const tasks: any[] = data?.tasks ?? [];
+      all.push(...tasks);
+      lastFull = tasks.length === 100;
+    }
+    // Si la última página del lote no vino llena, no hay más que traer.
+    if (!lastFull) break;
+  }
+  return all;
+}
+
+/**
+ * Trae las tareas del workspace ASIGNADAS a Cris, filtrando del lado de
+ * ClickUp. Devuelve mucho menos que escanear el space entero y es la base de
+ * la bandeja: se usa para saber QUÉ listas hay que mirar en detalle.
+ */
+async function fetchMyAssignedTasks(): Promise<any[]> {
+  const all: any[] = [];
   for (let page = 0; page < MAX_LIST_PAGES; page++) {
     const data = await clickupFetch(
-      `/list/${listId}/task?archived=false&subtasks=true&include_closed=false&page=${page}`,
+      `/team/${CLICKUP_TEAM_ID}/task?page=${page}` +
+        `&assignees%5B%5D=${CLICKUP_USER_ID}` +
+        `&space_ids%5B%5D=${CLICKUP_SPACE_ID}` +
+        `&subtasks=true&include_closed=false&archived=false`,
     );
     const tasks: any[] = data?.tasks ?? [];
     all.push(...tasks);
@@ -1407,6 +1453,7 @@ export const syncAssignees = action({
       {},
     );
     let fixed = 0;
+    const failed: { clickupId: string; error: string }[] = [];
     for (const entry of existing.allEntries) {
       if (entry.deleted) continue;
       try {
@@ -1419,15 +1466,29 @@ export const syncAssignees = action({
         );
         await ctx.runMutation(internal.clickupMutations._updateAssignee, {
           taskId: entry.taskId,
+          // `executor` es de Hermes (Cris o Claw) y lo elige el usuario;
+          // `clickupAssignee` es el responsable real en ClickUp. Antes esta
+          // función forzaba executor según ClickUp sobre TODAS las tareas: un
+          // click borraba cualquier asignación manual a Claw (undefined en un
+          // patch de Convex BORRA el campo). Ahora solo se sugiere `cris`
+          // cuando la tarea es mía y no hay executor puesto; nunca se pisa una
+          // elección existente.
           executor: isAssignedToCris ? "cris" : undefined,
+          // El nombre de ClickUp sí es dato de ClickUp: se refresca siempre.
           clickupAssignee: assigneeName,
+          preserveExistingExecutor: true,
         });
         fixed++;
-      } catch {
-        // tarea inaccesible → saltar
+      } catch (err) {
+        // Antes se descartaba en silencio: el usuario veía "N actualizados"
+        // sin enterarse de que otras M fallaron ni por qué.
+        failed.push({
+          clickupId: entry.clickupId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
-    return { fixed };
+    return { fixed, failed };
   },
 });
 
@@ -1586,14 +1647,28 @@ export const listAssignedUntracked = action({
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
 
-    // 1) Qué hay ya en Hermes (incluye borradas/ignoradas: no reofrecerlas).
-    const existing = await ctx.runQuery(
-      internal.clickupMutations._listMappedForInbound,
-      {},
-    );
+    // 1) Qué hay ya en Hermes (incluye borradas/ignoradas: no reofrecerlas)
+    //    y las tareas asignadas a mí. En paralelo: no dependen entre sí.
+    const [existing, mine] = await Promise.all([
+      ctx.runQuery(internal.clickupMutations._listMappedForInbound, {}),
+      fetchMyAssignedTasks(),
+    ]);
     const known = new Set(existing.allEntries.map((e) => e.clickupId));
 
-    // 2) Estructura del space (mismo camino que getWorkspaceTree).
+    // 2) Solo interesan las listas donde tengo algo sin trackear. Antes se
+    //    escaneaba el space ENTERO (todas las listas, todas sus tareas), que
+    //    es lo que hacía lenta la bandeja y disparaba el rate limit de
+    //    ClickUp. Ahora ClickUp filtra por assignee y nosotros bajamos al
+    //    detalle únicamente de esas listas.
+    const relevantListIds = new Set<string>();
+    for (const t of mine) {
+      if (known.has(t.id)) continue;
+      const lid = t.list?.id;
+      if (lid) relevantListIds.add(String(lid));
+    }
+    if (relevantListIds.size === 0) return { tasks: [], scanned: mine.length };
+
+    // 3) Estructura del space, para los nombres de folder/list y su orden.
     const fdata = await clickupFetch(
       `/space/${CLICKUP_SPACE_ID}/folder?archived=false`,
     );
@@ -1602,7 +1677,9 @@ export const listAssignedUntracked = action({
         id: folder.id,
         name: folder.name ?? "Sin nombre",
         lists: sortByClickUpOrder(
-          (folder.lists ?? []).filter((l: any) => !l.archived),
+          (folder.lists ?? []).filter(
+            (l: any) => !l.archived && relevantListIds.has(String(l.id)),
+          ),
         ),
       }))
       .filter((f: any) => f.lists.length > 0);
@@ -1621,6 +1698,9 @@ export const listAssignedUntracked = action({
           folderName: folder.name,
           listId: list.id,
           listName: list.name,
+          // Se necesitan TODAS las tareas de estas listas (no solo las mías):
+          // sin ellas no se puede saber si una tarea tiene subtareas ajenas
+          // (o sea, si es contenedor) ni resolver los nombres de sus ancestros.
           promise: fetchAllListTasks(list.id).catch(() => null),
         });
       }
@@ -1675,5 +1755,40 @@ export const listAssignedUntracked = action({
     });
 
     return { tasks: out, scanned };
+  },
+});
+
+/**
+ * Deshace un alta hecha desde la bandeja: quita las suscripciones y borra las
+ * tareas recién creadas en Hermes. No toca nada en ClickUp — la tarea sigue
+ * viviendo allá, simplemente deja de estar en el tablero y vuelve a ofrecerse
+ * en la bandeja.
+ *
+ * Pública (action) con auth.
+ */
+export const undoAssignedAdd = action({
+  args: { sessionToken: v.string(), clickupIds: v.array(v.string()) },
+  handler: async (
+    ctx,
+    { sessionToken, clickupIds },
+  ): Promise<{ removed: number; skipped: number }> => {
+    const ok = await ctx.runQuery(internal.settings._checkSession, {
+      sessionToken,
+    });
+    if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+    if (clickupIds.length === 0) return { removed: 0, skipped: 0 };
+
+    // 1) Quitar las suscripciones (sin marcar nada como ignorado).
+    await ctx.runMutation(internal.settings._setSubscriptions, {
+      add: [],
+      removeIds: clickupIds,
+    });
+
+    // 2) Borrar las tareas recién importadas.
+    const result: { removed: number; skipped: number } = await ctx.runMutation(
+      internal.clickupMutations._undoInboundAdd,
+      { clickupIds },
+    );
+    return result;
   },
 });
