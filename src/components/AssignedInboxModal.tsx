@@ -47,14 +47,17 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
   /** ids ya agregadas en esta sesión del modal (feedback inmediato). */
   const [added, setAdded] = useState<Set<string>>(new Set());
 
+  const [scanned, setScanned] = useState(0);
+
   const load = useCallback(
-    async (silent = false) => {
+    async () => {
       if (!token) return;
-      if (!silent) setLoading(true);
+      setLoading(true);
       setError(null);
       try {
         const result = await listAssigned({ sessionToken: token });
         setTasks(result.tasks);
+        setScanned(result.scanned);
       } catch (err) {
         setError(
           err instanceof Error
@@ -86,7 +89,7 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
     setAdding((prev) => new Set(prev).add(task.id));
     try {
       // Importa la tarea Y persiste la suscripción en una sola operación.
-      await applySubs({
+      const result = await applySubs({
         sessionToken: token,
         add: [
           {
@@ -97,8 +100,25 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
         ],
         remove: [],
       });
+      // No dar por buena la operación sin mirar el resultado: la suscripción
+      // se persiste antes de traer el detalle de ClickUp, así que puede quedar
+      // suscripta SIN llegar al tablero. Antes eso se mostraba como éxito.
+      const failure = result.failed?.[0];
+      if (failure) {
+        toast.error(`No se pudo traer "${task.name}": ${failure.error}`);
+        return;
+      }
+      const landed = result.tasksImported + result.tasksRestored;
+      if (landed === 0 && result.tasksSkipped === 0) {
+        toast.error(`"${task.name}" no se pudo agregar al tablero`);
+        return;
+      }
       setAdded((prev) => new Set(prev).add(task.id));
-      toast.success(`"${task.name}" agregada al tablero`);
+      toast.success(
+        landed > 0
+          ? `"${task.name}" agregada al tablero`
+          : `"${task.name}" ya estaba en el tablero`,
+      );
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "No se pudo agregar la tarea",
@@ -285,8 +305,10 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
               <span className="text-xs text-mute">
                 {loading
                   ? "Buscando…"
-                  : `${pending.length} sin trackear${
-                      added.size > 0 ? ` · ${added.size} agregada${added.size !== 1 ? "s" : ""}` : ""
+                  : `${pending.length} sin trackear · ${scanned} tareas revisadas${
+                      added.size > 0
+                        ? ` · ${added.size} agregada${added.size !== 1 ? "s" : ""}`
+                        : ""
                     }`}
               </span>
               <button onClick={onClose} className="btn px-3 py-1.5 text-sm">

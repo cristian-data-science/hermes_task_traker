@@ -1244,6 +1244,8 @@ export const applySubscriptions = action({
       assignees?: number[];
       assigneeName?: string;
     }[] = [];
+    /** Nodos que se suscribieron pero cuyo detalle no se pudo traer. */
+    const failed: { id: string; label: string; error: string }[] = [];
 
     for (const node of add) {
       if (node.nodeType === "task") {
@@ -1264,8 +1266,17 @@ export const applySubscriptions = action({
               ? String(t.assignees[0].username).split(" ")[0]
               : undefined,
           });
-        } catch {
-          // tarea borrada o inaccesible → ignorar
+        } catch (err) {
+          // La tarea no se pudo traer (borrada, sin permisos, rate limit).
+          // NO se puede ignorar en silencio: la suscripción ya quedó
+          // persistida arriba, así que el usuario vería el check de
+          // "suscripto" sin que la tarea llegue nunca al tablero. Se reporta
+          // para que el caller lo muestre.
+          failed.push({
+            id: node.id,
+            label: node.label,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
       } else {
         // folder o list: traer todas las tareas (con subtareas).
@@ -1369,6 +1380,8 @@ export const applySubscriptions = action({
       tasksRestored: restored,
       tasksSkipped: tasksToImport.length - imported - restored,
       tasksIgnored: ignored,
+      /** Nodos suscriptos cuyo detalle no se pudo traer de ClickUp. */
+      failed,
     };
   },
 });
