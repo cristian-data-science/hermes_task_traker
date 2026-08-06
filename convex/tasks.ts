@@ -204,6 +204,8 @@ const taskFields = {
    * Seteado → id del nodo padre bajo el que anidar la tarea en ClickUp.
    */
   clickupParentId: v.optional(v.string()),
+  /** List de ClickUp del destino (para reconstruir el selector al editar). */
+  clickupListId: v.optional(v.string()),
 };
 
 /** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
@@ -242,6 +244,7 @@ export const create = mutation({
       scheduledDates: args.scheduledDates,
       requestedBy: sanitized.requestedBy ?? args.requestedBy,
       clickupParentId: args.clickupParentId,
+      clickupListId: args.clickupListId,
       order: 0,
       completedAt: args.status === "completado" ? now : undefined,
       createdAt: now,
@@ -282,6 +285,7 @@ export const update = mutation({
     scheduledDates: v.optional(v.string()),
     requestedBy: v.optional(v.string()),
     clickupParentId: v.optional(v.string()),
+    clickupListId: v.optional(v.string()),
   },
   handler: async (ctx, { sessionToken, id, ...patch }) => {
     await requireAuth(ctx, sessionToken);
@@ -297,6 +301,24 @@ export const update = mutation({
     if (sanitized.requestedBy !== undefined)
       patch.requestedBy = sanitized.requestedBy;
     if (patch.progress !== undefined) patch.progress = clampProgress(patch.progress);
+
+    // Campos de texto opcional (fechas, estimación, standby, etc.): un string
+    // vacío explícito significa "vaciar el campo". Lo persistimos como
+    // undefined para que desaparezca, en vez de ignorarlo. Esto permite limpiar
+    // una fecha al editar (el DatePicker emite "" al limpiar).
+    for (const f of [
+      "dueDate",
+      "estimate",
+      "standbyFrom",
+      "standbyUntil",
+      "scheduledDates",
+      "notes",
+      "requestedBy",
+    ] as const) {
+      if ((patch as Record<string, unknown>)[f] === "") {
+        (patch as Record<string, unknown>)[f] = undefined;
+      }
+    }
 
     // Separar el cambio de estado del resto del patch.
     const { status: newStatus, ...restPatch } = patch;

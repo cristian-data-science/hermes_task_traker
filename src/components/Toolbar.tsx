@@ -9,7 +9,6 @@ import {
   X,
   LogOut,
   Settings,
-  RefreshCw,
 } from "lucide-react";
 import {
   AREAS,
@@ -39,8 +38,9 @@ interface ToolbarProps {
   onLogout: () => void;
   totalCount: number;
   pendingCount: number;
+  /** Áreas ocultas (no se muestran sus chips de filtro). */
+  hiddenAreas: string[];
   onOpenSettings: () => void;
-  onOpenInboundSync: () => void;
 }
 
 /** Logo de Cris Agent Task: prompt de terminal + cursor. */
@@ -81,8 +81,8 @@ export function Toolbar({
   onLogout,
   totalCount,
   pendingCount,
+  hiddenAreas,
   onOpenSettings,
-  onOpenInboundSync,
 }: ToolbarProps) {
   return (
     <header
@@ -151,21 +151,11 @@ export function Toolbar({
             {/* Selector de tema (4 temas) */}
             <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
 
-            {/* Sync reversa desde ClickUp */}
-            <button
-              onClick={onOpenInboundSync}
-              className="btn-ghost p-2 hover:text-accent"
-              title="Sincronizar desde ClickUp"
-              aria-label="Sincronizar desde ClickUp"
-            >
-              <RefreshCw className="h-4 w-4" />
-            </button>
-
             <button
               onClick={onOpenSettings}
               className="btn-ghost p-2 hover:text-accent"
-              title="Configuración ClickUp"
-              aria-label="Configuración ClickUp"
+              title="ClickUp"
+              aria-label="ClickUp"
             >
               <Settings className="h-4 w-4" />
             </button>
@@ -214,7 +204,7 @@ export function Toolbar({
           >
             Todas las áreas
           </FilterChip>
-          {AREAS.map((a) => {
+          {AREAS.filter((a) => !hiddenAreas.includes(a)).map((a) => {
             const meta = AREA_META[a];
             return (
               <FilterChip

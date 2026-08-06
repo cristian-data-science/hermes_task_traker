@@ -1,4 +1,4 @@
-import { query, mutation, internalQuery } from "./_generated/server";
+import { query, mutation, internalQuery, internalMutation } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAuth } from "./authGuard";
@@ -8,8 +8,11 @@ import {
   SETTINGS_KEY_LAST_SYNC,
   SETTINGS_KEY_LAST_INBOUND,
   SETTINGS_KEY_FORCE_SYNC_DEV,
+  SETTINGS_KEY_HIDDEN_AREAS,
+  SETTINGS_KEY_SUBSCRIPTIONS,
   parseClickupConfig,
   type ClickupConfig,
+  type ClickupProject,
   DEFAULT_CLICKUP_CONFIG,
 } from "./clickupConfig";
 
@@ -57,6 +60,61 @@ export const _checkSession = internalQuery({
   },
 });
 
+/**
+ * Mutation interna: actualiza las suscripciones de ClickUp (añade/quita nodos).
+ * Sin auth (uso desde actions que ya validaron la sesión).
+ */
+export const _setSubscriptions = internalMutation({
+  args: {
+    add: v.array(
+      v.object({
+        nodeType: v.union(
+          v.literal("folder"),
+          v.literal("list"),
+          v.literal("task"),
+        ),
+        id: v.string(),
+        label: v.string(),
+      }),
+    ),
+    removeIds: v.array(v.string()),
+  },
+  handler: async (ctx, { add, removeIds }) => {
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_SUBSCRIPTIONS))
+      .first();
+    let current: { nodeType: string; id: string; label: string }[] = [];
+    try {
+      current = row?.value ? JSON.parse(row.value) : [];
+    } catch {
+      current = [];
+    }
+    // Quitar.
+    const removeSet = new Set(removeIds);
+    current = current.filter((s) => !removeSet.has(s.id));
+    // Añadir (sin duplicados por id).
+    const existingIds = new Set(current.map((s) => s.id));
+    for (const node of add) {
+      if (!existingIds.has(node.id)) {
+        current.push(node);
+        existingIds.add(node.id);
+      }
+    }
+    const now = Date.now();
+    const value = JSON.stringify(current);
+    if (row) {
+      await ctx.db.patch(row._id, { value, updatedAt: now });
+    } else {
+      await ctx.db.insert("settings", {
+        key: SETTINGS_KEY_SUBSCRIPTIONS,
+        value,
+        updatedAt: now,
+      });
+    }
+  },
+});
+
 // ===== API pública =====
 
 /**
@@ -67,12 +125,14 @@ export const getClickupState = query({
   args: sessionArg,
   handler: async (ctx, { sessionToken }) => {
     await requireAuth(ctx, sessionToken);
-    const [enabledRow, configRow, lastSyncRow, lastInboundRow, forceRow] = await Promise.all([
+    const [enabledRow, configRow, lastSyncRow, lastInboundRow, forceRow, hiddenAreasRow, subsRow] = await Promise.all([
       ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_ENABLED)).first(),
       ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_CONFIG)).first(),
       ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_LAST_SYNC)).first(),
       ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_LAST_INBOUND)).first(),
       ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_FORCE_SYNC_DEV)).first(),
+      ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_HIDDEN_AREAS)).first(),
+      ctx.db.query("settings").withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_SUBSCRIPTIONS)).first(),
     ]);
     // El sync outbound solo corre en producción. En dev/local las tareas NO
     // tocan ClickUp (evita ensuciar el workspace compartido con datos de test),
@@ -93,7 +153,28 @@ export const getClickupState = query({
       config: parseClickupConfig(configRow?.value),
       lastSyncAt: lastSyncRow ? Number(lastSyncRow.value) : null,
       lastInboundAt: lastInboundRow ? Number(lastInboundRow.value) : null,
+      /** Áreas ocultas en la UI (solo visualización). */
+      hiddenAreas: parseHiddenAreas(hiddenAreasRow?.value),
+      /** Suscripciones de ClickUp (nodos a sincronizar inbound). */
+      subscriptions: parseSubscriptions(subsRow?.value),
     };
+  },
+});
+
+/**
+ * Devuelve el set de clickupIds que ya están importados en Hermes (tareas con
+ * clickupId, no borradas). Sirve para que la página de sync marque como
+ * "ya sincronizadas" las tareas que ya existen, aunque no tengan una
+ * suscripción explícita.
+ */
+export const getImportedClickupIds = query({
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }): Promise<string[]> => {
+    await requireAuth(ctx, sessionToken);
+    const all = await ctx.db.query("tasks").collect();
+    return all
+      .filter((t) => t.clickupId !== undefined && t.deletedAt === undefined)
+      .map((t) => t.clickupId as string);
   },
 });
 
@@ -155,6 +236,132 @@ export const setForceSyncDev = mutation({
   handler: async (ctx, { sessionToken, force }) => {
     await requireAuth(ctx, sessionToken);
     await upsertSetting(ctx, SETTINGS_KEY_FORCE_SYNC_DEV, force ? "true" : "false");
+  },
+});
+
+// ===== Áreas ocultas (solo visualización) =====
+
+/** Parsea el JSON de áreas ocultas. Devuelve [] si falta o está corrupto. */
+function parseHiddenAreas(raw: string | undefined): string[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((a) => typeof a === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Parsea el JSON de suscripciones de ClickUp. Devuelve [] si falta o corrupto. */
+function parseSubscriptions(
+  raw: string | undefined,
+): { nodeType: string; id: string; label: string }[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (s) => s && typeof s.id === "string" && typeof s.nodeType === "string",
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Oculta o muestra un área en la UI (solo visualización). Las tareas del área
+ * siguen existiendo y sincronizándose; solo desaparecen de filtros, vista lista
+ * y el TaskModal.
+ */
+export const toggleHiddenArea = mutation({
+  args: { ...sessionArg, area: v.string(), hidden: v.boolean() },
+  handler: async (ctx, { sessionToken, area, hidden }) => {
+    await requireAuth(ctx, sessionToken);
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_HIDDEN_AREAS))
+      .first();
+    const current = parseHiddenAreas(row?.value);
+    const next = hidden
+      ? Array.from(new Set([...current, area]))
+      : current.filter((a) => a !== area);
+    await upsertSetting(ctx, SETTINGS_KEY_HIDDEN_AREAS, JSON.stringify(next));
+  },
+});
+
+// ===== Gestión de proyectos (auto-descubrimiento) =====
+
+/**
+ * Añade un proyecto al config trackeado. El frontend lo arma con los destinos
+ * sugeridos (y/o corregidos por el usuario) tras descubrirlo.
+ */
+export const addProject = mutation({
+  args: {
+    ...sessionArg,
+    /** JSON string de un ClickupProject. */
+    project: v.string(),
+  },
+  handler: async (ctx, { sessionToken, project }) => {
+    await requireAuth(ctx, sessionToken);
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_CONFIG))
+      .first();
+    const config = parseClickupConfig(row?.value);
+    const proj = JSON.parse(project) as ClickupProject;
+    if (!proj.id || !proj.label || !proj.listId) {
+      throw new Error("Proyecto inválido: requiere id, label y listId");
+    }
+    if (config.projects.some((p) => p.id === proj.id)) {
+      throw new Error(`Ya existe un proyecto con id "${proj.id}"`);
+    }
+    config.projects.push(proj);
+    await upsertSetting(ctx, SETTINGS_KEY_CONFIG, JSON.stringify(config));
+  },
+});
+
+/**
+ * Reemplaza un proyecto existente por id (para corregir destinos y persistir
+ * las correcciones del usuario).
+ */
+export const updateProject = mutation({
+  args: {
+    ...sessionArg,
+    projectId: v.string(),
+    /** JSON string del ClickupProject actualizado. */
+    project: v.string(),
+  },
+  handler: async (ctx, { sessionToken, projectId, project }) => {
+    await requireAuth(ctx, sessionToken);
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_CONFIG))
+      .first();
+    const config = parseClickupConfig(row?.value);
+    const idx = config.projects.findIndex((p) => p.id === projectId);
+    if (idx < 0) throw new Error(`Proyecto "${projectId}" no encontrado`);
+    const proj = JSON.parse(project) as ClickupProject;
+    if (!proj.label || !proj.listId) {
+      throw new Error("Proyecto inválido: requiere label y listId");
+    }
+    config.projects[idx] = proj;
+    await upsertSetting(ctx, SETTINGS_KEY_CONFIG, JSON.stringify(config));
+  },
+});
+
+/** Elimina un proyecto del config trackeado por id. */
+export const removeProject = mutation({
+  args: { ...sessionArg, projectId: v.string() },
+  handler: async (ctx, { sessionToken, projectId }) => {
+    await requireAuth(ctx, sessionToken);
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_CONFIG))
+      .first();
+    const config = parseClickupConfig(row?.value);
+    config.projects = config.projects.filter((p) => p.id !== projectId);
+    await upsertSetting(ctx, SETTINGS_KEY_CONFIG, JSON.stringify(config));
   },
 });
 

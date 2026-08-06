@@ -1,29 +1,44 @@
-import { useMemo } from "react";
-import { useQuery } from "convex/react";
+import { useEffect, useMemo, useState } from "react";
+import { useAction, useQuery } from "convex/react";
+import { Loader2 } from "lucide-react";
 import { api } from "~/convex/_generated/api";
 import type { ClickupConfig } from "~/convex/clickupConfig";
+import { ClickUpTreeNavigator } from "./ClickUpTreeNavigator";
 import { useAuth } from "../hooks/useAuth";
 import { cn } from "../lib/utils";
 
 interface ClickUpDestinationPickerProps {
   /** parentId actual de la tarea (undefined = Mesa Técnica). */
   value: string | undefined;
-  onChange: (parentId: string | undefined) => void;
+  /** listId actual del destino (para reconstruir el selector al editar). */
+  listId?: string;
+  /** Callback al cambiar el destino. parentId vacío = Mesa Técnica. */
+  onChange: (parentId: string | undefined, listId?: string) => void;
+}
+
+/** Un folder del space (integrado o no). */
+interface AvailableFolder {
+  folderId: string;
+  folderName: string;
+  listId: string;
+  listName: string;
+  lists: { id: string; name: string }[];
+  alreadyIntegrated: boolean;
 }
 
 /**
  * Selector de destino ClickUp para tareas del área Patagonia.
  *
- * Dos niveles:
- *  1. Segmented control: "Mesa Técnica" (tarea suelta) | "Proyecto"
- *  2. Si Proyecto: dropdown de proyecto → dropdown de rama.
- *
- * Quick-pick de destinos recientes arriba (persistencia en localStorage).
- *
- * Si la tarea ya tiene clickupId, muestra link "Ver en ClickUp" + estado de sync.
+ * Dos modos:
+ *  1. Mesa Técnica (tarea suelta) → parentId vacío.
+ *  2. Proyecto → lista TODOS los folders del space (integrados o no) para que
+ *     el usuario pueda crear tareas en cualquier proyecto, incluso si no tiene
+ *     tareas asignadas ahí. Al elegir un folder, el navegador de árbol carga
+ *     las raíces de su list y permite navegar a cualquier profundidad.
  */
 export function ClickUpDestinationPicker({
   value,
+  listId,
   onChange,
 }: ClickUpDestinationPickerProps) {
   const { token } = useAuth();
@@ -32,18 +47,67 @@ export function ClickUpDestinationPicker({
     token ? { sessionToken: token } : "skip",
   );
   const config: ClickupConfig | undefined = state?.config;
+  const discover = useAction(api.clickup.discoverProjects);
 
-  // Resolver proyecto/destino actuales a partir del value (parentId).
-  const current = useMemo(() => {
-    if (!config || !value) return null;
+  // Folders disponibles del space (cargados al entrar en modo proyecto).
+  const [folders, setFolders] = useState<AvailableFolder[]>([]);
+  const [loadingFolders, setLoadingFolders] = useState(false);
+  const [foldersLoaded, setFoldersLoaded] = useState(false);
+
+  // Modo: 'mesa' (tarea suelta) o 'proyecto'.
+  const [mode, setMode] = useState<"mesa" | "proyecto">(
+    value ? "proyecto" : "mesa",
+  );
+  useEffect(() => {
+    setMode(value ? "proyecto" : "mesa");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value]);
+
+  // Folder seleccionado en el dropdown (por folderId).
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+
+  // Si hay value, intentar resolver a qué folder pertenece (de config.projects).
+  useEffect(() => {
+    if (!config || !value) return;
     for (const proj of config.projects) {
-      const dest = proj.destinations.find((d) => d.parentId === value);
-      if (dest) return { projectId: proj.id, destinationId: dest.id };
+      if (proj.destinations.some((d) => d.parentId === value)) {
+        // Buscar el folder por listId en config o dejar que se resuelva al cargar.
+        break;
+      }
     }
-    return null;
   }, [config, value]);
 
-  const isProject = !!value;
+  // Cargar folders del space al entrar en modo proyecto.
+  async function loadFolders() {
+    if (!token || foldersLoaded) return;
+    setLoadingFolders(true);
+    try {
+      const result = await discover({ sessionToken: token });
+      setFolders(result.discovered);
+      setFoldersLoaded(true);
+    } catch {
+      // Silencioso: si falla, el dropdown queda vacío.
+    } finally {
+      setLoadingFolders(false);
+    }
+  }
+
+  useEffect(() => {
+    if (mode === "proyecto" && !foldersLoaded) {
+      void loadFolders();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, foldersLoaded]);
+
+  const selectedFolder: AvailableFolder | undefined = useMemo(() => {
+    if (folders.length === 0) return undefined;
+    return (
+      folders.find((f) => f.folderId === selectedFolderId) ?? folders[0]
+    );
+  }, [folders, selectedFolderId]);
+
+  const isProject = mode === "proyecto";
+
   const recentKey = "hermes-clickup-recent-destinations";
   const recent: string[] = useMemo(() => {
     try {
@@ -58,7 +122,7 @@ export function ClickUpDestinationPicker({
       const next = [parentId, ...recent.filter((r) => r !== parentId)].slice(0, 5);
       localStorage.setItem(recentKey, JSON.stringify(next));
     } catch {
-      // localStorage puede fallar (modo privado); no es crítico.
+      // localStorage puede fallar; no es crítico.
     }
   }
 
@@ -74,7 +138,10 @@ export function ClickUpDestinationPicker({
       <div className="mb-2.5 grid grid-cols-2 gap-1 rounded-el border-el border-line bg-panel p-0.5">
         <button
           type="button"
-          onClick={() => onChange(undefined)}
+          onClick={() => {
+            setMode("mesa");
+            onChange(undefined);
+          }}
           className={cn(
             "rounded-el px-2 py-1.5 text-xs font-medium transition-colors",
             !isProject ? "bg-accent text-acfg" : "text-mute hover:text-ink",
@@ -85,11 +152,10 @@ export function ClickUpDestinationPicker({
         <button
           type="button"
           onClick={() => {
-            // Al cambiar a Proyecto, preseleccionar el primer destino del primer proyecto.
-            const first = config.projects[0]?.destinations[0]?.parentId;
-            if (first) {
-              onChange(first);
-              pushRecent(first);
+            setMode("proyecto");
+            if (folders.length > 0 && !selectedFolderId) {
+              setSelectedFolderId(folders[0].folderId);
+              onChange(undefined, folders[0].listId);
             }
           }}
           className={cn(
@@ -101,51 +167,48 @@ export function ClickUpDestinationPicker({
         </button>
       </div>
 
-      {/* Selector de proyecto + rama (solo si Proyecto) */}
+      {/* Selector de proyecto + navegador de árbol (solo si Proyecto) */}
       {isProject && (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <select
-            value={current?.projectId ?? ""}
-            onChange={(e) => {
-              const proj = config.projects.find((p) => p.id === e.target.value);
-              const firstDest = proj?.destinations[0]?.parentId;
-              if (firstDest) {
-                onChange(firstDest);
-                pushRecent(firstDest);
-              }
-            }}
-            className="input py-1.5 text-sm"
-          >
-            {config.projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={current?.destinationId ?? ""}
-            onChange={(e) => {
-              const proj = config.projects.find(
-                (p) => p.id === (current?.projectId ?? config.projects[0]?.id),
-              );
-              const dest = proj?.destinations.find((d) => d.id === e.target.value);
-              if (dest) {
-                onChange(dest.parentId);
-                pushRecent(dest.parentId);
-              }
-            }}
-            className="input py-1.5 text-sm"
-          >
-            {(
-              config.projects.find(
-                (p) => p.id === (current?.projectId ?? config.projects[0]?.id),
-              )?.destinations ?? []
-            ).map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.label}
-              </option>
-            ))}
-          </select>
+        <div className="space-y-2">
+          {loadingFolders ? (
+            <div className="flex items-center gap-1.5 px-2 py-2 text-xs text-mute">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Cargando proyectos de ClickUp…
+            </div>
+          ) : (
+            <>
+              {/* Dropdown de proyecto (TODOS los folders del space) */}
+              <select
+                value={selectedFolderId ?? ""}
+                onChange={(e) => {
+                  const f = folders.find((x) => x.folderId === e.target.value);
+                  setSelectedFolderId(f?.folderId ?? null);
+                  onChange(undefined, f?.listId);
+                }}
+                className="input py-1.5 text-sm"
+              >
+                {folders.map((f) => (
+                  <option key={f.folderId} value={f.folderId}>
+                    {f.folderName}
+                    {f.alreadyIntegrated ? " ✓" : ""}
+                  </option>
+                ))}
+              </select>
+
+              {/* Selector de list (si hay varias) + navegador de árbol */}
+              {selectedFolder && (
+                <FolderTreeSection
+                  folder={selectedFolder}
+                  value={value}
+                  listId={listId}
+                  onChange={(parentId, lid) => {
+                    onChange(parentId, lid);
+                    if (parentId) pushRecent(parentId);
+                  }}
+                />
+              )}
+            </>
+          )}
         </div>
       )}
 
@@ -171,6 +234,68 @@ export function ClickUpDestinationPicker({
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Sección de navegación del folder. Si tiene varias lists, primero un dropdown
+ * para elegir la list; luego siempre el navegador de árbol.
+ */
+function FolderTreeSection({
+  folder,
+  value,
+  listId,
+  onChange,
+}: {
+  folder: AvailableFolder;
+  value: string | undefined;
+  listId?: string;
+  onChange: (parentId: string | undefined, listId?: string) => void;
+}) {
+  const lists = folder.lists.length > 0
+    ? folder.lists
+    : [{ id: folder.listId, name: folder.listName || "Principal" }];
+  const hasMultipleLists = lists.length > 1;
+
+  const [selectedListId, setSelectedListId] = useState<string>(
+    listId ?? folder.listId,
+  );
+
+  useEffect(() => {
+    if (listId && listId !== selectedListId) {
+      setSelectedListId(listId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listId]);
+
+  return (
+    <div className="space-y-2">
+      {hasMultipleLists && (
+        <select
+          value={selectedListId}
+          onChange={(e) => {
+            const newLid = e.target.value;
+            setSelectedListId(newLid);
+            onChange(undefined, newLid);
+          }}
+          className="input py-1.5 text-sm"
+        >
+          {lists.map((l) => (
+            <option key={l.id} value={l.id}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+      )}
+
+      <ClickUpTreeNavigator
+        listId={selectedListId}
+        selectedParentId={value}
+        onSelect={(parentId) => {
+          onChange(parentId ? parentId : undefined, selectedListId);
+        }}
+      />
     </div>
   );
 }

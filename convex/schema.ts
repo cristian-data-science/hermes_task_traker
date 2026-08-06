@@ -50,6 +50,12 @@ export default defineSchema({
     executor: v.optional(
       v.union(v.literal("cris"), v.literal("claw")),
     ),
+    /**
+     * Responsable original en ClickUp (primer nombre del assignee). Se preserva
+     * al importar para saber quién es el dueño real de la tarea, aunque en
+     * Hermes el executor sea cris/claw.
+     */
+    clickupAssignee: v.optional(v.string()),
     estimate: v.optional(v.string()),
     dueDate: v.optional(v.string()),
     progress: v.optional(v.number()),
@@ -72,6 +78,12 @@ export default defineSchema({
      * proyecto, ej. "alcance" dentro de Ley de Datos).
      */
     clickupParentId: v.optional(v.string()),
+    /**
+     * List de ClickUp donde vive el destino de esta tarea. Se persiste junto a
+     * clickupParentId para que el selector de destino pueda reconstruir su
+     * estado al editar (saber en qué list está el nodo elegido).
+     */
+    clickupListId: v.optional(v.string()),
     /** URL directa a la tarea en ClickUp (para el badge/link en la UI). */
     clickupUrl: v.optional(v.string()),
     /** Timestamp del último sync exitoso con ClickUp. */

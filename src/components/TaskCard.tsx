@@ -152,6 +152,18 @@ export function TaskCard({
       {/* Footer: metadatos */}
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1.5 text-[11px] text-mute">
         {(() => {
+          // Priorizar clickupAssignee (responsable real de ClickUp) sobre executor.
+          if (task.clickupAssignee) {
+            return (
+              <span
+                className="inline-flex items-center gap-1 font-medium text-mute"
+                title={`Responsable ClickUp: ${task.clickupAssignee}`}
+              >
+                <User className="h-3 w-3" />
+                {task.clickupAssignee}
+              </span>
+            );
+          }
           const execMeta = EXECUTOR_META[task.executor ?? "cris"];
           const ExecIcon = execMeta.Icon;
           return (

@@ -1,14 +1,18 @@
+import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useQuery, useMutation } from "convex/react";
-import { X, Loader2, Check, Power, RefreshCw, AlertTriangle } from "lucide-react";
+import { useQuery, useMutation, useAction } from "convex/react";
+import { X, Loader2, Check, Power, RefreshCw, AlertTriangle, UserCog } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
+import { AREAS, AREA_META } from "../lib/constants";
 import { cn } from "../lib/utils";
 
 interface ClickUpSettingsProps {
   open: boolean;
   onClose: () => void;
+  /** Navegar a la página de sincronización ClickUp. */
+  onGoToSync: () => void;
 }
 
 /**
@@ -19,15 +23,39 @@ interface ClickUpSettingsProps {
  *   y por Mesa Técnica. Controla el alcance del botón de sync reversa.
  * - Timestamps del último sync outbound y último scan inbound.
  */
-export function ClickUpSettings({ open, onClose }: ClickUpSettingsProps) {
+export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsProps) {
   const { token } = useAuth();
   const state = useQuery(
     api.settings.getClickupState,
     token ? { sessionToken: token } : "skip",
   );
   const setEnabled = useMutation(api.settings.setEnabled);
-  const setInbound = useMutation(api.settings.setInbound);
   const setForceSyncDev = useMutation(api.settings.setForceSyncDev);
+  const toggleHiddenArea = useMutation(api.settings.toggleHiddenArea);
+  const syncAssignees = useAction(api.clickup.syncAssignees);
+  const [syncingAssignees, setSyncingAssignees] = useState(false);
+
+  async function handleSyncAssignees() {
+    setSyncingAssignees(true);
+    try {
+      const result = await syncAssignees({ sessionToken: token! });
+      const fixed = (result as { fixed: number }).fixed;
+      toast.success(`${fixed} responsable${fixed !== 1 ? "s" : ""} actualizado${fixed !== 1 ? "s" : ""}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Error al sincronizar");
+    } finally {
+      setSyncingAssignees(false);
+    }
+  }
+
+  async function handleToggleArea(area: string, visible: boolean) {
+    try {
+      // visible=true → hidden=false; visible=false → hidden=true
+      await toggleHiddenArea({ sessionToken: token!, area, hidden: !visible });
+    } catch (err) {
+      toast.error("No se pudo actualizar la visibilidad del área");
+    }
+  }
 
   async function handleToggleEnabled(next: boolean) {
     try {
@@ -48,14 +76,6 @@ export function ClickUpSettings({ open, onClose }: ClickUpSettingsProps) {
       );
     } catch (err) {
       toast.error("No se pudo cambiar el override de sync");
-    }
-  }
-
-  async function handleToggleInbound(target: string, next: boolean) {
-    try {
-      await setInbound({ sessionToken: token!, target, inbound: next });
-    } catch (err) {
-      toast.error("No se pudo actualizar la configuración");
     }
   }
 
@@ -156,30 +176,61 @@ export function ClickUpSettings({ open, onClose }: ClickUpSettingsProps) {
                     />
                   </div>
 
-                  {/* Alcance de sync reversa (inbound) */}
+                  {/* Sincronización inbound — botón que lleva a la página de sync */}
+                  <div className="rounded-el border-el border-line bg-panel2 p-3">
+                    <p className="text-sm font-semibold text-ink">
+                      Sincronización desde ClickUp
+                    </p>
+                    <p className="mt-0.5 text-xs text-mute">
+                      Elegí qué carpetas, proyectos o tareas querés importar y
+                      mantener sincronizadas. Explorás el árbol de ClickUp y
+                      marcás qué traer.
+                    </p>
+                    <button
+                      onClick={() => {
+                        onClose();
+                        onGoToSync();
+                      }}
+                      className="btn-primary mt-2 px-2.5 py-1.5 text-xs"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Ir a sincronización
+                    </button>
+                    <button
+                      onClick={handleSyncAssignees}
+                      disabled={syncingAssignees}
+                      className="btn-secondary mt-2 px-2.5 py-1.5 text-xs"
+                    >
+                      {syncingAssignees ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <UserCog className="h-3.5 w-3.5" />
+                      )}
+                      Re-sincronizar responsables
+                    </button>
+                  </div>
+
+                  {/* Áreas visibles (solo visualización) */}
                   <div>
-                    <p className="label">Recibir actualizaciones a la inversa</p>
+                    <p className="label">Áreas visibles</p>
                     <p className="mb-2 text-xs text-mute">
-                      El botón "Sincronizar desde ClickUp" solo escaneará lo que
-                      marques aquí.
+                      Ocultá áreas que no uses. Es solo visual: las tareas
+                      siguen existiendo y sincronizándose.
                     </p>
                     <div className="space-y-2">
-                      {/* Mesa Técnica */}
-                      <InboundRow
-                        label="Mesa Técnica"
-                        description="Tareas sueltas"
-                        checked={state.config.mesaTecnica.inbound}
-                        onChange={(v) => handleToggleInbound("mesa-tecnica", v)}
-                      />
-                      {state.config.projects.map((p) => (
-                        <InboundRow
-                          key={p.id}
-                          label={p.label}
-                          description={`${p.destinations.length} destinos`}
-                          checked={p.inbound}
-                          onChange={(v) => handleToggleInbound(p.id, v)}
-                        />
-                      ))}
+                      {AREAS.map((a) => {
+                        const meta = AREA_META[a];
+                        const hidden = (state.hiddenAreas ?? []).includes(a);
+                        return (
+                          <InboundRow
+                            key={a}
+                            label={meta.label}
+                            description={hidden ? "Oculta" : "Visible"}
+                            checked={!hidden}
+                            onChange={(v) => handleToggleArea(a, v)}
+                          />
+                        );
+                      })}
                     </div>
                   </div>
 
