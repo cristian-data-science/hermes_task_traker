@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useAction } from "convex/react";
 import {
   ChevronRight,
@@ -20,6 +20,12 @@ interface ClickUpTreeNavigatorProps {
   selectedParentId: string | undefined;
   /** Callback al elegir un nodo. Devuelve el parentId del nodo elegido. */
   onSelect: (parentId: string) => void;
+  /**
+   * Ruta a auto-expandir al montar, de la raíz hacia abajo (ids de ClickUp).
+   * Se usa al REABRIR una tarea: el árbol se abre solo por esa rama hasta el
+   * destino guardado, en vez de mostrar únicamente las raíces.
+   */
+  expandPath?: string[];
 }
 
 type TreeNode = {
@@ -42,6 +48,7 @@ export function ClickUpTreeNavigator({
   listId,
   selectedParentId,
   onSelect,
+  expandPath,
 }: ClickUpTreeNavigatorProps) {
   const { token } = useAuth();
   const listProjectRoots = useAction(api.clickup.listProjectRoots);
@@ -124,7 +131,8 @@ export function ClickUpTreeNavigator({
             onClick={() => onSelect("")}
             className={cn(
               "flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-xs",
-              selectedParentId === ""
+              // Sin parent (undefined o "") = tarea plana en esta list.
+              !selectedParentId
                 ? "bg-accent/15 font-medium text-ink ring-1 ring-accent/40"
                 : "text-mute hover:bg-panel2",
             )}
@@ -143,6 +151,11 @@ export function ClickUpTreeNavigator({
                 listTaskChildren({ sessionToken: token!, listId, parentId })
               }
               depth={0}
+              // La rama se auto-expande solo si la ruta guardada arranca en
+              // este nodo; cada nivel consume su primer elemento.
+              autoExpandPath={
+                expandPath && expandPath[0] === node.id ? expandPath : undefined
+              }
             />
           ))}
           </div>
@@ -203,6 +216,11 @@ interface TreeBranchProps {
     parentId: string,
   ) => Promise<{ children: TreeNode[] }>;
   depth: number;
+  /**
+   * Ruta a auto-expandir de la raíz hacia abajo. Si su primer elemento es este
+   * nodo, la rama se abre sola al montar y pasa el resto a sus hijas.
+   */
+  autoExpandPath?: string[];
 }
 
 function TreeBranch({
@@ -211,6 +229,7 @@ function TreeBranch({
   onSelect,
   loadChildren,
   depth,
+  autoExpandPath,
 }: TreeBranchProps) {
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<TreeNode[]>([]);
@@ -218,28 +237,65 @@ function TreeBranch({
   const [childrenLoaded, setChildrenLoaded] = useState(false);
 
   const isSelected = selectedParentId === node.id;
+  /** Sub-ruta que le toca a las hijas (consumimos nuestro propio id). */
+  const childPath =
+    autoExpandPath && autoExpandPath[0] === node.id
+      ? autoExpandPath.slice(1)
+      : undefined;
+  // Estamos en la rama guardada → abrir. Incluye al nodo final (el padre de la
+  // tarea): así se ve la tarea misma colgando ahí, que es la confirmación
+  // visual de "acá la creé". La recursión termina sola porque el último nodo
+  // pasa una sub-ruta vacía y ninguna hija matchea.
+  const shouldAutoExpand = !!childPath;
 
-  async function handleExpand() {
-    const next = !expanded;
-    setExpanded(next);
-    if (next && !childrenLoaded) {
-      setLoadingChildren(true);
-      try {
-        const result = await loadChildren(node.id);
-        setChildren(result.children);
-        setChildrenLoaded(true);
-      } catch (err) {
-        toast.error("No se pudieron cargar las subtareas");
-        setExpanded(false);
-      } finally {
-        setLoadingChildren(false);
-      }
+  /** Expande (nunca colapsa) y carga las hijas si hace falta. */
+  const expand = useCallback(async () => {
+    setExpanded(true);
+    if (childrenLoaded) return;
+    setLoadingChildren(true);
+    try {
+      const result = await loadChildren(node.id);
+      setChildren(result.children);
+      setChildrenLoaded(true);
+    } catch (err) {
+      toast.error("No se pudieron cargar las subtareas");
+      setExpanded(false);
+    } finally {
+      setLoadingChildren(false);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [childrenLoaded, node.id]);
+
+  // Auto-expansión de la rama guardada. Solo carga datos, una única vez
+  // (ref guard): no deriva estado de navegación de las props.
+  const autoExpandedRef = useRef(false);
+  useEffect(() => {
+    if (!shouldAutoExpand || autoExpandedRef.current) return;
+    autoExpandedRef.current = true;
+    void expand();
+  }, [shouldAutoExpand, expand]);
+
+  // Traer a la vista el nodo anclado al abrir (una sola vez).
+  const rowRef = useRef<HTMLDivElement>(null);
+  const scrolledRef = useRef(false);
+  useEffect(() => {
+    if (!isSelected || scrolledRef.current || !rowRef.current) return;
+    scrolledRef.current = true;
+    rowRef.current.scrollIntoView({ block: "nearest" });
+  }, [isSelected]);
+
+  function handleToggle() {
+    if (expanded) {
+      setExpanded(false);
+      return;
+    }
+    void expand();
   }
 
   return (
     <div>
       <div
+        ref={rowRef}
         className={cn(
           "flex items-stretch rounded text-xs",
           isSelected
@@ -251,7 +307,7 @@ function TreeBranch({
         {/* Toggle de expandir (siempre visible, separado del click de anclar) */}
         <button
           type="button"
-          onClick={handleExpand}
+          onClick={handleToggle}
           className="grid w-5 shrink-0 place-items-center text-mute hover:text-ink"
           title={expanded ? "Contraer" : "Expandir subtareas"}
         >
@@ -295,6 +351,9 @@ function TreeBranch({
               onSelect={onSelect}
               loadChildren={loadChildren}
               depth={depth + 1}
+              autoExpandPath={
+                childPath && childPath[0] === child.id ? childPath : undefined
+              }
             />
           ))}
         </div>

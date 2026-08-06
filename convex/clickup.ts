@@ -1376,3 +1376,77 @@ export const resolveTaskList = action({
     }
   },
 });
+
+/** Un nodo de la ruta jerárquica de ClickUp (de la raíz hacia abajo). */
+export interface ClickupPathNode {
+  id: string;
+  name: string;
+}
+
+/**
+ * Dado el clickupId de un nodo, devuelve su ubicación COMPLETA: list, folder y
+ * la cadena de ancestros desde la raíz hasta el nodo inclusive.
+ *
+ * Sirve para que, al reabrir una tarea, el picker reconstruya exactamente
+ * dónde vive: folder → list → raíz → … → nodo padre, con el árbol ya expandido
+ * en esa rama. Sin esto el navegador solo mostraba las raíces y el destino real
+ * quedaba invisible varios niveles más abajo.
+ *
+ * Sube por `parent` de a un nivel (la API de ClickUp no expone la cadena
+ * completa en una sola llamada). Tope de 12 saltos por seguridad: la jerarquía
+ * real nunca es tan profunda y así un ciclo corrupto no cuelga la acción.
+ *
+ * Pública (action) con auth. Nunca lanza: ante un fallo devuelve lo que haya
+ * podido resolver, porque es información de conveniencia para la UI.
+ */
+export const resolveTaskPath = action({
+  args: { sessionToken: v.string(), clickupId: v.string() },
+  handler: async (
+    ctx,
+    { sessionToken, clickupId },
+  ): Promise<{
+    listId: string | null;
+    listName: string | null;
+    folderId: string | null;
+    folderName: string | null;
+    /** Ancestros de la RAÍZ hacia abajo, incluyendo el nodo consultado. */
+    path: ClickupPathNode[];
+  }> => {
+    const ok = await ctx.runQuery(internal.settings._checkSession, {
+      sessionToken,
+    });
+    if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+
+    const path: ClickupPathNode[] = [];
+    let listId: string | null = null;
+    let listName: string | null = null;
+    let folderId: string | null = null;
+    let folderName: string | null = null;
+
+    let currentId: string | null = clickupId;
+    const seen = new Set<string>();
+    for (let hop = 0; currentId && hop < 12; hop++) {
+      if (seen.has(currentId)) break; // ciclo defensivo
+      seen.add(currentId);
+      let t: any;
+      try {
+        t = await clickupFetch(`/task/${currentId}`);
+      } catch {
+        break; // el nodo ya no existe en ClickUp: devolvemos lo resuelto
+      }
+      if (!t?.id) break;
+      if (hop === 0) {
+        listId = t.list?.id ?? null;
+        listName = t.list?.name ?? null;
+        // ClickUp marca folder.hidden = true cuando la list cuelga directo del
+        // space (sin folder real). En ese caso no hay folder que mostrar.
+        folderId = t.folder?.hidden ? null : (t.folder?.id ?? null);
+        folderName = t.folder?.hidden ? null : (t.folder?.name ?? null);
+      }
+      path.unshift({ id: t.id, name: t.name ?? "(sin nombre)" });
+      currentId = t.parent ?? null;
+    }
+
+    return { listId, listName, folderId, folderName, path };
+  },
+});

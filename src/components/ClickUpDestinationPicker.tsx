@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAction, useQuery } from "convex/react";
-import { Loader2, RefreshCw } from "lucide-react";
+import { ChevronRight, Loader2, RefreshCw } from "lucide-react";
 import { api } from "~/convex/_generated/api";
 import type { ClickupConfig } from "~/convex/clickupConfig";
 import { ClickUpTreeNavigator } from "./ClickUpTreeNavigator";
@@ -46,6 +46,22 @@ function readFoldersCache(): AvailableFolder[] | null {
   return foldersCache.data;
 }
 
+/** Ubicación resuelta de un destino guardado (folder → list → ancestros). */
+interface ResolvedPath {
+  listId: string | null;
+  listName: string | null;
+  folderId: string | null;
+  folderName: string | null;
+  /** De la raíz hacia abajo, incluyendo el nodo padre de la tarea. */
+  path: { id: string; name: string }[];
+}
+
+/**
+ * Caché de rutas por parentId. La jerarquía de un nodo cambia poco y resolverla
+ * cuesta una llamada por nivel, así que reabrir la misma tarea es instantáneo.
+ */
+const pathCache = new Map<string, ResolvedPath>();
+
 /**
  * Selector de destino ClickUp para tareas del área Patagonia.
  *
@@ -76,17 +92,29 @@ export function ClickUpDestinationPicker({
     token ? { sessionToken: token } : "skip",
   )?.config;
   const discover = useAction(api.clickup.discoverProjects);
-  const resolveList = useAction(api.clickup.resolveTaskList);
+  const resolvePath = useAction(api.clickup.resolveTaskPath);
 
   // Props "congeladas" al montar: se usan solo para la resolución inicial, así
   // un cambio posterior de las props no re-dispara nada.
   const initialValueRef = useRef(value);
   const initialListIdRef = useRef(listId);
 
-  // ===== Estado de navegación (propiedad del usuario) =====
-  const [mode, setMode] = useState<"mesa" | "proyecto">(
-    value ? "proyecto" : "mesa",
+  // ===== Modo (Mesa Técnica | Proyecto) =====
+  // Se DERIVA del destino guardado mientras el usuario no toque los botones;
+  // en cuanto elige uno, su elección manda para siempre (modeOverride).
+  //
+  // Es una derivación pura, no un setState dentro de un efecto: por eso no
+  // reintroduce el ciclo de resets. Elegir un folder emite
+  // onChange(undefined, listId) y deja `value` en undefined, pero modeOverride
+  // ya está fijado en "proyecto" y nada lo pisa.
+  const [modeOverride, setModeOverride] = useState<"mesa" | "proyecto" | null>(
+    null,
   );
+  const savedListIsProject =
+    !!listId && !!config && listId !== config.mesaTecnica.listId;
+  const mode: "mesa" | "proyecto" =
+    modeOverride ?? (value || savedListIsProject ? "proyecto" : "mesa");
+  const setMode = setModeOverride;
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   /** true cuando el usuario tocó el dropdown: bloquea la resolución automática. */
   const userPickedFolderRef = useRef(false);
@@ -102,37 +130,56 @@ export function ClickUpDestinationPicker({
   );
   /** Guard de carga: evita dobles fetch (StrictMode, re-renders). */
   const loadStartedRef = useRef(false);
+  /** Ubicación jerárquica del destino guardado (para breadcrumb + expansión). */
+  const [savedPath, setSavedPath] = useState<ResolvedPath | null>(() =>
+    value ? (pathCache.get(value) ?? null) : null,
+  );
+  const [resolvingPath, setResolvingPath] = useState(false);
 
   const effectiveListId = listId ?? resolvedListId;
 
   /**
-   * Resuelve, una única vez, qué folder corresponde al destino que ya tiene la
-   * tarea. Solo aplica al ABRIR una tarea existente con destino.
+   * Resuelve, una única vez, dónde vive el destino que ya tiene la tarea:
+   * qué folder mostrar en el dropdown y la cadena de ancestros para abrir el
+   * árbol en esa rama. Solo aplica al ABRIR una tarea existente con destino.
    */
   const resolveInitialFolder = useCallback(
     async (loaded: AvailableFolder[]) => {
       if (userPickedFolderRef.current) return;
       const initialValue = initialValueRef.current;
       let lid = initialListIdRef.current;
+      let info: ResolvedPath | null = null;
 
-      // Tarea vieja sin clickupListId: preguntarle a ClickUp en qué list vive.
-      if (!lid && initialValue && token) {
-        try {
-          const resolved = await resolveList({
-            sessionToken: token,
-            clickupId: initialValue,
-          });
-          if (resolved.listId) {
-            lid = resolved.listId;
+      // Preguntarle a ClickUp la ubicación completa del nodo padre. Nos da la
+      // list (aunque la tarea no la tenga persistida) y la ruta de ancestros.
+      if (initialValue && token) {
+        info = pathCache.get(initialValue) ?? null;
+        if (!info) {
+          setResolvingPath(true);
+          try {
+            info = (await resolvePath({
+              sessionToken: token,
+              clickupId: initialValue,
+            })) as ResolvedPath;
+            pathCache.set(initialValue, info);
+          } catch {
+            // no crítico: seguimos con el fallback por config
+          } finally {
+            setResolvingPath(false);
+          }
+        }
+        if (info) {
+          if (info.path.length > 0) setSavedPath(info);
+          if (!lid && info.listId) {
+            lid = info.listId;
             setResolvedListId(lid);
           }
-        } catch {
-          // no crítico: seguimos con el fallback por config
         }
       }
 
       if (userPickedFolderRef.current) return; // el usuario eligió mientras tanto
 
+      // 1) Por list: el folder que contiene la list del destino.
       if (lid) {
         const match = loaded.find(
           (f) => f.lists.some((l) => l.id === lid) || f.listId === lid,
@@ -143,7 +190,16 @@ export function ClickUpDestinationPicker({
         }
       }
 
-      // Fallback: buscar el parentId en los destinos configurados.
+      // 2) Por folder directo: ClickUp nos dijo en qué folder vive el nodo.
+      if (info?.folderId) {
+        const byFolder = loaded.find((f) => f.folderId === info!.folderId);
+        if (byFolder) {
+          setSelectedFolderId(byFolder.folderId);
+          return;
+        }
+      }
+
+      // 3) Fallback: buscar el parentId en los destinos configurados.
       if (initialValue && config) {
         for (const proj of config.projects) {
           if (proj.destinations.some((d) => d.parentId === initialValue)) {
@@ -210,6 +266,47 @@ export function ClickUpDestinationPicker({
     ? folders.find((f) => f.folderId === selectedFolderId)
     : undefined;
 
+  // Ruta a auto-expandir en el árbol: solo mientras el destino siga siendo el
+  // guardado. Si el usuario ancla en otro nodo, deja de aplicar.
+  const expandPath =
+    savedPath && value && value === initialValueRef.current
+      ? savedPath.path.map((n) => n.id)
+      : undefined;
+
+  /**
+   * Breadcrumb legible del destino guardado: Folder › List › raíz › … › nodo.
+   * Colapsa repetidos consecutivos: es habitual que la tarea-raíz se llame
+   * igual que su list (ej. "Ley de Datos › Ley de Datos").
+   */
+  const breadcrumb = (() => {
+    let parts: (string | null | undefined)[];
+    // Solo mientras el destino siga siendo el guardado: si el usuario ancla en
+    // otro nodo, mostrar la ubicación vieja sería mentirle.
+    if (savedPath && value === initialValueRef.current) {
+      parts = [
+        savedPath.folderName,
+        savedPath.listName,
+        ...savedPath.path.map((n) => n.name),
+      ];
+    } else if (isProject && effectiveListId && !value) {
+      // Destino plano (sin padre): la ubicación es folder › list, que ya
+      // tenemos en los folders cargados. No hace falta llamar a ClickUp.
+      const f = folders.find(
+        (x) =>
+          x.lists.some((l) => l.id === effectiveListId) ||
+          x.listId === effectiveListId,
+      );
+      if (!f) return [];
+      const l = f.lists.find((x) => x.id === effectiveListId);
+      parts = [f.folderName, l?.name ?? f.listName, "(nivel 0, sin anidar)"];
+    } else {
+      return [];
+    }
+    return parts
+      .filter((s): s is string => !!s)
+      .filter((s, i, arr) => i === 0 || s.trim() !== arr[i - 1].trim());
+  })();
+
   function pushRecent(parentId: string) {
     try {
       const recent: string[] = JSON.parse(
@@ -249,6 +346,47 @@ export function ClickUpDestinationPicker({
           </button>
         )}
       </div>
+
+      {/* Ubicación guardada: dónde vive HOY la tarea en ClickUp, con la
+          jerarquía completa. Es lo primero que se ve al reabrir la tarea. */}
+      {(breadcrumb.length > 0 || resolvingPath) && (
+        <div className="mb-2.5 rounded-el border-el border-line bg-panel px-2 py-1.5">
+          <p className="mb-0.5 text-[10px] uppercase tracking-wide text-faint">
+            Ubicación en ClickUp
+          </p>
+          {resolvingPath && breadcrumb.length === 0 ? (
+            <span className="inline-flex items-center gap-1.5 text-[11px] text-mute">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Resolviendo ubicación…
+            </span>
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-0.5 gap-y-0.5">
+              {breadcrumb.map((label, i) => (
+                <span key={`${label}-${i}`} className="flex items-center">
+                  {i > 0 && (
+                    <ChevronRight className="h-3 w-3 shrink-0 text-faint" />
+                  )}
+                  <span
+                    className={cn(
+                      "text-[11px] leading-tight",
+                      i === breadcrumb.length - 1
+                        ? "font-semibold text-ink"
+                        : "text-mute",
+                    )}
+                  >
+                    {label}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
+          {savedPath && value === initialValueRef.current && (
+            <p className="mt-0.5 text-[10px] leading-snug text-faint">
+              La tarea cuelga del último nivel.
+            </p>
+          )}
+        </div>
+      )}
 
       {/* Segmented control: Mesa Técnica | Proyecto */}
       <div className="mb-2.5 grid grid-cols-2 gap-1 rounded-el border-el border-line bg-panel p-0.5">
@@ -348,6 +486,7 @@ export function ClickUpDestinationPicker({
                   folder={selectedFolder}
                   value={value}
                   listId={effectiveListId}
+                  expandPath={expandPath}
                   onChange={(parentId, lid) => {
                     onChange(parentId, lid);
                     if (parentId) pushRecent(parentId);
@@ -414,11 +553,14 @@ function FolderTreeSection({
   folder,
   value,
   listId,
+  expandPath,
   onChange,
 }: {
   folder: AvailableFolder;
   value: string | undefined;
   listId?: string;
+  /** Ruta de ancestros a abrir al montar (destino guardado). */
+  expandPath?: string[];
   onChange: (parentId: string | undefined, listId?: string) => void;
 }) {
   const lists =
@@ -457,6 +599,9 @@ function FolderTreeSection({
       <ClickUpTreeNavigator
         listId={selectedListId}
         selectedParentId={value}
+        // Solo auto-expandimos si el árbol es el de la list del destino
+        // guardado; si el usuario cambió de list, la ruta ya no aplica.
+        expandPath={selectedListId === listId ? expandPath : undefined}
         onSelect={(parentId) => {
           onChange(parentId ? parentId : undefined, selectedListId);
         }}
