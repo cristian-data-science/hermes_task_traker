@@ -1543,12 +1543,17 @@ export interface AssignedUntrackedTask {
   id: string;
   name: string;
   status: string;
-  /** Nombre del folder y de la list donde vive. */
+  /** Folder y list donde vive. */
+  folderId: string;
   folderName: string;
   listName: string;
   listId: string;
-  /** Ancestros dentro de la list, de la raíz hacia abajo (sin la tarea). */
-  ancestors: string[];
+  /**
+   * Ancestros dentro de la list, de la raíz hacia abajo (sin la tarea).
+   * Con id además del nombre: la bandeja agrupa por id, porque dos ramas
+   * distintas pueden tener nodos con el mismo nombre.
+   */
+  ancestors: { id: string; name: string }[];
   /** Id del padre directo, o null si es una tarea raíz de la list. */
   parentId: string | null;
   /** Fecha de vencimiento (YYYY-MM-DD) si tiene. */
@@ -1603,6 +1608,7 @@ export const listAssignedUntracked = action({
       .filter((f: any) => f.lists.length > 0);
 
     const fetches: {
+      folderId: string;
       folderName: string;
       listId: string;
       listName: string;
@@ -1611,6 +1617,7 @@ export const listAssignedUntracked = action({
     for (const folder of folderData) {
       for (const list of folder.lists as any[]) {
         fetches.push({
+          folderId: folder.id,
           folderName: folder.name,
           listId: list.id,
           listName: list.name,
@@ -1640,13 +1647,13 @@ export const listAssignedUntracked = action({
         );
         if (!mine) continue;
 
-        // Cadena de ancestros dentro de la list (nombres, raíz → abajo).
-        const ancestors: string[] = [];
+        // Cadena de ancestros dentro de la list (raíz → abajo).
+        const ancestors: { id: string; name: string }[] = [];
         const seen = new Set<string>([t.id]);
         let cur = t.parent ? byId.get(t.parent) : undefined;
         while (cur && !seen.has(cur.id) && ancestors.length < 12) {
           seen.add(cur.id);
-          ancestors.unshift(cur.name ?? "(sin nombre)");
+          ancestors.unshift({ id: cur.id, name: cur.name ?? "(sin nombre)" });
           cur = cur.parent ? byId.get(cur.parent) : undefined;
         }
 
@@ -1654,6 +1661,7 @@ export const listAssignedUntracked = action({
           id: t.id,
           name: t.name ?? "(sin nombre)",
           status: t.status?.status ?? "to do",
+          folderId: info.folderId,
           folderName: info.folderName,
           listName: info.listName,
           listId: info.listId,

@@ -1,11 +1,15 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useAction } from "convex/react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  ChevronDown,
   ChevronRight,
   Check,
+  Folder,
   Inbox,
+  List as ListIcon,
   Loader2,
+  Plus,
   RefreshCw,
   Search,
   X,
@@ -19,6 +23,24 @@ import { cn } from "../lib/utils";
 interface AssignedInboxModalProps {
   open: boolean;
   onClose: () => void;
+}
+
+/** Un nodo del árbol agrupado de la bandeja. */
+interface InboxNode {
+  /** Clave única y estable: prefijo de tipo + id de ClickUp. */
+  key: string;
+  name: string;
+  kind: "folder" | "list" | "task";
+  /** Tareas sin trackear que cuelgan directo de este nodo. */
+  tasks: AssignedUntrackedTask[];
+  children: InboxNode[];
+  /** Total de tareas en todo el subárbol (para el contador del grupo). */
+  count: number;
+}
+
+/** Todas las tareas de una rama, incluidas las de sus descendientes. */
+function collectTasks(node: InboxNode): AssignedUntrackedTask[] {
+  return [...node.tasks, ...node.children.flatMap(collectTasks)];
 }
 
 /**
@@ -48,6 +70,8 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
   const [added, setAdded] = useState<Set<string>>(new Set());
 
   const [scanned, setScanned] = useState(0);
+  /** key del grupo con un alta masiva en curso. */
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null);
 
   const load = useCallback(
     async () => {
@@ -95,7 +119,11 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
           {
             nodeType: "task" as const,
             id: task.id,
-            label: [task.listName, ...task.ancestors, task.name].join(" · "),
+            label: [
+              task.listName,
+              ...task.ancestors.map((a) => a.name),
+              task.name,
+            ].join(" · "),
           },
         ],
         remove: [],
@@ -135,13 +163,110 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
   const q = search.trim().toLowerCase();
   const visible = q
     ? tasks.filter((t) =>
-        [t.name, t.folderName, t.listName, ...t.ancestors]
+        [t.name, t.folderName, t.listName, ...t.ancestors.map((a) => a.name)]
           .join(" ")
           .toLowerCase()
           .includes(q),
       )
     : tasks;
   const pending = visible.filter((t) => !added.has(t.id));
+
+  /**
+   * Agrupa las tareas sueltas en el árbol real de ClickUp:
+   * folder → list → ancestros → tarea. Sin esto son 40 filas planas y no se
+   * ve a qué fase o proyecto pertenece cada una.
+   */
+  const groups = useMemo(() => {
+    const roots: InboxNode[] = [];
+    const ensure = (
+      siblings: InboxNode[],
+      key: string,
+      name: string,
+      kind: InboxNode["kind"],
+    ): InboxNode => {
+      let node = siblings.find((n) => n.key === key);
+      if (!node) {
+        node = { key, name, kind, tasks: [], children: [], count: 0 };
+        siblings.push(node);
+      }
+      return node;
+    };
+
+    for (const task of pending) {
+      const folder = ensure(
+        roots,
+        `f:${task.folderId}`,
+        task.folderName,
+        "folder",
+      );
+      let node = ensure(
+        folder.children,
+        `l:${task.listId}`,
+        task.listName,
+        "list",
+      );
+      for (const anc of task.ancestors) {
+        node = ensure(node.children, `t:${anc.id}`, anc.name, "task");
+      }
+      node.tasks.push(task);
+    }
+
+    // Contador acumulado por rama, para el "N sin trackear" de cada grupo.
+    const countOf = (n: InboxNode): number => {
+      n.count = n.tasks.length + n.children.reduce((a, c) => a + countOf(c), 0);
+      return n.count;
+    };
+    roots.forEach(countOf);
+    return roots;
+  }, [pending]);
+
+  /** Agrega de una vez todas las tareas de una rama. */
+  async function handleAddMany(node: InboxNode) {
+    if (!token || bulkBusy) return;
+    const batch = collectTasks(node).filter(
+      (t) => !added.has(t.id) && !adding.has(t.id),
+    );
+    if (batch.length === 0) return;
+    setBulkBusy(node.key);
+    try {
+      const result = await applySubs({
+        sessionToken: token,
+        add: batch.map((t) => ({
+          nodeType: "task" as const,
+          id: t.id,
+          label: [
+            t.listName,
+            ...t.ancestors.map((a) => a.name),
+            t.name,
+          ].join(" · "),
+        })),
+        remove: [],
+      });
+      const failedIds = new Set((result.failed ?? []).map((f) => f.id));
+      const ok = batch.filter((t) => !failedIds.has(t.id));
+      if (ok.length > 0) {
+        setAdded((prev) => {
+          const next = new Set(prev);
+          ok.forEach((t) => next.add(t.id));
+          return next;
+        });
+        toast.success(
+          `${ok.length} tarea${ok.length !== 1 ? "s" : ""} agregada${ok.length !== 1 ? "s" : ""} al tablero`,
+        );
+      }
+      if (failedIds.size > 0) {
+        toast.error(
+          `${failedIds.size} no se pudo${failedIds.size !== 1 ? "ieron" : ""} traer de ClickUp`,
+        );
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudieron agregar las tareas",
+      );
+    } finally {
+      setBulkBusy(null);
+    }
+  }
 
   return (
     <AnimatePresence>
@@ -235,67 +360,18 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
                   </p>
                 </div>
               ) : (
-                <div className="space-y-1.5">
-                  {pending.map((task) => {
-                    const busy = adding.has(task.id);
-                    return (
-                      <div
-                        key={task.id}
-                        className="flex items-start gap-3 rounded-el border-el border-line bg-panel2 px-3 py-2.5"
-                      >
-                        <div className="min-w-0 flex-1">
-                          {/* Jerarquía: dónde vive la tarea en ClickUp */}
-                          <div className="mb-1 flex flex-wrap items-center gap-x-0.5 text-[10px] leading-tight text-faint">
-                            {[task.folderName, task.listName, ...task.ancestors]
-                              .filter(
-                                (s, i, arr) =>
-                                  !!s && (i === 0 || s !== arr[i - 1]),
-                              )
-                              .map((part, i) => (
-                                <span
-                                  key={`${part}-${i}`}
-                                  className="flex items-center"
-                                >
-                                  {i > 0 && (
-                                    <ChevronRight className="h-2.5 w-2.5 shrink-0" />
-                                  )}
-                                  <span>{part}</span>
-                                </span>
-                              ))}
-                          </div>
-                          <p
-                            className="truncate text-sm font-medium text-ink"
-                            title={task.name}
-                          >
-                            {task.name}
-                          </p>
-                          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-mute">
-                            <span className="rounded-full bg-panel px-1.5 py-0.5">
-                              {task.status}
-                            </span>
-                            {task.dueDate && <span>vence {task.dueDate}</span>}
-                            {task.ancestors.length === 0 && (
-                              <span className="text-faint">
-                                tarea suelta en la lista
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => void handleAdd(task)}
-                          disabled={busy}
-                          className="btn-primary shrink-0 px-2.5 py-1.5 text-xs disabled:opacity-60"
-                        >
-                          {busy ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Check className="h-3.5 w-3.5" />
-                          )}
-                          Agregar
-                        </button>
-                      </div>
-                    );
-                  })}
+                <div className="space-y-2">
+                  {groups.map((group) => (
+                    <InboxGroup
+                      key={group.key}
+                      node={group}
+                      depth={0}
+                      adding={adding}
+                      onAdd={handleAdd}
+                      onAddMany={handleAddMany}
+                      bulkBusy={bulkBusy}
+                    />
+                  ))}
                 </div>
               )}
             </div>
@@ -319,5 +395,157 @@ export function AssignedInboxModal({ open, onClose }: AssignedInboxModalProps) {
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+/**
+ * Un grupo del árbol de la bandeja (folder / list / tarea contenedora), con
+ * sus tareas sin trackear y sus subgrupos. Recursivo: refleja la jerarquía
+ * real de ClickUp a cualquier profundidad.
+ *
+ * Arranca abierto: el objetivo de la bandeja es VER de una qué falta, no ir
+ * abriendo carpetas. El estado de plegado es local a cada grupo porque nada
+ * externo necesita leerlo.
+ */
+function InboxGroup({
+  node,
+  depth,
+  adding,
+  onAdd,
+  onAddMany,
+  bulkBusy,
+}: {
+  node: InboxNode;
+  depth: number;
+  adding: Set<string>;
+  onAdd: (task: AssignedUntrackedTask) => void;
+  onAddMany: (node: InboxNode) => void;
+  bulkBusy: string | null;
+}) {
+  const [open, setOpen] = useState(true);
+  const Icon =
+    node.kind === "folder" ? Folder : node.kind === "list" ? ListIcon : Plus;
+  const busyHere = bulkBusy === node.key;
+
+  return (
+    <div
+      className={cn(
+        depth === 0 && "overflow-hidden rounded-el border-el border-line",
+      )}
+    >
+      {/* Cabecera del grupo */}
+      <div
+        className={cn(
+          "flex items-center gap-2 px-2.5 py-1.5",
+          depth === 0 ? "bg-panel2" : "",
+        )}
+        style={depth > 0 ? { paddingLeft: `${depth * 12}px` } : undefined}
+      >
+        <button
+          type="button"
+          onClick={() => setOpen((o) => !o)}
+          className="grid h-4 w-4 shrink-0 place-items-center rounded text-mute hover:text-ink"
+          title={open ? "Contraer" : "Expandir"}
+        >
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5" />
+          )}
+        </button>
+        {node.kind !== "task" && (
+          <Icon
+            className={cn(
+              "h-3.5 w-3.5 shrink-0",
+              node.kind === "folder" ? "text-amber-500" : "text-indigo-500",
+            )}
+          />
+        )}
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate",
+            node.kind === "folder"
+              ? "text-sm font-semibold text-ink"
+              : node.kind === "list"
+                ? "text-sm font-medium text-ink"
+                : "text-[13px] text-ink",
+          )}
+          title={node.name}
+        >
+          {node.name}
+        </span>
+        <span className="shrink-0 text-[10px] text-faint">
+          {node.count} sin trackear
+        </span>
+        {node.count > 1 && (
+          <button
+            type="button"
+            onClick={() => onAddMany(node)}
+            disabled={!!bulkBusy}
+            className="shrink-0 rounded-el px-1.5 py-0.5 text-[10px] font-medium text-accent hover:bg-panel disabled:opacity-50"
+            title={`Agregar las ${node.count} tareas de esta rama`}
+          >
+            {busyHere ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              `+ agregar las ${node.count}`
+            )}
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className={cn(depth === 0 ? "p-1.5 pt-0" : "")}>
+          {/* Subgrupos primero: mantienen la forma del árbol de ClickUp. */}
+          {node.children.map((child) => (
+            <InboxGroup
+              key={child.key}
+              node={child}
+              depth={depth + 1}
+              adding={adding}
+              onAdd={onAdd}
+              onAddMany={onAddMany}
+              bulkBusy={bulkBusy}
+            />
+          ))}
+
+          {/* Tareas que cuelgan directo de este nodo. */}
+          {node.tasks.map((task) => (
+            <div
+              key={task.id}
+              className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-panel2"
+              style={{ paddingLeft: `${(depth + 1) * 12 + 8}px` }}
+            >
+              <div className="min-w-0 flex-1">
+                <p
+                  className="truncate text-[13px] font-medium text-ink"
+                  title={task.name}
+                >
+                  {task.name}
+                </p>
+                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[10px] text-mute">
+                  <span className="rounded-full bg-panel2 px-1.5 py-0.5">
+                    {task.status}
+                  </span>
+                  {task.dueDate && <span>vence {task.dueDate}</span>}
+                </div>
+              </div>
+              <button
+                onClick={() => onAdd(task)}
+                disabled={adding.has(task.id) || !!bulkBusy}
+                className="btn-primary shrink-0 px-2 py-1 text-[11px] disabled:opacity-60"
+              >
+                {adding.has(task.id) ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <Check className="h-3 w-3" />
+                )}
+                Agregar
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
