@@ -71,11 +71,25 @@ export function ClickUpDestinationPicker({
     if (!config || !value) return;
     for (const proj of config.projects) {
       if (proj.destinations.some((d) => d.parentId === value)) {
-        // Buscar el folder por listId en config o dejar que se resuelva al cargar.
         break;
       }
     }
   }, [config, value]);
+
+  // Cuando los folders cargan, auto-seleccionar el que contiene el listId de la
+  // tarea (para que al editar se vea preseleccionado el proyecto correcto).
+  useEffect(() => {
+    if (!foldersLoaded || folders.length === 0) return;
+    if (selectedFolderId) return; // ya hay uno elegido
+    // Buscar el folder cuya list coincide con el listId de la tarea.
+    const match = folders.find(
+      (f) => f.lists.some((l) => l.id === listId) || f.listId === listId,
+    );
+    if (match) {
+      setSelectedFolderId(match.folderId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [foldersLoaded, folders, listId]);
 
   // Cargar folders del space al entrar en modo proyecto.
   async function loadFolders() {

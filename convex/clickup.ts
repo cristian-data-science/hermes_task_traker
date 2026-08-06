@@ -371,10 +371,45 @@ export const syncTask = internalAction({
       } else {
         // ===== UPDATE (incluye status/complete) =====
         const body = buildTaskBody(task, false);
-        await clickupFetch(`/task/${task.clickupId}`, {
-          method: "PUT",
-          body: JSON.stringify(body),
-        });
+        try {
+          await clickupFetch(`/task/${task.clickupId}`, {
+            method: "PUT",
+            body: JSON.stringify(body),
+          });
+        } catch (updateErr) {
+          // Si la tarea fue borrada en ClickUp (404 / "not found"), la
+          // desvinculamos y la recreamos en el destino correcto en vez de
+          // dejarla con error rojo para siempre.
+          const msg =
+            updateErr instanceof Error ? updateErr.message : String(updateErr);
+          if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
+            await ctx.runMutation(internal.clickupMutations._unlinkClickUp, {
+              taskId,
+            });
+            // Recrear en el destino correcto.
+            const created = await clickupFetch(`/list/${dest.listId}/task`, {
+              method: "POST",
+              body: JSON.stringify(buildTaskBody(task, true)),
+            });
+            const newId: string = created.id;
+            const newUrl: string = `https://app.clickup.com/t/${newId}`;
+            if (dest.parentId) {
+              await clickupFetch(`/task/${newId}`, {
+                method: "PUT",
+                body: JSON.stringify({ parent: dest.parentId }),
+              });
+            }
+            await ctx.runMutation(internal.clickupMutations._markSynced, {
+              taskId,
+              clickupId: newId,
+              clickupUrl: newUrl,
+              clickupListId: dest.listId,
+            });
+            await ctx.runMutation(internal.clickupMutations._touchLastSync);
+            return;
+          }
+          throw updateErr; // otro error → dejar que el catch de abajo lo maneje
+        }
         await ctx.runMutation(internal.clickupMutations._markSynced, {
           taskId,
           clickupId: task.clickupId,
