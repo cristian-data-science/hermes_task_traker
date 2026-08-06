@@ -429,6 +429,8 @@ export function TaskModal({
                       key={ctxKey}
                       value={clickupParentId}
                       listId={clickupListId}
+                      // Fuente de verdad para ubicar la tarea en ClickUp.
+                      taskClickupId={task?.clickupId}
                       onChange={(parentId, lid) => {
                         setClickupParentId(parentId);
                         setClickupListId(lid);

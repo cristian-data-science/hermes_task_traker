@@ -12,6 +12,13 @@ interface ClickUpDestinationPickerProps {
   value: string | undefined;
   /** listId actual del destino. */
   listId?: string;
+  /**
+   * clickupId de la tarea EN SÍ (si ya está sincronizada). Es la fuente de
+   * verdad para saber dónde vive: se le pregunta a ClickUp por la tarea misma
+   * en vez de deducirlo del parentId o del clickupListId persistido, que
+   * pueden estar desactualizados o apuntar a otra list.
+   */
+  taskClickupId?: string;
   /** Callback al cambiar el destino. */
   onChange: (parentId: string | undefined, listId?: string) => void;
 }
@@ -84,6 +91,7 @@ const pathCache = new Map<string, ResolvedPath>();
 export function ClickUpDestinationPicker({
   value,
   listId,
+  taskClickupId,
   onChange,
 }: ClickUpDestinationPickerProps) {
   const { token } = useAuth();
@@ -98,6 +106,7 @@ export function ClickUpDestinationPicker({
   // un cambio posterior de las props no re-dispara nada.
   const initialValueRef = useRef(value);
   const initialListIdRef = useRef(listId);
+  const taskClickupIdRef = useRef(taskClickupId);
 
   // ===== Modo (Mesa Técnica | Proyecto) =====
   // Se DERIVA del destino guardado mientras el usuario no toque los botones;
@@ -131,10 +140,10 @@ export function ClickUpDestinationPicker({
   /** Guard de carga: evita dobles fetch (StrictMode, re-renders). */
   const loadStartedRef = useRef(false);
   /** Ubicación jerárquica del destino guardado (para breadcrumb + expansión). */
-  const [savedPath, setSavedPath] = useState<ResolvedPath | null>(() =>
-    value ? (pathCache.get(value) ?? null) : null,
-  );
+  const [savedPath, setSavedPath] = useState<ResolvedPath | null>(null);
   const [resolvingPath, setResolvingPath] = useState(false);
+  /** Motivo por el que no se pudo resolver la ubicación (se muestra en la UI). */
+  const [pathError, setPathError] = useState<string | null>(null);
 
   /**
    * List efectiva del árbol. Mientras el usuario no navegue, gana la resuelta
@@ -155,29 +164,59 @@ export function ClickUpDestinationPicker({
     async (loaded: AvailableFolder[]) => {
       if (userPickedFolderRef.current) return;
       const initialValue = initialValueRef.current;
+      const selfId = taskClickupIdRef.current;
       let lid = initialListIdRef.current;
       let info: ResolvedPath | null = null;
 
-      // Preguntarle a ClickUp la ubicación completa del nodo padre. Nos da la
-      // list (aunque la tarea no la tenga persistida) y la ruta de ancestros.
-      if (initialValue && token) {
-        info = pathCache.get(initialValue) ?? null;
+      // A quién le preguntamos "¿dónde vivís?":
+      //   1. A la TAREA MISMA si ya está sincronizada (selfId). Es la fuente de
+      //      verdad directa y funciona aunque el parentId guardado esté viejo
+      //      o el clickupListId apunte a otra list.
+      //   2. Si no está sincronizada todavía, al nodo padre guardado.
+      const lookupId = selfId ?? initialValue;
+      if (lookupId && token) {
+        info = pathCache.get(lookupId) ?? null;
         if (!info) {
           setResolvingPath(true);
+          setPathError(null);
           try {
             info = (await resolvePath({
               sessionToken: token,
-              clickupId: initialValue,
+              clickupId: lookupId,
             })) as ResolvedPath;
-            pathCache.set(initialValue, info);
-          } catch {
-            // no crítico: seguimos con el fallback por config
+            pathCache.set(lookupId, info);
+          } catch (err) {
+            // Antes esto se tragaba en silencio y el picker quedaba mudo:
+            // sin breadcrumb y con el folder equivocado, sin decir por qué.
+            setPathError(
+              err instanceof Error
+                ? err.message
+                : "No se pudo resolver la ubicación en ClickUp",
+            );
           } finally {
             setResolvingPath(false);
           }
         }
         if (info) {
-          if (info.path.length > 0) setSavedPath(info);
+          // Si preguntamos por la tarea misma, el último nodo de la ruta ES la
+          // tarea: lo sacamos, porque la ubicación que interesa es la de su
+          // ancla (el resto de la cadena).
+          let chain = info.path;
+          if (
+            selfId &&
+            chain.length > 0 &&
+            chain[chain.length - 1].id === selfId
+          ) {
+            chain = chain.slice(0, -1);
+          }
+          if (chain.length > 0 || info.listId) {
+            setSavedPath({ ...info, path: chain });
+          }
+          if (info.path.length === 0 && !info.listId) {
+            setPathError(
+              "ClickUp no devolvió la ubicación (¿la tarea o su padre fueron borrados allá?)",
+            );
+          }
           // La verdad la tiene ClickUp, NO el clickupListId persistido.
           // Ese campo lo pisa _markSynced con la list donde se INTENTÓ crear
           // la tarea, que para un parent no mapeado en config era la de Mesa
@@ -301,6 +340,8 @@ export function ClickUpDestinationPicker({
         savedPath.folderName,
         savedPath.listName,
         ...savedPath.path.map((n) => n.name),
+        // Sin ancestros = la tarea está suelta en la list.
+        savedPath.path.length === 0 ? "(nivel 0, sin anidar)" : null,
       ];
     } else if (isProject && effectiveListId && !value) {
       // Destino plano (sin padre): la ubicación es folder › list, que ya
@@ -363,7 +404,7 @@ export function ClickUpDestinationPicker({
 
       {/* Ubicación guardada: dónde vive HOY la tarea en ClickUp, con la
           jerarquía completa. Es lo primero que se ve al reabrir la tarea. */}
-      {(breadcrumb.length > 0 || resolvingPath) && (
+      {(breadcrumb.length > 0 || resolvingPath || pathError) && (
         <div className="mb-2.5 rounded-el border-el border-line bg-panel px-2 py-1.5">
           <p className="mb-0.5 text-[10px] uppercase tracking-wide text-faint">
             Ubicación en ClickUp
@@ -372,6 +413,10 @@ export function ClickUpDestinationPicker({
             <span className="inline-flex items-center gap-1.5 text-[11px] text-mute">
               <Loader2 className="h-3 w-3 animate-spin" />
               Resolviendo ubicación…
+            </span>
+          ) : breadcrumb.length === 0 && pathError ? (
+            <span className="text-[11px] leading-snug text-danger">
+              {pathError}
             </span>
           ) : (
             <div className="flex flex-wrap items-center gap-x-0.5 gap-y-0.5">
