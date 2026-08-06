@@ -325,6 +325,9 @@ export const update = mutation({
 
     // Si cambia el destino ClickUp y la tarea ya estaba sincronizada, la
     // desvinculamos para que el próximo sync la recree en el nuevo destino.
+    // El handler de sync con op="update" detecta que no tiene clickupId y la
+    // crea en el destino correcto. La tarea vieja en ClickUp queda huérfana
+    // (no se borra) salvo que el cambio venga de un move explícito.
     if (
       task.clickupId &&
       patch.clickupParentId !== undefined &&

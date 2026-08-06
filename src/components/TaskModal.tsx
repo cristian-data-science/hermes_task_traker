@@ -186,10 +186,22 @@ export function TaskModal({
         standbyUntil: standbyUntil.trim() || blank,
         scheduledDates: scheduledDates.trim() || blank,
         requestedBy: requestedBy.trim() || blank,
-        // Destino ClickUp solo aplica a Patagonia; las otras áreas lo ignoran.
+        // Destino ClickUp solo aplica a Patagonia. Al EDITAR, solo mandamos
+        // clickupParentId/clickupListId si cambiaron respecto al original, para
+        // no pisar un destino válido si el picker no llegó a resolverlo al abrir.
         ...(area === "patagonia"
-          ? { clickupParentId, clickupListId }
-          : {}),
+          ? {
+              ...(clickupParentId !== (task?.clickupParentId ?? undefined)
+                ? { clickupParentId }
+                : {}),
+              ...(clickupListId !== (task?.clickupListId ?? undefined)
+                ? { clickupListId }
+                : {}),
+            }
+          : isEdit && task
+            ? // Si salió de Patagonia, limpiar el destino ClickUp.
+              { clickupParentId: undefined, clickupListId: undefined }
+            : {}),
       };
       if (isEdit && task) {
         await updateTask({ id: task._id, sessionToken: token!, ...payload });
