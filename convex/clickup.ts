@@ -324,7 +324,14 @@ export const syncTask = internalAction({
       key: SETTINGS_KEY_CONFIG,
     });
     const config = parseClickupConfig(configRow?.value);
-    const dest = resolveOutboundDestination(config, task.clickupParentId);
+    // El listId elegido en el picker manda cuando la tarea es plana (sin
+    // parent): sin esto, toda tarea sin parent caía en Mesa Técnica aunque el
+    // usuario hubiera elegido otro proyecto.
+    const dest = resolveOutboundDestination(
+      config,
+      task.clickupParentId,
+      task.clickupListId,
+    );
 
     try {
       if (op === "delete") {

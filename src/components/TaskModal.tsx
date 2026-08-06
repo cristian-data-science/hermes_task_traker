@@ -118,11 +118,19 @@ export function TaskModal({
   // Clave de contexto: task id (o "new" si es creación) + defaults.
   const ctxKey = task ? task._id : `new:${defaultArea}:${defaultStatus}`;
   const lastCtx = useRef<string | null>(null);
+  // Marca de hidratación: hasta que el estado local no refleja la tarea, NO
+  // montamos el ClickUpDestinationPicker. El picker fija su modo (Mesa/Proyecto)
+  // una sola vez al montar, así que montarlo antes de tiempo lo dejaría en
+  // "Mesa Técnica" aunque la tarea tenga destino de proyecto.
+  const [hydratedKey, setHydratedKey] = useState<string | null>(null);
   useEffect(() => {
     if (!open) return;
     // Si el contexto no cambió (reapertura del mismo modal tras un misclic),
     // conservar el borrador tal cual está.
-    if (lastCtx.current === ctxKey) return;
+    if (lastCtx.current === ctxKey) {
+      setHydratedKey(ctxKey);
+      return;
+    }
     lastCtx.current = ctxKey;
     if (task) {
       setTitle(task.title);
@@ -160,6 +168,7 @@ export function TaskModal({
       setClickupListId(undefined);
     }
     setNewSub("");
+    setHydratedKey(ctxKey);
   }, [open, task, defaultArea, defaultStatus, ctxKey]);
 
   async function handleSave() {
@@ -169,6 +178,10 @@ export function TaskModal({
     }
     setSaving(true);
     try {
+      // ¿Cambió el destino ClickUp respecto al guardado? (parent o list)
+      const destinationChanged =
+        clickupParentId !== (task?.clickupParentId ?? undefined) ||
+        clickupListId !== (task?.clickupListId ?? undefined);
       // Al EDITAR: mandamos los strings vacíos explícitamente (no undefined)
       // para que el backend sepa que hay que VACIAR esos campos (ej. limpiar
       // una fecha). Al CREAR: undefined para no setear campos vacíos.
@@ -186,21 +199,29 @@ export function TaskModal({
         standbyUntil: standbyUntil.trim() || blank,
         scheduledDates: scheduledDates.trim() || blank,
         requestedBy: requestedBy.trim() || blank,
-        // Destino ClickUp solo aplica a Patagonia. Al EDITAR, solo mandamos
-        // clickupParentId/clickupListId si cambiaron respecto al original, para
-        // no pisar un destino válido si el picker no llegó a resolverlo al abrir.
+        // Destino ClickUp: solo aplica a Patagonia.
+        // Al EDITAR mandamos los dos campos SOLO si el destino cambió, y usamos
+        // "" (no undefined) para decir "sin destino": Convex descarta los
+        // undefined al serializar, así que un undefined explícito nunca llegaba
+        // al backend y el destino viejo quedaba pegado. Si no cambió, no
+        // mandamos nada, para no pisar un destino válido cuando el picker no
+        // llegó a resolverlo al abrir.
         ...(area === "patagonia"
-          ? {
-              ...(clickupParentId !== (task?.clickupParentId ?? undefined)
-                ? { clickupParentId }
-                : {}),
-              ...(clickupListId !== (task?.clickupListId ?? undefined)
-                ? { clickupListId }
-                : {}),
-            }
+          ? isEdit
+            ? destinationChanged
+              ? {
+                  clickupParentId: clickupParentId ?? "",
+                  clickupListId: clickupListId ?? "",
+                }
+              : {}
+            : {
+                // Al CREAR: omitir vacíos para no persistir strings vacíos.
+                ...(clickupParentId ? { clickupParentId } : {}),
+                ...(clickupListId ? { clickupListId } : {}),
+              }
           : isEdit && task
             ? // Si salió de Patagonia, limpiar el destino ClickUp.
-              { clickupParentId: undefined, clickupListId: undefined }
+              { clickupParentId: "", clickupListId: "" }
             : {}),
       };
       if (isEdit && task) {
@@ -210,8 +231,10 @@ export function TaskModal({
         await createTask({ sessionToken: token!, ...payload });
         toast.success("Tarea creada");
       }
-      // Invalidar el borrador: la próxima apertura empieza limpio.
+      // Invalidar el borrador: la próxima apertura empieza limpio (y el picker
+      // se re-monta recién cuando el estado esté hidratado de nuevo).
       lastCtx.current = null;
+      setHydratedKey(null);
       onClose();
     } catch (err) {
       if (import.meta.env.DEV) console.error(err);
@@ -231,6 +254,7 @@ export function TaskModal({
       toast.success("Tarea eliminada");
       // Invalidar el borrador: la tarea ya no existe.
       lastCtx.current = null;
+      setHydratedKey(null);
       onClose();
     } catch (err) {
       toast.error("No se pudo eliminar");
@@ -396,14 +420,21 @@ export function TaskModal({
               {/* Destino ClickUp (solo Patagonia) */}
               {area === "patagonia" && (
                 <div className="mb-4">
-                  <ClickUpDestinationPicker
-                    value={clickupParentId}
-                    listId={clickupListId}
-                    onChange={(parentId, lid) => {
-                      setClickupParentId(parentId);
-                      setClickupListId(lid);
-                    }}
-                  />
+                  {hydratedKey === ctxKey && (
+                    <ClickUpDestinationPicker
+                      // Remount limpio al cambiar de tarea (o nueva↔edición).
+                      // El picker fija su estado de navegación una sola vez al
+                      // montar; el key + el guard de hidratación garantizan que
+                      // monte con el destino correcto de ESTA tarea.
+                      key={ctxKey}
+                      value={clickupParentId}
+                      listId={clickupListId}
+                      onChange={(parentId, lid) => {
+                        setClickupParentId(parentId);
+                        setClickupListId(lid);
+                      }}
+                    />
+                  )}
                   {/* Estado de sync / link si la tarea ya está sincronizada */}
                   {isEdit && task?.clickupUrl && (
                     <div className="mt-2 flex items-center gap-2 text-xs">

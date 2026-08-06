@@ -165,34 +165,49 @@ export function parseClickupConfig(raw: string | undefined): ClickupConfig {
 }
 
 /**
- * Resuelve el destino outbound de una tarea:
- * devuelve { listId, parentId? } según clickupParentId.
- *   - parentId vacío → Mesa Técnica (listId de mesa, sin parent).
- *   - parentId seteado → busca en los proyectos cuál contiene ese parentId y
- *     devuelve el listId del proyecto + el parentId.
- * Si no encuentra mapeo, cae a Mesa Técnica como fallback seguro.
+ * Resuelve el destino outbound de una tarea: devuelve { listId, parentId? }.
+ *
+ * Prioridad:
+ *   1. parentId seteado y mapeado en config.projects → list del destino/proyecto.
+ *   2. parentId seteado sin mapeo → se respeta el listId que eligió el usuario
+ *      en el picker (clickupListId); si no hay, Mesa Técnica (ClickUp acepta
+ *      parent cross-list dentro del mismo space).
+ *   3. Sin parentId pero CON clickupListId → tarea plana (nivel 0) en esa list.
+ *      Es el caso "elegí proyecto + plano (sin anidar)" del picker: antes caía
+ *      silenciosamente en Mesa Técnica porque esta función ignoraba el listId.
+ *   4. Sin parentId ni listId → Mesa Técnica.
  */
 export function resolveOutboundDestination(
   config: ClickupConfig,
   clickupParentId: string | undefined,
+  clickupListId?: string | undefined,
 ): { listId: string; parentId: string | undefined } {
-  if (!clickupParentId) {
-    return { listId: config.mesaTecnica.listId, parentId: undefined };
+  // Normalizar: el picker puede emitir "" al elegir "plano".
+  const parentId = clickupParentId ? clickupParentId : undefined;
+  const chosenListId = clickupListId ? clickupListId : undefined;
+
+  if (!parentId) {
+    // Tarea plana: si el usuario eligió una list explícita, se respeta.
+    return {
+      listId: chosenListId ?? config.mesaTecnica.listId,
+      parentId: undefined,
+    };
   }
   for (const project of config.projects) {
     // Buscar el destino cuyo parentId coincide; respetar su listId si lo tiene.
-    const dest = project.destinations.find(
-      (d) => d.parentId === clickupParentId,
-    );
+    const dest = project.destinations.find((d) => d.parentId === parentId);
     if (dest) {
       return {
         listId: dest.listId ?? project.listId,
-        parentId: clickupParentId,
+        parentId,
       };
     }
   }
-  // Fallback: si el parentId no mapea a ningún destino conocido, usamos la
-  // list de Mesa Técnica pero respetamos el parent (ClickUp acepta parent
-  // cross-list en el mismo space).
-  return { listId: config.mesaTecnica.listId, parentId: clickupParentId };
+  // Fallback: el parentId no mapea a ningún destino configurado. Usamos la list
+  // que eligió el usuario en el picker (o Mesa Técnica) y respetamos el parent;
+  // ClickUp acepta parent cross-list dentro del mismo space.
+  return {
+    listId: chosenListId ?? config.mesaTecnica.listId,
+    parentId,
+  };
 }

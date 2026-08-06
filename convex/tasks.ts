@@ -306,6 +306,18 @@ export const update = mutation({
     // vacío explícito significa "vaciar el campo". Lo persistimos como
     // undefined para que desaparezca, en vez de ignorarlo. Esto permite limpiar
     // una fecha al editar (el DatePicker emite "" al limpiar).
+    // Destino ClickUp: el cliente manda "" para decir "sin destino" (limpiar).
+    // Es la ÚNICA forma de distinguir "no toqué el destino" (campo ausente,
+    // llega como undefined) de "lo vacié": Convex descarta los undefined al
+    // serializar, así que un undefined explícito es indistinguible de omitirlo.
+    // Por eso calculamos el cambio ANTES de normalizar "" → undefined.
+    const destTouched =
+      patch.clickupParentId !== undefined || patch.clickupListId !== undefined;
+    const nextParentId = patch.clickupParentId
+      ? patch.clickupParentId
+      : undefined;
+    const nextListId = patch.clickupListId ? patch.clickupListId : undefined;
+
     for (const f of [
       "dueDate",
       "estimate",
@@ -314,6 +326,8 @@ export const update = mutation({
       "scheduledDates",
       "notes",
       "requestedBy",
+      "clickupParentId",
+      "clickupListId",
     ] as const) {
       if ((patch as Record<string, unknown>)[f] === "") {
         (patch as Record<string, unknown>)[f] = undefined;
@@ -328,10 +342,14 @@ export const update = mutation({
     // El handler de sync con op="update" detecta que no tiene clickupId y la
     // crea en el destino correcto. La tarea vieja en ClickUp queda huérfana
     // (no se borra) salvo que el cambio venga de un move explícito.
+    //
+    // Ojo: contemplamos también el cambio SOLO de list (tarea plana que se
+    // mueve de proyecto sin parent) y el vaciado del parent → Mesa Técnica.
     if (
       task.clickupId &&
-      patch.clickupParentId !== undefined &&
-      patch.clickupParentId !== task.clickupParentId
+      destTouched &&
+      (nextParentId !== task.clickupParentId ||
+        nextListId !== task.clickupListId)
     ) {
       await ctx.db.patch(id, {
         clickupId: undefined,
