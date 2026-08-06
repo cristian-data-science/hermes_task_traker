@@ -9,7 +9,7 @@ import {
   CheckCircle2,
   User,
   ExternalLink,
-  RefreshCw,
+  Circle,
 } from "lucide-react";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -233,8 +233,8 @@ export function TaskCard({
           </span>
         )}
 
-        {/* Badge ClickUp: link externo si está sincronizada, o aviso de error */}
-        {task.clickupUrl && (
+        {/* Badge de origen: ClickUp (con link) o Local (solo Convex) */}
+        {task.clickupUrl ? (
           <a
             href={task.clickupUrl}
             target="_blank"
@@ -260,15 +260,13 @@ export function TaskCard({
             )}
             ClickUp
           </a>
-        )}
-        {/* Pendiente de sync (sin error, sin clickupId, área patagonia) */}
-        {!task.clickupUrl && !task.clickupSyncError && task.area === "patagonia" && (
+        ) : (
           <span
             className="inline-flex items-center gap-1 text-faint"
-            title="Pendiente de sincronizar con ClickUp"
+            title="Tarea local (solo en Convex, no sincronizada con ClickUp)"
           >
-            <RefreshCw className="h-3 w-3" />
-            sync…
+            <Circle className="h-2.5 w-2.5 fill-current" />
+            Local
           </span>
         )}
       </div>
