@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useAction, useQuery } from "convex/react";
 import {
   ArrowLeft,
@@ -127,6 +127,87 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
     for (const id of untracked) ids.delete(id);
     return ids;
   }, [localSubs, importedIds, untracked]);
+
+  // ===== Expansión del árbol (controlada desde acá) =====
+  // Un único Set con los nodos abiertos. Vive en la página, no en cada nodo,
+  // para poder sembrarlo con lo que ya está suscripto y ofrecer expandir /
+  // colapsar todo.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  /** La siembra corre UNA sola vez, cuando ya hay árbol y suscripciones. */
+  const seededRef = useRef(false);
+
+  const toggleExpanded = useCallback((id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  /**
+   * Ids a abrir para que TODA suscripción quede a la vista: los ancestros de
+   * cada nodo suscripto, más los folders/lists suscriptos (para ver su
+   * contenido). Una tarea suscripta no se abre a sí misma: su checkbox ya se
+   * ve desde el padre y abrirla solo agregaría ruido.
+   */
+  const computeAutoExpand = useCallback(
+    (folders: WorkspaceFolder[], active: Set<string>) => {
+      const open = new Set<string>();
+      /** Devuelve true si la tarea o alguna descendiente está suscripta. */
+      const walkTask = (task: WorkspaceTask): boolean => {
+        let hasSubInside = false;
+        for (const child of task.children) {
+          if (walkTask(child)) hasSubInside = true;
+        }
+        if (hasSubInside) open.add(task.id);
+        return hasSubInside || active.has(task.id);
+      };
+      for (const folder of folders) {
+        let folderHas = false;
+        for (const list of folder.lists) {
+          let listHas = active.has(list.id);
+          for (const task of list.tasks) {
+            if (walkTask(task)) listHas = true;
+          }
+          if (listHas) {
+            open.add(list.id);
+            folderHas = true;
+          }
+        }
+        if (folderHas || active.has(folder.id)) open.add(folder.id);
+      }
+      return open;
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (seededRef.current) return;
+    if (tree.length === 0) return;
+    // Esperar a que las queries reactivas hayan resuelto, si no sembraríamos
+    // con datos incompletos y quedaría medio árbol cerrado.
+    if (importedIds === undefined || clickupState === undefined) return;
+    seededRef.current = true;
+    setExpandedIds(computeAutoExpand(tree, subIds));
+  }, [tree, importedIds, clickupState, subIds, computeAutoExpand]);
+
+  /** Todos los ids del árbol (para "expandir todo"). */
+  const allNodeIds = useMemo(() => {
+    const ids = new Set<string>();
+    const walk = (t: WorkspaceTask) => {
+      if (t.children.length > 0) ids.add(t.id);
+      t.children.forEach(walk);
+    };
+    for (const f of tree) {
+      ids.add(f.id);
+      for (const l of f.lists) {
+        ids.add(l.id);
+        l.tasks.forEach(walk);
+      }
+    }
+    return ids;
+  }, [tree]);
 
   /** Estado de un folder: checked si todas sus lists+tasks están suscriptas. */
   function folderState(folder: WorkspaceFolder): CheckState {
@@ -293,6 +374,25 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
   const q = search.trim().toLowerCase();
   const matches = (s: string) => !q || s.toLowerCase().includes(q);
 
+  /**
+   * Filtra una tarea y su subárbol: se conserva si ella matchea (con todas sus
+   * hijas) o si alguna descendiente matchea (podando el resto). Sin esto, una
+   * subtarea profunda que coincide con la búsqueda quedaba invisible porque el
+   * filtro solo miraba las tareas raíz.
+   */
+  const filterTask = useCallback(
+    (task: WorkspaceTask, query: string): WorkspaceTask | null => {
+      const self = task.name.toLowerCase().includes(query);
+      if (self) return task;
+      const kids = task.children
+        .map((c) => filterTask(c, query))
+        .filter((c): c is WorkspaceTask => c !== null);
+      if (kids.length === 0) return null;
+      return { ...task, children: kids };
+    },
+    [],
+  );
+
   const filteredTree = useMemo(() => {
     if (!q) return tree;
     return tree
@@ -301,7 +401,9 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
         lists: folder.lists
           .map((list) => ({
             ...list,
-            tasks: list.tasks.filter((t) => matches(t.name)),
+            tasks: list.tasks
+              .map((t) => filterTask(t, q))
+              .filter((t): t is WorkspaceTask => t !== null),
           }))
           .filter(
             (list) => matches(list.name) || list.tasks.length > 0,
@@ -310,7 +412,29 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
       .filter(
         (folder) => matches(folder.name) || folder.lists.length > 0,
       );
-  }, [tree, q]);
+  }, [tree, q, filterTask]);
+
+  /** Ids del árbol filtrado, para abrir los resultados de la búsqueda. */
+  const filteredNodeIds = useMemo(() => {
+    if (!q) return null;
+    const ids = new Set<string>();
+    const walk = (t: WorkspaceTask) => {
+      if (t.children.length > 0) ids.add(t.id);
+      t.children.forEach(walk);
+    };
+    for (const f of filteredTree) {
+      ids.add(f.id);
+      for (const l of f.lists) {
+        ids.add(l.id);
+        l.tasks.forEach(walk);
+      }
+    }
+    return ids;
+  }, [filteredTree, q]);
+
+  // Al buscar, abrir los resultados; el Set de búsqueda no pisa el del usuario
+  // (se combina en el render), así que al limpiar la búsqueda vuelve lo suyo.
+  const effectiveExpanded = filteredNodeIds ?? expandedIds;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -359,6 +483,39 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
           )}
         </div>
 
+        {/* Controles de expansión. Al entrar, el árbol ya viene abierto en
+            todo lo suscripto; estos botones son la salida rápida. */}
+        {!loading && filteredTree.length > 0 && (
+          <div className="mb-2 flex items-center justify-end gap-3 text-[11px]">
+            <span className="mr-auto text-faint">
+              {subIds.size} suscripto{subIds.size !== 1 ? "s" : ""} · abierto en
+              sus ubicaciones
+            </span>
+            <button
+              type="button"
+              onClick={() => setExpandedIds(new Set(allNodeIds))}
+              className="text-mute hover:text-ink hover:underline"
+            >
+              Expandir todo
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpandedIds(new Set())}
+              className="text-mute hover:text-ink hover:underline"
+            >
+              Colapsar todo
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpandedIds(computeAutoExpand(tree, subIds))}
+              className="text-accent hover:underline"
+              title="Volver a abrir solo las ramas que tienen suscripciones"
+            >
+              Solo lo suscripto
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="flex flex-col items-center justify-center py-20 text-mute">
             <Loader2 className="mb-3 h-8 w-8 animate-spin text-accent" />
@@ -379,10 +536,11 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
                 state={folderState(folder)}
                 onToggle={() => toggleFolder(folder)}
                 onToggleList={(list) => toggleList(list, folder.name)}
-                onToggleTask={(task, listName) => toggleTask(task, listName)}
+                onToggleTask={toggleTask}
                 listStateFn={listState}
                 subIds={subIds}
-                token={token}
+                expandedIds={effectiveExpanded}
+                onToggleExpanded={toggleExpanded}
               />
             ))}
           </div>
@@ -443,7 +601,8 @@ interface FolderNodeProps {
   onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
   listStateFn: (list: WorkspaceList) => CheckState;
   subIds: Set<string>;
-  token: string | null;
+  expandedIds: Set<string>;
+  onToggleExpanded: (id: string) => void;
 }
 
 function FolderNode({
@@ -454,16 +613,18 @@ function FolderNode({
   onToggleTask,
   listStateFn,
   subIds,
-  token,
+  expandedIds,
+  onToggleExpanded,
 }: FolderNodeProps) {
-  const [expanded, setExpanded] = useState(false);
+  const expanded = expandedIds.has(folder.id);
+  const setExpanded = () => onToggleExpanded(folder.id);
 
   return (
     <div className="overflow-hidden rounded-el border-el border-line">
       {/* Cabecera del folder */}
       <div className="flex items-center gap-2 bg-panel2 px-2.5 py-2">
         <button
-          onClick={() => setExpanded((e) => !e)}
+          onClick={setExpanded}
           className="grid h-5 w-5 place-items-center rounded text-mute hover:text-ink"
         >
           {expanded ? (
@@ -494,7 +655,8 @@ function FolderNode({
               onToggle={() => onToggleList(list)}
               onToggleTask={onToggleTask}
               subIds={subIds}
-              token={token}
+              expandedIds={expandedIds}
+              onToggleExpanded={onToggleExpanded}
             />
           ))}
         </div>
@@ -510,7 +672,8 @@ interface ListNodeProps {
   onToggle: () => void;
   onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
   subIds: Set<string>;
-  token: string | null;
+  expandedIds: Set<string>;
+  onToggleExpanded: (id: string) => void;
 }
 
 function ListNode({
@@ -519,16 +682,17 @@ function ListNode({
   onToggle,
   onToggleTask,
   subIds,
-  token,
+  expandedIds,
+  onToggleExpanded,
 }: ListNodeProps) {
-  const [expanded, setExpanded] = useState(false);
+  const expanded = expandedIds.has(list.id);
 
   return (
     <div className="rounded px-1">
       {/* Cabecera de la list */}
       <div className="flex items-center gap-2 px-1.5 py-1.5 hover:bg-panel2">
         <button
-          onClick={() => setExpanded((e) => !e)}
+          onClick={() => onToggleExpanded(list.id)}
           className="grid h-4 w-4 place-items-center rounded text-mute hover:text-ink"
         >
           {expanded ? (
@@ -559,11 +723,11 @@ function ListNode({
               <TaskNode
                 key={task.id}
                 task={task}
-                listId={list.id}
                 labelPrefix={list.name}
                 subIds={subIds}
                 onToggleTask={onToggleTask}
-                token={token}
+                expandedIds={expandedIds}
+                onToggleExpanded={onToggleExpanded}
                 depth={0}
               />
             ))
@@ -576,13 +740,12 @@ function ListNode({
 
 interface TaskNodeProps {
   task: WorkspaceTask;
-  /** List a la que pertenece la rama (la misma a cualquier profundidad). */
-  listId: string;
   /** Ruta legible de los ancestros, para etiquetar la suscripción. */
   labelPrefix: string;
   subIds: Set<string>;
   onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
-  token: string | null;
+  expandedIds: Set<string>;
+  onToggleExpanded: (id: string) => void;
   depth: number;
 }
 
@@ -592,67 +755,49 @@ interface TaskNodeProps {
  * Antes esto era un nodo hoja: pintaba sus subtareas como <div> planos, sin
  * chevron ni checkbox, así que el árbol moría en el nivel 4 (folder → list →
  * tarea → subtarea) y no se podía bajar a las fases de un proyecto ni
- * suscribirse a nada más profundo. El backend nunca tuvo ese límite:
- * listTaskChildren y applySubscriptions funcionan a cualquier nivel.
+ * suscribirse a nada más profundo. El backend nunca tuvo ese límite.
  *
- * Cada nodo es dueño de SU estado (expandido, hijas, carga). Antes la ListNode
- * tenía un único array de subtareas compartido por todas sus tareas: expandir
- * una pisaba las hijas de la anterior y todas mostraban el mismo contenido.
+ * Las hijas vienen ya anidadas en `task.children` (getWorkspaceTree arma el
+ * árbol completo), así que no hay carga on-demand: la página puede abrirse
+ * directamente en los nodos suscriptos sin ir pidiendo nivel por nivel.
+ *
+ * La expansión es CONTROLADA por la página (expandedIds), no estado local: es
+ * lo que permite sembrarla con lo suscripto y ofrecer expandir/colapsar todo.
  */
 function TaskNode({
   task,
-  listId,
   labelPrefix,
   subIds,
   onToggleTask,
-  token,
+  expandedIds,
+  onToggleExpanded,
   depth,
 }: TaskNodeProps) {
-  const [expanded, setExpanded] = useState(false);
-  const [children, setChildren] = useState<WorkspaceTask[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const listTaskChildren = useAction(api.clickup.listTaskChildren);
-
   const checked = subIds.has(task.id);
   const childPrefix = `${labelPrefix} · ${task.name}`;
-
-  async function handleExpand() {
-    const next = !expanded;
-    setExpanded(next);
-    if (!next || loaded || !token) return;
-    setLoading(true);
-    try {
-      const result = await listTaskChildren({
-        sessionToken: token,
-        listId,
-        parentId: task.id,
-      });
-      setChildren(result.children);
-      setLoaded(true);
-    } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : "No se pudieron cargar las subtareas",
-      );
-      setExpanded(false);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const children = task.children;
+  const hasChildren = children.length > 0;
+  const expanded = hasChildren && expandedIds.has(task.id);
 
   return (
     <div>
       <div className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-panel2">
         <button
-          onClick={handleExpand}
-          className="grid h-3.5 w-3.5 place-items-center rounded text-faint hover:text-ink"
-          title={expanded ? "Contraer" : "Ver subtareas"}
+          onClick={() => hasChildren && onToggleExpanded(task.id)}
+          disabled={!hasChildren}
+          className={cn(
+            "grid h-3.5 w-3.5 place-items-center rounded text-faint",
+            hasChildren ? "hover:text-ink" : "cursor-default opacity-0",
+          )}
+          title={
+            !hasChildren
+              ? "Sin subtareas"
+              : expanded
+                ? "Contraer"
+                : `Ver ${children.length} subtarea${children.length !== 1 ? "s" : ""}`
+          }
         >
-          {loading ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : expanded ? (
+          {expanded ? (
             <ChevronDown className="h-3 w-3" />
           ) : (
             <ChevronRight className="h-3 w-3" />
@@ -685,26 +830,20 @@ function TaskNode({
       </div>
 
       {/* Hijas: mismas capacidades que el padre, sin tope de profundidad. */}
-      {expanded && loaded && (
+      {expanded && (
         <div className="ml-3 space-y-0.5 border-l border-line pl-2">
-          {children.length === 0 ? (
-            <p className="px-1.5 py-0.5 text-[11px] text-faint">
-              Sin subtareas.
-            </p>
-          ) : (
-            children.map((child) => (
-              <TaskNode
-                key={child.id}
-                task={child}
-                listId={listId}
-                labelPrefix={childPrefix}
-                subIds={subIds}
-                onToggleTask={onToggleTask}
-                token={token}
-                depth={depth + 1}
-              />
-            ))
-          )}
+          {children.map((child) => (
+            <TaskNode
+              key={child.id}
+              task={child}
+              labelPrefix={childPrefix}
+              subIds={subIds}
+              onToggleTask={onToggleTask}
+              expandedIds={expandedIds}
+              onToggleExpanded={onToggleExpanded}
+              depth={depth + 1}
+            />
+          ))}
         </div>
       )}
     </div>

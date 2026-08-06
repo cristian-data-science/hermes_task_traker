@@ -1020,9 +1020,11 @@ export interface WorkspaceTask {
   status: string;
   /** Primer nombre del responsable (primer assignee), si lo hay. */
   assignee?: string;
+  /** Subtareas directas, ya anidadas (a cualquier profundidad). */
+  children: WorkspaceTask[];
 }
 
-/** Una list dentro del árbol (con sus tareas raíz, sin subtareas). */
+/** Una list dentro del árbol (tareas raíz, cada una con su subárbol). */
 export interface WorkspaceList {
   id: string;
   name: string;
@@ -1042,13 +1044,33 @@ export interface WorkspaceTree {
 }
 
 /**
- * Trae TODA la estructura del space de ClickUp: folders → lists → tareas raíz.
- * No trae subtareas (se cargan on-demand al expandir con listTaskChildren).
- * Sirve para la página de sincronización donde el usuario explora y marca qué
- * nodos quiere importar/mantener sincronizados.
+ * Trae TODA la estructura del space: folders → lists → tareas → subtareas, ya
+ * anidadas y a cualquier profundidad.
+ *
+ * Antes traía solo las tareas raíz y el resto se cargaba on-demand por nodo.
+ * Eso hacía imposible saber, al abrir la página, dónde vive cada suscripción
+ * sin ir pidiéndolas una por una. Como ClickUp devuelve las subtareas en la
+ * MISMA llamada por list (`subtasks=true`), armar el árbol completo no cuesta
+ * llamadas extra: antes se descargaban y se tiraban.
  *
  * Pública (action) con auth.
  */
+/** Máximo de páginas por list (100 tareas c/u). Tope defensivo. */
+const MAX_LIST_PAGES = 20;
+
+/** Trae TODAS las tareas de una list (con subtareas), paginando. */
+async function fetchAllListTasks(listId: string): Promise<any[]> {
+  const all: any[] = [];
+  for (let page = 0; page < MAX_LIST_PAGES; page++) {
+    const data = await clickupFetch(
+      `/list/${listId}/task?archived=false&subtasks=true&include_closed=false&page=${page}`,
+    );
+    const tasks: any[] = data?.tasks ?? [];
+    all.push(...tasks);
+    if (tasks.length < 100) break;
+  }
+  return all;
+}
 export const getWorkspaceTree = action({
   args: { sessionToken: v.string() },
   handler: async (ctx, { sessionToken }): Promise<WorkspaceTree> => {
@@ -1086,9 +1108,7 @@ export const getWorkspaceTree = action({
           folderIdx,
           listId: list.id,
           listName: list.name,
-          promise: clickupFetch(
-            `/list/${list.id}/task?archived=false&include_closed=false&page=0`,
-          ).catch(() => null),
+          promise: fetchAllListTasks(list.id).catch(() => null),
         });
       }
     });
@@ -1099,20 +1119,35 @@ export const getWorkspaceTree = action({
     // Ensablar por folder.
     const foldersByLists = new Map<number, WorkspaceList[]>();
     allListFetches.forEach((fetchInfo, i) => {
-      const data = results[i];
-      const tasks: WorkspaceTask[] = [];
-      for (const t of data?.tasks ?? []) {
-        if (!t.parent) {
-          // Primer nombre del primer assignee (ej. "Cristian Gutiérrez" → "Cristian").
-          const assigneeUser = t.assignees?.[0]?.username as string | undefined;
-          tasks.push({
-            id: t.id,
-            name: t.name,
-            status: t.status?.status ?? "to do",
-            assignee: assigneeUser ? assigneeUser.split(" ")[0] : undefined,
-          });
-        }
+      const raw: any[] = results[i] ?? [];
+
+      // 1) Indexar todas las tareas de la list por id.
+      const byId = new Map<string, WorkspaceTask>();
+      for (const t of raw) {
+        if (!t?.id) continue;
+        // Primer nombre del primer assignee (ej. "Cristian Gutiérrez" → "Cristian").
+        const assigneeUser = t.assignees?.[0]?.username as string | undefined;
+        byId.set(t.id, {
+          id: t.id,
+          name: t.name ?? "(sin nombre)",
+          status: t.status?.status ?? "to do",
+          assignee: assigneeUser ? assigneeUser.split(" ")[0] : undefined,
+          children: [],
+        });
       }
+
+      // 2) Colgar cada una de su padre. Si el padre no está en esta list
+      //    (subtarea cross-list, o quedó fuera del tope de páginas), la
+      //    tratamos como raíz para que no desaparezca del árbol.
+      const tasks: WorkspaceTask[] = [];
+      for (const t of raw) {
+        const node = byId.get(t?.id);
+        if (!node) continue;
+        const parent = t.parent ? byId.get(t.parent) : undefined;
+        if (parent) parent.children.push(node);
+        else tasks.push(node);
+      }
+
       const list: WorkspaceList = { id: fetchInfo.listId, name: fetchInfo.listName, tasks };
       const existing = foldersByLists.get(fetchInfo.folderIdx) ?? [];
       existing.push(list);
