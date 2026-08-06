@@ -208,8 +208,12 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
     setUntracked(nextUntracked);
   }
 
-  /** Toggle de una tarea individual. */
-  function toggleTask(task: WorkspaceTask, listName: string) {
+  /**
+   * Toggle de una tarea individual, a cualquier profundidad.
+   * `labelPrefix` es la ruta de ancestros (ej. "Ley de Datos · FASE 1"), para
+   * que la suscripción quede identificable en la lista de suscripciones.
+   */
+  function toggleTask(task: WorkspaceTask, labelPrefix: string) {
     const isActive = subIds.has(task.id);
     const nextSubs = new Map(localSubs);
     const nextUntracked = new Set(untracked);
@@ -222,7 +226,7 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
       nextSubs.set(task.id, {
         nodeType: "task",
         id: task.id,
-        label: `${listName} · ${task.name}`,
+        label: `${labelPrefix} · ${task.name}`,
       });
       nextUntracked.delete(task.id);
     }
@@ -436,7 +440,7 @@ interface FolderNodeProps {
   state: CheckState;
   onToggle: () => void;
   onToggleList: (list: WorkspaceList) => void;
-  onToggleTask: (task: WorkspaceTask, listName: string) => void;
+  onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
   listStateFn: (list: WorkspaceList) => CheckState;
   subIds: Set<string>;
   token: string | null;
@@ -488,7 +492,7 @@ function FolderNode({
               folderName={folder.name}
               state={listStateFn(list)}
               onToggle={() => onToggleList(list)}
-              onToggleTask={(task) => onToggleTask(task, list.name)}
+              onToggleTask={onToggleTask}
               subIds={subIds}
               token={token}
             />
@@ -504,7 +508,7 @@ interface ListNodeProps {
   folderName: string;
   state: CheckState;
   onToggle: () => void;
-  onToggleTask: (task: WorkspaceTask) => void;
+  onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
   subIds: Set<string>;
   token: string | null;
 }
@@ -518,28 +522,6 @@ function ListNode({
   token,
 }: ListNodeProps) {
   const [expanded, setExpanded] = useState(false);
-  const [subtasks, setSubtasks] = useState<
-    { id: string; name: string; status: string }[]
-  >([]);
-  const [loadingSubs, setLoadingSubs] = useState(false);
-  const listTaskChildren = useAction(api.clickup.listTaskChildren);
-
-  async function loadSubtasks(taskId: string) {
-    if (!token) return;
-    setLoadingSubs(true);
-    try {
-      const result = await listTaskChildren({
-        sessionToken: token,
-        listId: list.id,
-        parentId: taskId,
-      });
-      setSubtasks(result.children);
-    } catch {
-      // silencioso
-    } finally {
-      setLoadingSubs(false);
-    }
-  }
 
   return (
     <div className="rounded px-1">
@@ -577,11 +559,12 @@ function ListNode({
               <TaskNode
                 key={task.id}
                 task={task}
-                checked={subIds.has(task.id)}
-                onToggle={() => onToggleTask(task)}
-                onLoadSubtasks={() => loadSubtasks(task.id)}
-                subtasks={subtasks}
-                loadingSubs={loadingSubs}
+                listId={list.id}
+                labelPrefix={list.name}
+                subIds={subIds}
+                onToggleTask={onToggleTask}
+                token={token}
+                depth={0}
               />
             ))
           )}
@@ -593,30 +576,69 @@ function ListNode({
 
 interface TaskNodeProps {
   task: WorkspaceTask;
-  checked: boolean;
-  onToggle: () => void;
-  onLoadSubtasks: () => void;
-  subtasks: { id: string; name: string; status: string }[];
-  loadingSubs: boolean;
+  /** List a la que pertenece la rama (la misma a cualquier profundidad). */
+  listId: string;
+  /** Ruta legible de los ancestros, para etiquetar la suscripción. */
+  labelPrefix: string;
+  subIds: Set<string>;
+  onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
+  token: string | null;
+  depth: number;
 }
 
+/**
+ * Nodo de tarea RECURSIVO: se expande sin límite de profundidad.
+ *
+ * Antes esto era un nodo hoja: pintaba sus subtareas como <div> planos, sin
+ * chevron ni checkbox, así que el árbol moría en el nivel 4 (folder → list →
+ * tarea → subtarea) y no se podía bajar a las fases de un proyecto ni
+ * suscribirse a nada más profundo. El backend nunca tuvo ese límite:
+ * listTaskChildren y applySubscriptions funcionan a cualquier nivel.
+ *
+ * Cada nodo es dueño de SU estado (expandido, hijas, carga). Antes la ListNode
+ * tenía un único array de subtareas compartido por todas sus tareas: expandir
+ * una pisaba las hijas de la anterior y todas mostraban el mismo contenido.
+ */
 function TaskNode({
   task,
-  checked,
-  onToggle,
-  onLoadSubtasks,
-  subtasks,
-  loadingSubs,
+  listId,
+  labelPrefix,
+  subIds,
+  onToggleTask,
+  token,
+  depth,
 }: TaskNodeProps) {
   const [expanded, setExpanded] = useState(false);
+  const [children, setChildren] = useState<WorkspaceTask[]>([]);
+  const [loading, setLoading] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const listTaskChildren = useAction(api.clickup.listTaskChildren);
+
+  const checked = subIds.has(task.id);
+  const childPrefix = `${labelPrefix} · ${task.name}`;
 
   async function handleExpand() {
     const next = !expanded;
     setExpanded(next);
-    if (next && !loaded) {
-      await onLoadSubtasks();
+    if (!next || loaded || !token) return;
+    setLoading(true);
+    try {
+      const result = await listTaskChildren({
+        sessionToken: token,
+        listId,
+        parentId: task.id,
+      });
+      setChildren(result.children);
       setLoaded(true);
+    } catch (err) {
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : "No se pudieron cargar las subtareas",
+      );
+      setExpanded(false);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -628,7 +650,7 @@ function TaskNode({
           className="grid h-3.5 w-3.5 place-items-center rounded text-faint hover:text-ink"
           title={expanded ? "Contraer" : "Ver subtareas"}
         >
-          {loadingSubs ? (
+          {loading ? (
             <Loader2 className="h-3 w-3 animate-spin" />
           ) : expanded ? (
             <ChevronDown className="h-3 w-3" />
@@ -638,10 +660,21 @@ function TaskNode({
         </button>
         <TriCheckbox
           state={checked ? "checked" : "unchecked"}
-          onChange={onToggle}
+          onChange={() => onToggleTask(task, labelPrefix)}
         />
-        <Circle className="h-2.5 w-2.5 shrink-0 fill-current text-mute" />
-        <span className="min-w-0 flex-1 truncate text-[13px] text-ink">
+        <Circle
+          className={cn(
+            "shrink-0 fill-current text-mute",
+            depth === 0 ? "h-2.5 w-2.5" : "h-2 w-2 opacity-60",
+          )}
+        />
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate",
+            depth === 0 ? "text-[13px] text-ink" : "text-[12px] text-ink/90",
+          )}
+          title={task.name}
+        >
           {task.name}
         </span>
         {task.assignee && (
@@ -650,17 +683,28 @@ function TaskNode({
           </span>
         )}
       </div>
-      {expanded && subtasks.length > 0 && (
+
+      {/* Hijas: mismas capacidades que el padre, sin tope de profundidad. */}
+      {expanded && loaded && (
         <div className="ml-3 space-y-0.5 border-l border-line pl-2">
-          {subtasks.map((sub) => (
-            <div
-              key={sub.id}
-              className="flex items-center gap-2 rounded px-1.5 py-0.5 text-[12px] text-mute hover:bg-panel2"
-            >
-              <Circle className="h-2 w-2 shrink-0 fill-current opacity-50" />
-              <span className="min-w-0 flex-1 truncate">{sub.name}</span>
-            </div>
-          ))}
+          {children.length === 0 ? (
+            <p className="px-1.5 py-0.5 text-[11px] text-faint">
+              Sin subtareas.
+            </p>
+          ) : (
+            children.map((child) => (
+              <TaskNode
+                key={child.id}
+                task={child}
+                listId={listId}
+                labelPrefix={childPrefix}
+                subIds={subIds}
+                onToggleTask={onToggleTask}
+                token={token}
+                depth={depth + 1}
+              />
+            ))
+          )}
         </div>
       )}
     </div>
