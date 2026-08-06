@@ -60,27 +60,36 @@ export function ClickUpDestinationPicker({
   );
   useEffect(() => {
     setMode(value ? "proyecto" : "mesa");
+    // Reset: al cambiar de tarea, permitir auto-selección del folder.
+    setUserSelectedFolder(false);
+    setSelectedFolderId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
   // Folder seleccionado en el dropdown (por folderId).
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
+  // Flag: ¿el usuario eligió un folder manualmente? Si yes, no auto-seleccionar.
+  const [userSelectedFolder, setUserSelectedFolder] = useState(false);
 
-  // Si hay value, intentar resolver a qué folder pertenece (de config.projects).
-  useEffect(() => {
-    if (!config || !value) return;
-    for (const proj of config.projects) {
-      if (proj.destinations.some((d) => d.parentId === value)) {
-        break;
-      }
-    }
-  }, [config, value]);
-
-  // Cuando los folders cargan, auto-seleccionar el que contiene el listId de la
-  // tarea (para que al editar se vea preseleccionado el proyecto correcto).
+  // Cuando los folders cargan o cambia el listId, auto-seleccionar el folder
+  // que contiene la list de la tarea. Esto hace que al EDITAR una tarea con
+  // destino ClickUp, el dropdown muestre el proyecto correcto desde el inicio.
   useEffect(() => {
     if (!foldersLoaded || folders.length === 0) return;
-    if (selectedFolderId) return; // ya hay uno elegido
+    if (userSelectedFolder) return; // el usuario eligió manualmente → respetar
+    if (!listId) {
+      // Sin listId: intentar resolver por value (parentId) en config.projects.
+      if (value && config) {
+        for (const proj of config.projects) {
+          if (proj.destinations.some((d) => d.parentId === value)) {
+            const folder = folders.find((f) => f.listId === proj.listId);
+            if (folder) setSelectedFolderId(folder.folderId);
+            return;
+          }
+        }
+      }
+      return;
+    }
     // Buscar el folder cuya list coincide con el listId de la tarea.
     const match = folders.find(
       (f) => f.lists.some((l) => l.id === listId) || f.listId === listId,
@@ -89,7 +98,7 @@ export function ClickUpDestinationPicker({
       setSelectedFolderId(match.folderId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [foldersLoaded, folders, listId]);
+  }, [foldersLoaded, folders, listId, value]);
 
   // Cargar folders del space al entrar en modo proyecto.
   async function loadFolders() {
@@ -197,6 +206,7 @@ export function ClickUpDestinationPicker({
                 onChange={(e) => {
                   const f = folders.find((x) => x.folderId === e.target.value);
                   setSelectedFolderId(f?.folderId ?? null);
+                  setUserSelectedFolder(true);
                   onChange(undefined, f?.listId);
                 }}
                 className="input py-1.5 text-sm"
