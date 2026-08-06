@@ -1340,3 +1340,32 @@ export const syncAssignees = action({
     return { fixed };
   },
 });
+
+/**
+ * Dado un clickupId (tarea), devuelve su listId y folderId. Sirve para que el
+ * picker de destino pueda auto-seleccionar el folder correcto al abrir una
+ * tarea existente, incluso si no tiene clickupListId persistido (tareas viejas).
+ *
+ * Pública (action) con auth.
+ */
+export const resolveTaskList = action({
+  args: { sessionToken: v.string(), clickupId: v.string() },
+  handler: async (ctx, { sessionToken, clickupId }): Promise<{
+    listId: string | null;
+    folderId: string | null;
+  }> => {
+    const ok = await ctx.runQuery(internal.settings._checkSession, {
+      sessionToken,
+    });
+    if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+    try {
+      const t = await clickupFetch(`/task/${clickupId}`);
+      return {
+        listId: t.list?.id ?? null,
+        folderId: t.folder?.id ?? null,
+      };
+    } catch {
+      return { listId: null, folderId: null };
+    }
+  },
+});

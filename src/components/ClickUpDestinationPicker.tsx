@@ -48,11 +48,36 @@ export function ClickUpDestinationPicker({
   );
   const config: ClickupConfig | undefined = state?.config;
   const discover = useAction(api.clickup.discoverProjects);
+  const resolveList = useAction(api.clickup.resolveTaskList);
 
   // Folders disponibles del space (cargados al entrar en modo proyecto).
   const [folders, setFolders] = useState<AvailableFolder[]>([]);
   const [loadingFolders, setLoadingFolders] = useState(false);
   const [foldersLoaded, setFoldersLoaded] = useState(false);
+  // listId resuelto desde ClickUp (para tareas viejas sin clickupListId).
+  const [resolvedListId, setResolvedListId] = useState<string | undefined>(
+    undefined,
+  );
+
+  // Si no hay listId pero hay value (parentId), resolver el listId desde ClickUp.
+  useEffect(() => {
+    if (!token || listId || !value || resolvedListId) return;
+    let cancelled = false;
+    resolveList({ sessionToken: token, clickupId: value })
+      .then((result) => {
+        if (!cancelled && result.listId) {
+          setResolvedListId(result.listId);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, value, listId]);
+
+  // El listId efectivo: el de la prop, o el resuelto desde ClickUp.
+  const effectiveListId = listId ?? resolvedListId;
 
   // Modo: 'mesa' (tarea suelta) o 'proyecto'.
   const [mode, setMode] = useState<"mesa" | "proyecto">(
@@ -63,6 +88,7 @@ export function ClickUpDestinationPicker({
     // Reset: al cambiar de tarea, permitir auto-selección del folder.
     setUserSelectedFolder(false);
     setSelectedFolderId(null);
+    setResolvedListId(undefined);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
 
@@ -77,7 +103,8 @@ export function ClickUpDestinationPicker({
   useEffect(() => {
     if (!foldersLoaded || folders.length === 0) return;
     if (userSelectedFolder) return; // el usuario eligió manualmente → respetar
-    if (!listId) {
+    const lid = effectiveListId;
+    if (!lid) {
       // Sin listId: intentar resolver por value (parentId) en config.projects.
       if (value && config) {
         for (const proj of config.projects) {
@@ -92,13 +119,13 @@ export function ClickUpDestinationPicker({
     }
     // Buscar el folder cuya list coincide con el listId de la tarea.
     const match = folders.find(
-      (f) => f.lists.some((l) => l.id === listId) || f.listId === listId,
+      (f) => f.lists.some((l) => l.id === lid) || f.listId === lid,
     );
     if (match) {
       setSelectedFolderId(match.folderId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [foldersLoaded, folders, listId, value]);
+  }, [foldersLoaded, folders, effectiveListId, value]);
 
   // Cargar folders del space al entrar en modo proyecto.
   async function loadFolders() {
@@ -176,10 +203,8 @@ export function ClickUpDestinationPicker({
           type="button"
           onClick={() => {
             setMode("proyecto");
-            if (folders.length > 0 && !selectedFolderId) {
-              setSelectedFolderId(folders[0].folderId);
-              onChange(undefined, folders[0].listId);
-            }
+            // NO pisar value ni listId aquí. El auto-select del folder se
+            // encarga de mostrar el correcto sin disparar onChange.
           }}
           className={cn(
             "rounded-el px-2 py-1.5 text-xs font-medium transition-colors",
@@ -224,7 +249,7 @@ export function ClickUpDestinationPicker({
                 <FolderTreeSection
                   folder={selectedFolder}
                   value={value}
-                  listId={listId}
+                  listId={effectiveListId}
                   onChange={(parentId, lid) => {
                     onChange(parentId, lid);
                     if (parentId) pushRecent(parentId);
@@ -282,16 +307,23 @@ function FolderTreeSection({
     : [{ id: folder.listId, name: folder.listName || "Principal" }];
   const hasMultipleLists = lists.length > 1;
 
-  const [selectedListId, setSelectedListId] = useState<string>(
-    listId ?? folder.listId,
-  );
+  // La list a usar: la del listId de la tarea si está en este folder, si no,
+  // la principal del folder.
+  const initialList =
+    (listId && lists.some((l) => l.id === listId) ? listId : undefined) ??
+    folder.listId;
+  const [selectedListId, setSelectedListId] = useState<string>(initialList);
 
+  // Sincronizar si cambia el listId externo (al abrir otra tarea) o el folder.
   useEffect(() => {
-    if (listId && listId !== selectedListId) {
-      setSelectedListId(listId);
+    const target =
+      (listId && lists.some((l) => l.id === listId) ? listId : undefined) ??
+      folder.listId;
+    if (target !== selectedListId) {
+      setSelectedListId(target);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listId]);
+  }, [listId, folder.folderId]);
 
   return (
     <div className="space-y-2">
