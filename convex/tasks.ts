@@ -514,7 +514,12 @@ export const changeStatus = mutation({
             status: newStatus,
             order: i,
             updatedAt: now,
-            completedAt: newStatus === "completado" ? now : undefined,
+            // La fecha de completado NO se pisa si ya existe: es el dato de
+            // "cuándo se terminó esto", no "cuándo la toqué por última vez".
+            // Antes se reescribía con `now` en cada movimiento hacia la
+            // columna, y el "completado hace..." saltaba a hoy.
+            completedAt:
+              newStatus === "completado" ? (task.completedAt ?? now) : undefined,
             // Completar es completar, venga de donde venga: arrastrar a la
             // columna dejaba el progreso como estaba y quedaban tareas
             // completadas mostrando 40%. Solo `toggleComplete` lo forzaba.
@@ -595,7 +600,8 @@ export const toggleComplete = mutation({
     const completing = newStatus === "completado";
 
     await moveToTopOfStatus(ctx, id, oldStatus, newStatus, now, {
-      completedAt: completing ? now : undefined,
+      // Se conserva la fecha original si ya estaba completada (ver changeStatus).
+      completedAt: completing ? (task.completedAt ?? now) : undefined,
       // Completar la tarea lleva el progreso al 100% automáticamente
       ...(completing ? { progress: 100 } : {}),
     });

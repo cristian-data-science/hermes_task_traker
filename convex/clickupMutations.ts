@@ -257,7 +257,11 @@ export const _applyInboundStatus = internalMutation({
       status: args.status as HermesStatus,
       clickupSyncedAt: now,
       clickupSyncError: undefined,
-      completedAt: args.status === "completado" ? now : undefined,
+      // No pisar la fecha de completado si la tarea ya la tenía: cada sync
+      // desde ClickUp la estaba reescribiendo con la hora del sync, así que
+      // el "completado hace..." se reseteaba solo.
+      completedAt:
+        args.status === "completado" ? (task.completedAt ?? now) : undefined,
       updatedAt: now,
     });
   },
