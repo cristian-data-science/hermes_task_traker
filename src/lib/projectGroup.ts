@@ -38,6 +38,11 @@ export interface TaskGroup {
   isLoose: boolean;
 }
 
+/**
+ * Grupo de descarte: tareas locales (sin ClickUp) y sincronizadas cuya
+ * ubicación todavía no se resolvió. Mesa Técnica NO cae acá: es una list real
+ * y se muestra con su nombre.
+ */
 export const LOOSE_GROUP: TaskGroup = {
   key: "__sueltas__",
   label: "Sueltas",
@@ -61,11 +66,21 @@ export function groupOfTask(
 ): TaskGroup {
   // Sin ClickUp (tareas locales, datacef, personal) → sueltas.
   if (!task.clickupId && !task.clickupListId) return LOOSE_GROUP;
-  // Mesa Técnica es, por definición, el cajón de tareas sueltas.
-  if (opts.mesaListId && task.clickupListId === opts.mesaListId) {
-    return LOOSE_GROUP;
-  }
+
   const listName = task.clickupPath?.listName?.trim();
+
+  // Mesa Técnica es una list de verdad, no un cajón de sobras: se muestra con
+  // su propio nombre en vez de mezclarse con las sueltas. Se usa el nombre
+  // real de ClickUp cuando la ruta ya está resuelta, y si todavía no lo está
+  // igual la reconocemos por su listId (que sale de la config).
+  if (opts.mesaListId && task.clickupListId === opts.mesaListId) {
+    return {
+      key: `list:${opts.mesaListId}`,
+      label: listName || "Mesa Técnica",
+      isLoose: false,
+    };
+  }
+
   // Sincronizada pero sin ruta resuelta todavía (backfill pendiente): no
   // inventamos un grupo, cae en sueltas hasta que se resuelva.
   if (!listName) return LOOSE_GROUP;
