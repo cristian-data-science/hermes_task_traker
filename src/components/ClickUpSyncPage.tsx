@@ -209,110 +209,130 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
     return ids;
   }, [tree]);
 
-  /** Estado de un folder: checked si todas sus lists+tasks están suscriptas. */
+  /**
+   * Aplana una tarea y TODAS sus descendientes en nodos suscribibles.
+   *
+   * Es la pieza que faltaba: cuando el árbol pasó a ser anidado, las cascadas
+   * siguieron recorriendo solo `list.tasks` (las raíces), así que desmarcar un
+   * proyecto padre desuscribía una sola tarea y sus hijas quedaban tildadas.
+   */
+  const flattenTask = useCallback(
+    (
+      task: WorkspaceTask,
+      labelPrefix: string,
+    ): { nodeType: PendingChange["nodeType"]; id: string; label: string }[] => {
+      const self = {
+        nodeType: "task" as const,
+        id: task.id,
+        label: `${labelPrefix} · ${task.name}`,
+      };
+      const childPrefix = `${labelPrefix} · ${task.name}`;
+      return [
+        self,
+        ...task.children.flatMap((c) => flattenTask(c, childPrefix)),
+      ];
+    },
+    [],
+  );
+
+  /** Todos los nodos suscribibles de una list (la list + su árbol completo). */
+  const flattenList = useCallback(
+    (list: WorkspaceList, folderName: string) => [
+      {
+        nodeType: "list" as const,
+        id: list.id,
+        label: `${folderName} · ${list.name}`,
+      },
+      ...list.tasks.flatMap((t) => flattenTask(t, `${folderName} · ${list.name}`)),
+    ],
+    [flattenTask],
+  );
+
+  /** Estado de 3 valores a partir de un conjunto de ids. */
+  function stateOfIds(ids: string[]): CheckState {
+    if (ids.length === 0) return "unchecked";
+    const checked = ids.filter((id) => subIds.has(id)).length;
+    if (checked === 0) return "unchecked";
+    if (checked === ids.length) return "checked";
+    return "partial";
+  }
+
+  /** Estado de un folder, contando TODO su árbol. */
   function folderState(folder: WorkspaceFolder): CheckState {
-    const allDescendants: string[] = [];
-    for (const list of folder.lists) {
-      allDescendants.push(list.id);
-      for (const t of list.tasks) allDescendants.push(t.id);
-    }
-    if (allDescendants.length === 0) return "unchecked";
-    const checked = allDescendants.filter((id) => subIds.has(id)).length;
-    if (checked === 0) return "unchecked";
-    if (checked === allDescendants.length) return "checked";
-    return "partial";
+    const ids = [
+      folder.id,
+      ...folder.lists.flatMap((l) => flattenList(l, folder.name).map((n) => n.id)),
+    ];
+    // El folder en sí no cuenta para "todo tildado": lo que importa es su
+    // contenido. Si no, marcar todas las tareas nunca llegaría a "checked".
+    return stateOfIds(ids.slice(1));
   }
 
-  /** Estado de una list. */
+  /** Estado de una list, contando TODO su árbol. */
   function listState(list: WorkspaceList): CheckState {
-    const all = [list.id, ...list.tasks.map((t) => t.id)];
-    const checked = all.filter((id) => subIds.has(id)).length;
-    if (checked === 0) return "unchecked";
-    if (checked === all.length) return "checked";
-    return "partial";
+    return stateOfIds(flattenList(list, "").map((n) => n.id));
   }
 
-  /** Toggle de un folder: si no está todo checked → marcar todo; si no → vaciar. */
+  /** Estado de una tarea, contando ella y TODAS sus descendientes. */
+  function taskState(task: WorkspaceTask): CheckState {
+    return stateOfIds(flattenTask(task, "").map((n) => n.id));
+  }
+
+  /** Aplica un alta/baja en bloque sobre un conjunto de nodos. */
+  function applyToggle(
+    nodes: { nodeType: PendingChange["nodeType"]; id: string; label: string }[],
+    turnOff: boolean,
+  ) {
+    const nextSubs = new Map(localSubs);
+    const nextUntracked = new Set(untracked);
+    for (const n of nodes) {
+      if (turnOff) {
+        // Dejar de seguir: se quita la suscripción y se marca como no querida.
+        // NO se toca nada en ClickUp; la tarea solo sale del tablero.
+        nextSubs.delete(n.id);
+        nextUntracked.add(n.id);
+      } else {
+        nextSubs.set(n.id, n);
+        nextUntracked.delete(n.id);
+      }
+    }
+    setLocalSubs(nextSubs);
+    setUntracked(nextUntracked);
+  }
+
+  /** Toggle de un folder: arrastra a sus lists y a todo su árbol de tareas. */
   function toggleFolder(folder: WorkspaceFolder) {
-    const state = folderState(folder);
-    const nextSubs = new Map(localSubs);
-    const nextUntracked = new Set(untracked);
-    const ids: { nodeType: PendingChange["nodeType"]; id: string; label: string }[] = [
-      { nodeType: "folder", id: folder.id, label: folder.name },
+    const nodes = [
+      {
+        nodeType: "folder" as const,
+        id: folder.id,
+        label: folder.name,
+      },
+      ...folder.lists.flatMap((l) => flattenList(l, folder.name)),
     ];
-    for (const list of folder.lists) {
-      ids.push({ nodeType: "list", id: list.id, label: list.name });
-      for (const t of list.tasks) {
-        ids.push({ nodeType: "task", id: t.id, label: t.name });
-      }
-    }
-    if (state === "checked") {
-      // Vaciar: quitar todos de localSubs y añadir a untracked.
-      for (const { id } of ids) {
-        nextSubs.delete(id);
-        nextUntracked.add(id);
-      }
-    } else {
-      // Marcar todos: añadir a localSubs y quitar de untracked.
-      for (const n of ids) {
-        nextSubs.set(n.id, n);
-        nextUntracked.delete(n.id);
-      }
-    }
-    setLocalSubs(nextSubs);
-    setUntracked(nextUntracked);
+    applyToggle(nodes, folderState(folder) === "checked");
   }
 
-  /** Toggle de una list. */
+  /** Toggle de una list: arrastra a todo su árbol de tareas. */
   function toggleList(list: WorkspaceList, folderName: string) {
-    const state = listState(list);
-    const nextSubs = new Map(localSubs);
-    const nextUntracked = new Set(untracked);
-    const ids: { nodeType: PendingChange["nodeType"]; id: string; label: string }[] = [
-      { nodeType: "list", id: list.id, label: `${folderName} · ${list.name}` },
-    ];
-    for (const t of list.tasks) {
-      ids.push({ nodeType: "task", id: t.id, label: t.name });
-    }
-    if (state === "checked") {
-      for (const { id } of ids) {
-        nextSubs.delete(id);
-        nextUntracked.add(id);
-      }
-    } else {
-      for (const n of ids) {
-        nextSubs.set(n.id, n);
-        nextUntracked.delete(n.id);
-      }
-    }
-    setLocalSubs(nextSubs);
-    setUntracked(nextUntracked);
+    applyToggle(flattenList(list, folderName), listState(list) === "checked");
   }
 
   /**
-   * Toggle de una tarea individual, a cualquier profundidad.
+   * Toggle de una tarea a cualquier profundidad. Arrastra a TODAS sus
+   * descendientes: desmarcar "Ley de Datos" deja de seguir también sus fases y
+   * las tareas de cada fase, que es lo que uno espera de un padre.
+   *
    * `labelPrefix` es la ruta de ancestros (ej. "Ley de Datos · FASE 1"), para
    * que la suscripción quede identificable en la lista de suscripciones.
    */
   function toggleTask(task: WorkspaceTask, labelPrefix: string) {
-    const isActive = subIds.has(task.id);
-    const nextSubs = new Map(localSubs);
-    const nextUntracked = new Set(untracked);
-    if (isActive) {
-      // Desmarcar: quitar de localSubs si está, y añadir a untracked.
-      nextSubs.delete(task.id);
-      nextUntracked.add(task.id);
-    } else {
-      // Marcar: añadir a localSubs y quitar de untracked.
-      nextSubs.set(task.id, {
-        nodeType: "task",
-        id: task.id,
-        label: `${labelPrefix} · ${task.name}`,
-      });
-      nextUntracked.delete(task.id);
-    }
-    setLocalSubs(nextSubs);
-    setUntracked(nextUntracked);
+    // "partial" cuenta como encender: un click sobre un padre a medias
+    // completa la rama, no la vacía.
+    applyToggle(
+      flattenTask(task, labelPrefix),
+      taskState(task) === "checked",
+    );
   }
 
   // ===== Detección de cambios pendientes =====
@@ -354,7 +374,11 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
       if (r.tasksImported > 0)
         parts.push(`${r.tasksImported} importada${r.tasksImported !== 1 ? "s" : ""}`);
       if (r.tasksIgnored > 0)
-        parts.push(`${r.tasksIgnored} eliminada${r.tasksIgnored !== 1 ? "s" : ""}`);
+        // "eliminada" asustaba de gratis: desuscribirse solo saca la tarea del
+        // tablero. En ClickUp no se toca nada.
+        parts.push(
+          `${r.tasksIgnored} sin seguir${r.tasksIgnored !== 1 ? "" : ""}`,
+        );
       if (r.tasksSkipped > 0)
         parts.push(`${r.tasksSkipped} ya existían`);
       toast.success(parts.length > 0 ? parts.join(" · ") : "Sin cambios");
@@ -538,6 +562,7 @@ export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
                 onToggleList={(list) => toggleList(list, folder.name)}
                 onToggleTask={toggleTask}
                 listStateFn={listState}
+                taskStateFn={taskState}
                 subIds={subIds}
                 expandedIds={effectiveExpanded}
                 onToggleExpanded={toggleExpanded}
@@ -600,6 +625,7 @@ interface FolderNodeProps {
   onToggleList: (list: WorkspaceList) => void;
   onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
   listStateFn: (list: WorkspaceList) => CheckState;
+  taskStateFn: (task: WorkspaceTask) => CheckState;
   subIds: Set<string>;
   expandedIds: Set<string>;
   onToggleExpanded: (id: string) => void;
@@ -612,6 +638,7 @@ function FolderNode({
   onToggleList,
   onToggleTask,
   listStateFn,
+  taskStateFn,
   subIds,
   expandedIds,
   onToggleExpanded,
@@ -654,6 +681,7 @@ function FolderNode({
               state={listStateFn(list)}
               onToggle={() => onToggleList(list)}
               onToggleTask={onToggleTask}
+              taskStateFn={taskStateFn}
               subIds={subIds}
               expandedIds={expandedIds}
               onToggleExpanded={onToggleExpanded}
@@ -671,6 +699,7 @@ interface ListNodeProps {
   state: CheckState;
   onToggle: () => void;
   onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
+  taskStateFn: (task: WorkspaceTask) => CheckState;
   subIds: Set<string>;
   expandedIds: Set<string>;
   onToggleExpanded: (id: string) => void;
@@ -681,6 +710,7 @@ function ListNode({
   state,
   onToggle,
   onToggleTask,
+  taskStateFn,
   subIds,
   expandedIds,
   onToggleExpanded,
@@ -726,6 +756,7 @@ function ListNode({
                 labelPrefix={list.name}
                 subIds={subIds}
                 onToggleTask={onToggleTask}
+                stateOf={taskStateFn}
                 expandedIds={expandedIds}
                 onToggleExpanded={onToggleExpanded}
                 depth={0}
@@ -744,6 +775,8 @@ interface TaskNodeProps {
   labelPrefix: string;
   subIds: Set<string>;
   onToggleTask: (task: WorkspaceTask, labelPrefix: string) => void;
+  /** Estado de 3 valores de una tarea, contando todo su subárbol. */
+  stateOf: (task: WorkspaceTask) => CheckState;
   expandedIds: Set<string>;
   onToggleExpanded: (id: string) => void;
   depth: number;
@@ -769,11 +802,11 @@ function TaskNode({
   labelPrefix,
   subIds,
   onToggleTask,
+  stateOf,
   expandedIds,
   onToggleExpanded,
   depth,
 }: TaskNodeProps) {
-  const checked = subIds.has(task.id);
   const childPrefix = `${labelPrefix} · ${task.name}`;
   const children = task.children;
   const hasChildren = children.length > 0;
@@ -803,8 +836,11 @@ function TaskNode({
             <ChevronRight className="h-3 w-3" />
           )}
         </button>
+        {/* Tri-estado: un padre con parte de su rama seguida se ve "parcial",
+            igual que folders y lists. Antes era binario y un proyecto a medias
+            se veía idéntico a uno completo. */}
         <TriCheckbox
-          state={checked ? "checked" : "unchecked"}
+          state={stateOf(task)}
           onChange={() => onToggleTask(task, labelPrefix)}
         />
         <Circle
@@ -839,6 +875,7 @@ function TaskNode({
               labelPrefix={childPrefix}
               subIds={subIds}
               onToggleTask={onToggleTask}
+              stateOf={stateOf}
               expandedIds={expandedIds}
               onToggleExpanded={onToggleExpanded}
               depth={depth + 1}
