@@ -27,8 +27,16 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Plus, Inbox, Columns3, Eye, EyeOff, FolderTree } from "lucide-react";
-import { useMutation, useQuery } from "convex/react";
+import {
+  Plus,
+  Inbox,
+  Columns3,
+  Eye,
+  EyeOff,
+  FolderTree,
+  Loader2,
+} from "lucide-react";
+import { useMutation, useQuery, useAction } from "convex/react";
 import toast from "react-hot-toast";
 import type { Doc, Id } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -87,6 +95,40 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
    * tareas de Mesa Técnica caigan en "Sueltas"; los nombres ambiguos se
    * calculan sobre las tareas visibles.
    */
+  /**
+   * ¿Hay al menos una tarea con proyecto resuelto? Si no, agrupar no puede
+   * hacer nada y hay que decirlo en pantalla.
+   */
+  const nothingResolved = useMemo(
+    () => !tasks.some((t) => !!t.clickupPath?.listName),
+    [tasks],
+  );
+  const backfillPaths = useAction(api.clickup.backfillClickupPaths);
+  const [resolving, setResolving] = useState(false);
+
+  async function handleResolveProjects() {
+    setResolving(true);
+    try {
+      const r = (await backfillPaths({ sessionToken: token! })) as {
+        updated: number;
+        failed: number;
+        total: number;
+      };
+      toast.success(
+        r.total === 0
+          ? "No hay tareas sincronizadas para resolver"
+          : `${r.updated} de ${r.total} ubicaciones resueltas` +
+              (r.failed > 0 ? ` · ${r.failed} sin resolver` : ""),
+      );
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudieron resolver",
+      );
+    } finally {
+      setResolving(false);
+    }
+  }
+
   const groupOpts = useMemo<GroupOptions>(
     () => ({
       mesaListId: clickupState?.config?.mesaTecnica?.listId,
@@ -363,6 +405,30 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
         )}
       </div>
 
+      {/* Aviso cuando la agrupación no tiene con qué agrupar: sin esto, el
+          tablero se ve igual que sin agrupar y no hay pista del motivo. */}
+      {groupByProject && nothingResolved && (
+        <div className="mb-2 flex flex-wrap items-center gap-2 rounded-el border-el border-line bg-panel2 px-3 py-2 text-xs text-mute">
+          <FolderTree className="h-4 w-4 shrink-0 text-accent" />
+          <span className="min-w-0 flex-1">
+            Ninguna tarea tiene su proyecto resuelto todavía, así que todas
+            caen en «Sueltas».
+          </span>
+          <button
+            onClick={handleResolveProjects}
+            disabled={resolving}
+            className="btn-primary shrink-0 px-2.5 py-1 text-[11px] disabled:opacity-60"
+          >
+            {resolving ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <FolderTree className="h-3.5 w-3.5" />
+            )}
+            Resolver ahora
+          </button>
+        </div>
+      )}
+
       {/* Scroll horizontal; el snap móvil se desactiva durante el drag */}
       <div
         className={cn(
@@ -441,7 +507,6 @@ function Column({
     }
     return m;
   }, [ids, taskMap, groupByProject, groupOpts]);
-  const isSingleGroup = groupSizes.size <= 1;
 
   return (
     <div className="flex w-[82vw] shrink-0 snap-start flex-col sm:w-72">
@@ -493,9 +558,11 @@ function Column({
               groupByProject && i > 0
                 ? groupOfTask(taskMap[ids[i - 1]], groupOpts)
                 : null;
-            const isFirstOfGroup = !!group && group.key !== prevGroup?.key;
-            const showHeader =
-              isFirstOfGroup && !(i === 0 && isSingleGroup);
+            // Antes se ocultaba el encabezado cuando la columna tenía un
+            // solo grupo. Parecía elegante, pero cuando TODO caía en
+            // "Sueltas" el resultado era una línea de color sin ninguna
+            // explicación: la función no andaba y no había forma de saberlo.
+            const showHeader = !!group && group.key !== prevGroup?.key;
             return (
               <div key={id} className={cn(showHeader && "mt-1 first:mt-0")}>
                 {showHeader && group && (

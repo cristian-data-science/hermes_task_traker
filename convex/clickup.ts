@@ -1363,6 +1363,11 @@ export const applySubscriptions = action({
                 assigneeName: t.assignees?.[0]?.username
                   ? String(t.assignees[0].username).split(" ")[0]
                   : undefined,
+                // Ubicación para agrupar el tablero: viene en la misma
+                // respuesta, sin llamadas extra. Faltaba en esta rama (alta
+                // por folder/list), así que esas tareas entraban sin proyecto.
+                folderName: t.folder?.hidden ? undefined : t.folder?.name,
+                listName: t.list?.name,
               });
             }
             if (tasks.length < 100) break;
