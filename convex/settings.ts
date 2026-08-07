@@ -11,6 +11,8 @@ import {
   SETTINGS_KEY_HIDDEN_AREAS,
   SETTINGS_KEY_SUBSCRIPTIONS,
   parseClickupConfig,
+  isProductionDeployment,
+  envSignalLabel,
   type ClickupConfig,
   type ClickupProject,
   DEFAULT_CLICKUP_CONFIG,
@@ -149,8 +151,7 @@ export const getClickupState = query({
     // El sync outbound solo corre en producción. En dev/local las tareas NO
     // tocan ClickUp (evita ensuciar el workspace compartido con datos de test),
     // salvo que el override forceSyncDev esté activo para probar la integración.
-    const deployment = process.env.CONVEX_CLOUD_DEPLOYMENT ?? "";
-    const isProduction = deployment.startsWith("prod:");
+    const isProduction = isProductionDeployment();
     const forceSyncDev = forceRow?.value === "true";
     const syncActive =
       (isProduction || forceSyncDev) && enabledRow?.value !== "false";
@@ -160,6 +161,8 @@ export const getClickupState = query({
       syncActive,
       /** true si estamos en un deployment de desarrollo (para avisos en UI). */
       isDev: !isProduction,
+      /** Qué señal se usó para decidirlo (para poder diagnosticar el cartel). */
+      envSignal: envSignalLabel(),
       /** Override de prueba: si true, el sync corre también en dev. */
       forceSyncDev,
       config: parseClickupConfig(configRow?.value),

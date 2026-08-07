@@ -13,6 +13,7 @@ import {
   SETTINGS_KEY_FORCE_SYNC_DEV,
   parseClickupConfig,
   resolveOutboundDestination,
+  isProductionDeployment,
   type HermesStatus,
 } from "./clickupConfig";
 
@@ -298,8 +299,7 @@ export const syncTask = internalAction({
     // ClickUp compartido (Patagonia) con datos de test. Existe un override
     // (settings clickup.forceSyncDev=true) para forzarlo y probar la
     // integración desde local; off por defecto.
-    const deployment = process.env.CONVEX_CLOUD_DEPLOYMENT ?? "";
-    if (!deployment.startsWith("prod:")) {
+    if (!isProductionDeployment()) {
       const forceRow = await ctx.runQuery(internal.settings._getRaw, {
         key: SETTINGS_KEY_FORCE_SYNC_DEV,
       });
@@ -989,8 +989,7 @@ export const createRootTask = action({
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
 
     // Guard de entorno: en dev, solo crear si el override forceSyncDev está on.
-    const deployment = process.env.CONVEX_CLOUD_DEPLOYMENT ?? "";
-    if (!deployment.startsWith("prod:")) {
+    if (!isProductionDeployment()) {
       const forceRow = await ctx.runQuery(internal.settings._getRaw, {
         key: SETTINGS_KEY_FORCE_SYNC_DEV,
       });

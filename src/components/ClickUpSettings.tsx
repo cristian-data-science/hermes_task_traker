@@ -218,10 +218,27 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                             Modo desarrollo — ClickUp desactivado
                           </p>
                           <p className="mt-0.5 opacity-90">
-                            Estás en un deployment <strong>dev</strong>. Las tareas
-                            que crees o edites acá <strong>no se envían a ClickUp</strong>{" "}
-                            para no ensuciar el workspace compartido. La sincronización
-                            real solo ocurre en producción (Vercel).
+                            Las tareas que crees o edites acá{" "}
+                            <strong>no se envían a ClickUp</strong>, para no
+                            ensuciar el workspace compartido.
+                          </p>
+                          {/* Por qué se detectó dev: si estás en producción y
+                              ves esto, falta la variable de entorno. */}
+                          <p className="mt-1 opacity-75">
+                            Señal detectada:{" "}
+                            <code className="rounded bg-amber-300/20 px-1">
+                              {state.envSignal}
+                            </code>
+                            {state.envSignal === "sin marca de producción" && (
+                              <>
+                                {" "}
+                                — si esto es producción, falta setear{" "}
+                                <code className="rounded bg-amber-300/20 px-1">
+                                  HERMES_ENV=production
+                                </code>{" "}
+                                en el deployment.
+                              </>
+                            )}
                           </p>
                         </div>
                       </div>

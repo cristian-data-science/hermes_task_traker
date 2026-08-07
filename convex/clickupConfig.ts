@@ -211,3 +211,42 @@ export function resolveOutboundDestination(
     parentId,
   };
 }
+
+// ============================================================
+//  Detección de entorno (prod vs dev)
+// ============================================================
+/**
+ * ¿Este deployment es el de producción?
+ *
+ * De esto depende que el sync outbound escriba en ClickUp: en dev está
+ * bloqueado para no ensuciar el workspace compartido.
+ *
+ * OJO con la historia: antes esto miraba `CONVEX_CLOUD_DEPLOYMENT`, que NO es
+ * una variable de sistema de Convex — las únicas garantizadas son
+ * `CONVEX_CLOUD_URL` y `CONVEX_SITE_URL`. Como nunca existía, `deployment`
+ * quedaba en "" y la app se creía en dev SIEMPRE, también en producción: de
+ * ahí el cartel amarillo de "Modo desarrollo" en prod y que el sync real solo
+ * funcionara si se prendía el override manual.
+ *
+ * Ahora la señal es explícita: se setea `HERMES_ENV=production` únicamente en
+ * el deployment de producción. Ante la duda se asume dev, que es el lado
+ * seguro (no se escribe nada en ClickUp).
+ */
+export function isProductionDeployment(): boolean {
+  // 1) Señal explícita (la recomendada).
+  if (process.env.HERMES_ENV === "production") return true;
+  // 2) Compatibilidad: por si alguien seteó la variable vieja a mano.
+  if ((process.env.CONVEX_CLOUD_DEPLOYMENT ?? "").startsWith("prod:")) {
+    return true;
+  }
+  return false;
+}
+
+/** Descripción de por qué se detectó dev/prod, para poder diagnosticarlo en la UI. */
+export function envSignalLabel(): string {
+  if (process.env.HERMES_ENV === "production") return "HERMES_ENV=production";
+  if ((process.env.CONVEX_CLOUD_DEPLOYMENT ?? "").startsWith("prod:")) {
+    return "CONVEX_CLOUD_DEPLOYMENT";
+  }
+  return "sin marca de producción";
+}
