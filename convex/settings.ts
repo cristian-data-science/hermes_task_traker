@@ -185,7 +185,14 @@ export const getImportedClickupIds = query({
     await requireAuth(ctx, sessionToken);
     const all = await ctx.db.query("tasks").collect();
     return all
-      .filter((t) => t.clickupId !== undefined && t.deletedAt === undefined)
+      .filter(
+        (t) =>
+          t.clickupId !== undefined &&
+          t.deletedAt === undefined &&
+          // Desvinculada = ya no se sigue: no debe aparecer tildada en la
+          // página de suscripciones.
+          !t.clickupDetached,
+      )
       .map((t) => t.clickupId as string);
   },
 });

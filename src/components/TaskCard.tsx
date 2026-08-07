@@ -10,6 +10,7 @@ import {
   User,
   ExternalLink,
   Circle,
+  Unlink,
 } from "lucide-react";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -261,8 +262,16 @@ export function TaskCard({
           </span>
         )}
 
-        {/* Badge de origen: ClickUp (con link) o Local (solo Convex) */}
-        {task.clickupUrl ? (
+        {/* Badge de origen: desvinculada / ClickUp (con link) / Local */}
+        {task.clickupDetached ? (
+          <span
+            className="inline-flex items-center gap-1 text-faint"
+            title="Desvinculada de ClickUp: ya no se sincroniza, y eliminarla acá no la borra allá."
+          >
+            <Unlink className="h-3 w-3" />
+            Desvinculada
+          </span>
+        ) : task.clickupUrl ? (
           <a
             href={task.clickupUrl}
             target="_blank"

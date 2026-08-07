@@ -118,7 +118,11 @@ export const _listMappedForInbound = internalQuery({
         (t) =>
           t.clickupId !== undefined &&
           t.deletedAt === undefined &&
-          !t.clickupInboundIgnored,
+          !t.clickupInboundIgnored &&
+          // Las desvinculadas no participan del sync: tampoco reciben cambios
+          // de estado inbound. Siguen en `allEntries` para que el escaneo no
+          // las ofrezca como nuevas.
+          !t.clickupDetached,
       )
       .map((t) => ({
         taskId: t._id,

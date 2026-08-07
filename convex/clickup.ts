@@ -319,6 +319,10 @@ export const syncTask = internalAction({
     // 3) Solo área patagonia. datacef/personal nunca tocan ClickUp.
     if (task.area !== "patagonia") return;
 
+    // 3.b) Desvinculada a mano: no se escribe NADA en ClickUp, ni siquiera el
+    // borrado. Es la garantía de "esta tarea ya no le pertenece a ClickUp".
+    if (task.clickupDetached) return;
+
     // 4) Cargar config para resolver el destino (list/parent).
     const configRow = await ctx.runQuery(internal.settings._getRaw, {
       key: SETTINGS_KEY_CONFIG,

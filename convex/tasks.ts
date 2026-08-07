@@ -670,3 +670,32 @@ export const _getInternal = internalQuery({
     return task;
   },
 });
+
+/**
+ * Desvincula una tarea de ClickUp: sigue en el tablero, pero deja de
+ * sincronizarse en ambos sentidos y borrarla acá ya NO la borra en ClickUp.
+ *
+ * Es una operación puramente local: no se manda absolutamente nada a ClickUp.
+ * Allá la tarea queda intacta.
+ *
+ * Se conserva el `clickupId` a propósito (ver el comentario en el schema): si
+ * se limpiara, la siguiente edición haría que el sync la tomara por nueva y
+ * CREARA una tarea duplicada en ClickUp, y el escaneo inbound la volvería a
+ * ofrecer para reimportar.
+ */
+export const detachFromClickup = mutation({
+  args: { ...sessionArg, id: v.id("tasks") },
+  handler: async (ctx, { sessionToken, id }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(id);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    if (!task.clickupId) throw new Error("La tarea no está vinculada a ClickUp");
+    await ctx.db.patch(id, {
+      clickupDetached: true,
+      clickupSyncError: undefined,
+      updatedAt: Date.now(),
+    });
+    return id;
+  },
+});

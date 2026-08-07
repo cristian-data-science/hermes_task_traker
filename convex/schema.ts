@@ -96,6 +96,17 @@ export default defineSchema({
      */
     clickupInboundIgnored: v.optional(v.boolean()),
     /**
+     * La tarea se desvinculó de ClickUp a mano: sigue en el tablero pero deja
+     * de sincronizarse en ambos sentidos, y borrarla en Hermes NO la borra en
+     * ClickUp.
+     *
+     * Se conserva el `clickupId` a propósito, por dos motivos: si se limpiara,
+     * cualquier edición posterior haría que el sync la tomara por nueva y
+     * CREARA una tarea duplicada en ClickUp; y además el escaneo inbound la
+     * volvería a ofrecer como "nueva" para reimportar.
+     */
+    clickupDetached: v.optional(v.boolean()),
+    /**
      * Ubicación de la tarea en ClickUp, ya resuelta y desnormalizada, para
      * poder agrupar el tablero por proyecto SIN pegarle a ClickUp en cada
      * render.

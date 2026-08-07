@@ -15,7 +15,16 @@ import {
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
-import { X, Plus, Trash2, Loader2, Check, ExternalLink, AlertTriangle } from "lucide-react";
+import {
+  X,
+  Plus,
+  Trash2,
+  Loader2,
+  Check,
+  ExternalLink,
+  AlertTriangle,
+  Unlink,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -65,6 +74,7 @@ export function TaskModal({
   const createTask = useMutation(api.tasks.create);
   const updateTask = useMutation(api.tasks.update);
   const removeTask = useMutation(api.tasks.remove);
+  const detachFromClickup = useMutation(api.tasks.detachFromClickup);
 
   // Sub-tareas
   const subtasks = useQuery(
@@ -239,6 +249,36 @@ export function TaskModal({
     } catch (err) {
       if (import.meta.env.DEV) console.error(err);
       toast.error(err instanceof Error ? err.message : "Error al guardar");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Corta la conexión con ClickUp: la tarea se queda en el tablero pero deja
+   * de sincronizarse, y a partir de acá eliminarla NO la borra en ClickUp.
+   * No manda nada a ClickUp: allá queda intacta.
+   */
+  async function handleDetach() {
+    if (!task?.clickupId) return;
+    if (
+      !confirm(
+        `¿Desvincular "${task.title}" de ClickUp?\n\n` +
+          `• La tarea sigue en el Kanban, pero deja de sincronizarse.\n` +
+          `• En ClickUp NO se toca nada: queda tal cual está.\n` +
+          `• A partir de ahora, eliminarla acá NO la borra en ClickUp.\n\n` +
+          `Para volver a vincularla habría que importarla de nuevo.`,
+      )
+    )
+      return;
+    setSaving(true);
+    try {
+      await detachFromClickup({ id: task._id, sessionToken: token! });
+      toast.success("Desvinculada de ClickUp");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudo desvincular",
+      );
     } finally {
       setSaving(false);
     }
@@ -612,12 +652,30 @@ export function TaskModal({
 
             {/* Footer */}
             <div className="flex items-center justify-between gap-2 border-t border-line px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-5">
-              <div>
+              <div className="flex items-center gap-1">
+                {isEdit && task?.clickupId && !task.clickupDetached && (
+                  <button
+                    onClick={handleDetach}
+                    disabled={saving}
+                    title="Corta la conexión con ClickUp. La tarea sigue en el tablero; allá no se toca nada. Después, eliminarla acá ya no la borra en ClickUp."
+                    className="btn-ghost text-mute hover:bg-panel2 hover:text-ink"
+                  >
+                    <Unlink className="h-4 w-4" />
+                    <span className="hidden sm:inline">
+                      Desvincular de ClickUp
+                    </span>
+                  </button>
+                )}
                 {isEdit && (
                   <button
                     onClick={handleDelete}
                     disabled={saving}
                     className="btn-ghost text-danger hover:bg-panel2"
+                    title={
+                      task?.clickupId && !task.clickupDetached
+                        ? "Elimina la tarea acá Y en ClickUp"
+                        : "Elimina la tarea solo del tablero"
+                    }
                   >
                     <Trash2 className="h-4 w-4" />
                     <span className="hidden sm:inline">Eliminar</span>
