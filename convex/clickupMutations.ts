@@ -158,6 +158,15 @@ export const _createInboundTask = internalMutation({
     timeEstimateMs: v.optional(v.number()),
     isAssignedToCris: v.optional(v.boolean()),
     assigneeName: v.optional(v.string()),
+    /** Ubicación en ClickUp (folder/list/ancestros) para agrupar el tablero. */
+    clickupPath: v.optional(
+      v.object({
+        folderName: v.optional(v.string()),
+        listName: v.optional(v.string()),
+        ancestors: v.optional(v.array(v.string())),
+        resolvedAt: v.optional(v.number()),
+      }),
+    ),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -193,6 +202,7 @@ export const _createInboundTask = internalMutation({
       clickupParentId: args.clickupParentId,
       clickupUrl: `https://app.clickup.com/t/${args.clickupId}`,
       clickupSyncedAt: now,
+      clickupPath: args.clickupPath,
       // Preservar el responsable original de ClickUp. Si sos vos → executor=cris.
       // Si es otro → guardamos su nombre en clickupAssignee y dejamos executor
       // sin setear (no forzamos "claw" que es el agente Hermes, no la persona real).
@@ -364,5 +374,41 @@ export const _undoInboundAdd = internalMutation({
       removed++;
     }
     return { removed, skipped };
+  },
+});
+
+/** Tareas sincronizadas a las que les falta la ruta de ClickUp resuelta. */
+export const _listTasksNeedingPath = internalQuery({
+  args: { onlyMissing: v.boolean() },
+  handler: async (ctx, { onlyMissing }) => {
+    const all = await ctx.db.query("tasks").collect();
+    return all
+      .filter(
+        (t) =>
+          t.clickupId !== undefined &&
+          t.deletedAt === undefined &&
+          // Sin ruta, o con ruta a medias (folder/list pero sin ancestros
+          // resueltos, que es lo que deja el alta rápida desde la bandeja).
+          (!onlyMissing ||
+            !t.clickupPath ||
+            t.clickupPath.ancestors === undefined),
+      )
+      .map((t) => ({ taskId: t._id, clickupId: t.clickupId as string }));
+  },
+});
+
+/** Guarda la ruta resuelta de una tarea. */
+export const _setClickupPath = internalMutation({
+  args: {
+    taskId: v.id("tasks"),
+    clickupPath: v.object({
+      folderName: v.optional(v.string()),
+      listName: v.optional(v.string()),
+      ancestors: v.optional(v.array(v.string())),
+      resolvedAt: v.optional(v.number()),
+    }),
+  },
+  handler: async (ctx, { taskId, clickupPath }) => {
+    await ctx.db.patch(taskId, { clickupPath });
   },
 });

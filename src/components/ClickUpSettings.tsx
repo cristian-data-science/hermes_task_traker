@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useAction } from "convex/react";
-import { X, Loader2, Check, Power, RefreshCw, AlertTriangle, UserCog } from "lucide-react";
+import {
+  X,
+  Loader2,
+  Check,
+  Power,
+  RefreshCw,
+  AlertTriangle,
+  UserCog,
+  FolderTree,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
@@ -34,6 +43,37 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
   const toggleHiddenArea = useMutation(api.settings.toggleHiddenArea);
   const syncAssignees = useAction(api.clickup.syncAssignees);
   const [syncingAssignees, setSyncingAssignees] = useState(false);
+  const backfillPaths = useAction(api.clickup.backfillClickupPaths);
+  const [backfilling, setBackfilling] = useState(false);
+
+  /**
+   * Resuelve y guarda la ubicación en ClickUp de cada tarea sincronizada. Es
+   * lo que alimenta la agrupación por proyecto del tablero. Se corre una vez
+   * para las tareas viejas, y de nuevo si renombraste fases o proyectos.
+   */
+  async function handleBackfillPaths(refreshAll: boolean) {
+    setBackfilling(true);
+    try {
+      const r = (await backfillPaths({
+        sessionToken: token!,
+        refreshAll,
+      })) as { updated: number; failed: number; total: number };
+      if (r.total === 0) {
+        toast.success("Todas las tareas ya tenían su ubicación resuelta");
+      } else {
+        toast.success(
+          `${r.updated} de ${r.total} ubicaciones resueltas` +
+            (r.failed > 0 ? ` · ${r.failed} sin resolver` : ""),
+        );
+      }
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Error al resolver ubicaciones",
+      );
+    } finally {
+      setBackfilling(false);
+    }
+  }
 
   async function handleSyncAssignees() {
     setSyncingAssignees(true);
@@ -219,6 +259,27 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                         <UserCog className="h-3.5 w-3.5" />
                       )}
                       Re-sincronizar responsables
+                    </button>
+                    <button
+                      onClick={() => handleBackfillPaths(false)}
+                      disabled={backfilling}
+                      title="Resuelve en qué proyecto y fase vive cada tarea, para poder agrupar el tablero"
+                      className="btn-secondary mt-2 px-2.5 py-1.5 text-xs"
+                    >
+                      {backfilling ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <FolderTree className="h-3.5 w-3.5" />
+                      )}
+                      Resolver proyectos
+                    </button>
+                    <button
+                      onClick={() => handleBackfillPaths(true)}
+                      disabled={backfilling}
+                      title="Recalcula TODAS las ubicaciones. Útil si renombraste fases o proyectos en ClickUp."
+                      className="btn-ghost mt-2 px-2.5 py-1.5 text-xs"
+                    >
+                      Recalcular todas
                     </button>
                   </div>
 

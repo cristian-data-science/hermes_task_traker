@@ -27,8 +27,8 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Plus, Inbox, Columns3, Eye, EyeOff } from "lucide-react";
-import { useMutation } from "convex/react";
+import { Plus, Inbox, Columns3, Eye, EyeOff, FolderTree } from "lucide-react";
+import { useMutation, useQuery } from "convex/react";
 import toast from "react-hot-toast";
 import type { Doc, Id } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -37,6 +37,14 @@ import { TaskCard } from "./TaskCard";
 import { StatusDot } from "./Badges";
 import { useSubtaskCounts } from "../hooks/useSubtaskCounts";
 import { useHiddenColumns } from "../hooks/useHiddenColumns";
+import { useGroupByProject } from "../hooks/useGroupByProject";
+import {
+  groupOfTask,
+  groupRanks,
+  subtitleOfTask,
+  findAmbiguousListNames,
+  type GroupOptions,
+} from "../lib/projectGroup";
 import { useAuth } from "../hooks/useAuth";
 import { MouseSensor, TouchSensor } from "../lib/dndSensors";
 import { cn } from "../lib/utils";
@@ -67,6 +75,25 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<Status | null>(null);
   const { isHidden, toggle, showAll, hidden } = useHiddenColumns();
+  const { enabled: groupByProject, toggle: toggleGrouping } =
+    useGroupByProject();
+  const clickupState = useQuery(
+    api.settings.getClickupState,
+    token ? { sessionToken: token } : "skip",
+  );
+
+  /**
+   * Opciones de agrupación. `mesaListId` sale de la config para que las
+   * tareas de Mesa Técnica caigan en "Sueltas"; los nombres ambiguos se
+   * calculan sobre las tareas visibles.
+   */
+  const groupOpts = useMemo<GroupOptions>(
+    () => ({
+      mesaListId: clickupState?.config?.mesaTecnica?.listId,
+      ambiguousListNames: findAmbiguousListNames(tasks),
+    }),
+    [clickupState?.config?.mesaTecnica?.listId, tasks],
+  );
   const [menuOpen, setMenuOpen] = useState(false);
 
   // ---- Estado optimista de columnas (ids ordenados por estado) ----
@@ -84,9 +111,24 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
     }
     for (const s of KANBAN_COLUMNS) {
       map[s].sort((a, b) => taskMap[a].order - taskMap[b].order);
+      if (!groupByProject) continue;
+      // Con agrupación activa, las tarjetas se parten por grupo conservando el
+      // orden del usuario dentro de cada uno. Se ordena el MISMO array que
+      // consume dnd-kit, así lo que ves y lo que se persiste al soltar no se
+      // separan nunca.
+      const ranks = groupRanks(
+        map[s].map((id) => taskMap[id]),
+        groupOpts,
+      );
+      map[s].sort((a, b) => {
+        const ra = ranks.get(groupOfTask(taskMap[a], groupOpts).key) ?? 0;
+        const rb = ranks.get(groupOfTask(taskMap[b], groupOpts).key) ?? 0;
+        if (ra !== rb) return ra - rb;
+        return taskMap[a].order - taskMap[b].order;
+      });
     }
     return map;
-  }, [tasks, taskMap]);
+  }, [tasks, taskMap, groupByProject, groupOpts]);
 
   // Estado optimista SOLO durante el drag; fuera de él, las columnas se
   // derivan directamente del servidor (sin estado stale que se
@@ -232,8 +274,26 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      {/* Barra superior: toggle de columnas visibles */}
-      <div className="relative mb-2 flex items-center justify-end px-1">
+      {/* Barra superior: agrupar por proyecto + columnas visibles */}
+      <div className="relative mb-2 flex items-center justify-end gap-2 px-1">
+        <button
+          onClick={toggleGrouping}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-el border-el border-line px-2.5 py-1.5 text-xs font-medium transition-colors",
+            groupByProject
+              ? "bg-accent text-acfg"
+              : "bg-panel2 text-mute hover:text-ink",
+          )}
+          title={
+            groupByProject
+              ? "Agrupado por proyecto. Arrastrar entre grupos NO cambia el proyecto: para eso, el destino ClickUp del modal."
+              : "Agrupar las tarjetas por proyecto de ClickUp"
+          }
+        >
+          <FolderTree className="h-3.5 w-3.5" />
+          Proyectos
+        </button>
+
         <button
           onClick={() => setMenuOpen((o) => !o)}
           className={cn(
@@ -320,6 +380,8 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
             highlight={activeId !== null && overCol === status}
             onEditTask={onEditTask}
             onNewTask={() => onNewTask(status)}
+            groupByProject={groupByProject}
+            groupOpts={groupOpts}
           />
         ))}
       </div>
@@ -350,6 +412,8 @@ function Column({
   highlight,
   onEditTask,
   onNewTask,
+  groupByProject,
+  groupOpts,
 }: {
   status: Status;
   ids: string[];
@@ -358,12 +422,26 @@ function Column({
   highlight: boolean;
   onEditTask: (t: Doc<"tasks">) => void;
   onNewTask: () => void;
+  groupByProject: boolean;
+  groupOpts: GroupOptions;
 }) {
   const meta = STATUS_META[status];
   const { setNodeRef } = useDroppable({
     id: status,
     data: { type: "column", status },
   });
+
+  /** Cuántas tarjetas tiene cada grupo en esta columna (para el contador). */
+  const groupSizes = useMemo(() => {
+    const m = new Map<string, number>();
+    if (!groupByProject) return m;
+    for (const id of ids) {
+      const k = groupOfTask(taskMap[id], groupOpts).key;
+      m.set(k, (m.get(k) ?? 0) + 1);
+    }
+    return m;
+  }, [ids, taskMap, groupByProject, groupOpts]);
+  const isSingleGroup = groupSizes.size <= 1;
 
   return (
     <div className="flex w-[82vw] shrink-0 snap-start flex-col sm:w-72">
@@ -403,14 +481,64 @@ function Column({
         )}
       >
         <SortableContext items={ids} strategy={verticalListSortingStrategy}>
-          {ids.map((id) => (
-            <SortableTask
-              key={id}
-              task={taskMap[id]}
-              count={counts[id]}
-              onClick={() => onEditTask(taskMap[id])}
-            />
-          ))}
+          {ids.map((id, i) => {
+            // Encabezado de grupo cuando cambia respecto de la tarjeta
+            // anterior. Como el array ya viene particionado por grupo, sale
+            // exactamente uno por grupo. Si la columna tiene un solo grupo no
+            // se dibuja: no aportaría nada.
+            const group = groupByProject
+              ? groupOfTask(taskMap[id], groupOpts)
+              : null;
+            const prevGroup =
+              groupByProject && i > 0
+                ? groupOfTask(taskMap[ids[i - 1]], groupOpts)
+                : null;
+            const isFirstOfGroup = !!group && group.key !== prevGroup?.key;
+            const showHeader =
+              isFirstOfGroup && !(i === 0 && isSingleGroup);
+            return (
+              <div key={id} className={cn(showHeader && "mt-1 first:mt-0")}>
+                {showHeader && group && (
+                  <div className="mb-1 flex items-center gap-1.5 px-0.5">
+                    <span
+                      className={cn(
+                        "h-3 w-[3px] shrink-0 rounded-sm",
+                        group.isLoose ? "bg-line2" : "bg-accent",
+                      )}
+                    />
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-[11px] font-medium",
+                        group.isLoose ? "text-mute" : "text-accent",
+                      )}
+                      title={group.label}
+                    >
+                      {group.label}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-faint">
+                      {groupSizes.get(group.key) ?? 0}
+                    </span>
+                  </div>
+                )}
+                <div
+                  className={cn(
+                    groupByProject &&
+                      "border-l-2 pl-1.5 " +
+                        (group?.isLoose ? "border-line" : "border-accent/30"),
+                  )}
+                >
+                  <SortableTask
+                    task={taskMap[id]}
+                    count={counts[id]}
+                    subtitle={
+                      groupByProject ? subtitleOfTask(taskMap[id]) : ""
+                    }
+                    onClick={() => onEditTask(taskMap[id])}
+                  />
+                </div>
+              </div>
+            );
+          })}
         </SortableContext>
         {ids.length === 0 && (
           <div
@@ -435,10 +563,13 @@ function SortableTask({
   task,
   count,
   onClick,
+  subtitle,
 }: {
   task: Doc<"tasks">;
   count?: { done: number; total: number };
   onClick: () => void;
+  /** Ruta dentro del proyecto ("FASE 1 › Correcciones"), si se agrupa. */
+  subtitle?: string;
 }) {
   const {
     attributes,
@@ -471,6 +602,7 @@ function SortableTask({
         <TaskCard
           task={task}
           subtaskCount={count}
+          subtitle={subtitle}
           layoutAnim={false}
           onClick={() => {
             if (!isDragging) onClick();

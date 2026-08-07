@@ -95,6 +95,27 @@ export default defineSchema({
      * Evita que reaparezca como "nueva" en futuros escaneos.
      */
     clickupInboundIgnored: v.optional(v.boolean()),
+    /**
+     * Ubicación de la tarea en ClickUp, ya resuelta y desnormalizada, para
+     * poder agrupar el tablero por proyecto SIN pegarle a ClickUp en cada
+     * render.
+     *
+     * `listName` es el grupo (la list es la unidad que ClickUp y la config
+     * llaman "proyecto"); `ancestors` son las tareas contenedoras que cuelgan
+     * debajo (raíz, fases, tarea padre) y alimentan el subtítulo de la
+     * tarjeta. La profundidad varía por proyecto: puede estar vacío.
+     *
+     * Es una copia: si en ClickUp renombran una fase, queda vieja hasta el
+     * próximo sync o backfill. `resolvedAt` permite saber qué tan añeja es.
+     */
+    clickupPath: v.optional(
+      v.object({
+        folderName: v.optional(v.string()),
+        listName: v.optional(v.string()),
+        ancestors: v.optional(v.array(v.string())),
+        resolvedAt: v.optional(v.number()),
+      }),
+    ),
   })
     .index("by_status", ["status", "order"])
     .index("by_area", ["area", "order"])

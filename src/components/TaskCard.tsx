@@ -91,6 +91,12 @@ export function ProgressSlider({
 interface TaskCardProps {
   task: Doc<"tasks">;
   subtaskCount?: { done: number; total: number };
+  /**
+   * Ubicación dentro del proyecto ("FASE 1 › Correcciones"). La pinta el
+   * Kanban cuando agrupa por proyecto: el encabezado dice de qué proyecto es
+   * y esto precisa de qué cuelga dentro.
+   */
+  subtitle?: string;
   onClick?: () => void;
   /** Modo compacto para columna Kanban. */
   variant?: "kanban" | "list";
@@ -109,6 +115,7 @@ interface TaskCardProps {
 export function TaskCard({
   task,
   subtaskCount,
+  subtitle,
   onClick,
   variant = "kanban",
   layoutAnim = true,
@@ -144,6 +151,15 @@ export function TaskCard({
         <AreaBadge area={task.area} />
         {variant === "kanban" && <StatusBadge status={task.status} size="xs" />}
       </div>
+
+      {subtitle && (
+        <p
+          className="mb-0.5 truncate pl-1.5 text-[10px] leading-tight text-faint"
+          title={subtitle}
+        >
+          {subtitle}
+        </p>
+      )}
 
       <h3
         className={cn(

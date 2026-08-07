@@ -1289,6 +1289,8 @@ export const applySubscriptions = action({
       timeEstimateMs?: number;
       assignees?: number[];
       assigneeName?: string;
+      folderName?: string;
+      listName?: string;
     }[] = [];
     /** Nodos que se suscribieron pero cuyo detalle no se pudo traer. */
     const failed: { id: string; label: string; error: string }[] = [];
@@ -1311,6 +1313,9 @@ export const applySubscriptions = action({
             assigneeName: t.assignees?.[0]?.username
               ? String(t.assignees[0].username).split(" ")[0]
               : undefined,
+            // folder/list vienen en la misma respuesta: cero llamadas extra.
+            folderName: t.folder?.hidden ? undefined : t.folder?.name,
+            listName: t.list?.name,
           });
         } catch (err) {
           // La tarea no se pudo traer (borrada, sin permisos, rate limit).
@@ -1394,6 +1399,16 @@ export const applySubscriptions = action({
           timeEstimateMs: task.timeEstimateMs,
           isAssignedToCris: task.assignees?.includes(Number(CLICKUP_USER_ID)) ?? false,
           assigneeName: task.assigneeName,
+          // Ubicación para agrupar el tablero. Los ancestros los completa el
+          // backfill: acá solo tenemos el padre directo, no la cadena.
+          clickupPath:
+            task.listName || task.folderName
+              ? {
+                  folderName: task.folderName,
+                  listName: task.listName,
+                  resolvedAt: Date.now(),
+                }
+              : undefined,
         });
         imported++;
       } else if (existingInfo.deleted || existingInfo.ignored) {
@@ -1543,6 +1558,54 @@ export interface ClickupPathNode {
  * Pública (action) con auth. Nunca lanza: ante un fallo devuelve lo que haya
  * podido resolver, porque es información de conveniencia para la UI.
  */
+/**
+ * Sube por la cadena de `parent` hasta la raíz y devuelve la ubicación
+ * completa de un nodo. Extraído de la action para poder reusarlo desde el
+ * backfill sin pagar un round-trip de Convex por tarea.
+ *
+ * Nunca lanza por un nodo faltante: devuelve lo que haya podido resolver.
+ * Tope de 12 saltos + set de vistos: un ciclo corrupto no cuelga la acción.
+ */
+async function resolveTaskPathInternal(clickupId: string): Promise<{
+  listId: string | null;
+  listName: string | null;
+  folderId: string | null;
+  folderName: string | null;
+  path: ClickupPathNode[];
+}> {
+  const path: ClickupPathNode[] = [];
+  let listId: string | null = null;
+  let listName: string | null = null;
+  let folderId: string | null = null;
+  let folderName: string | null = null;
+
+  let currentId: string | null = clickupId;
+  const seen = new Set<string>();
+  for (let hop = 0; currentId && hop < 12; hop++) {
+    if (seen.has(currentId)) break; // ciclo defensivo
+    seen.add(currentId);
+    let t: any;
+    try {
+      t = await clickupFetch(`/task/${currentId}`);
+    } catch {
+      break; // el nodo ya no existe en ClickUp: devolvemos lo resuelto
+    }
+    if (!t?.id) break;
+    if (hop === 0) {
+      listId = t.list?.id ?? null;
+      listName = t.list?.name ?? null;
+      // ClickUp marca folder.hidden = true cuando la list cuelga directo del
+      // space (sin folder real). En ese caso no hay folder que mostrar.
+      folderId = t.folder?.hidden ? null : (t.folder?.id ?? null);
+      folderName = t.folder?.hidden ? null : (t.folder?.name ?? null);
+    }
+    path.unshift({ id: t.id, name: t.name ?? "(sin nombre)" });
+    currentId = t.parent ?? null;
+  }
+
+  return { listId, listName, folderId, folderName, path };
+}
+
 export const resolveTaskPath = action({
   args: { sessionToken: v.string(), clickupId: v.string() },
   handler: async (
@@ -1561,37 +1624,7 @@ export const resolveTaskPath = action({
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
 
-    const path: ClickupPathNode[] = [];
-    let listId: string | null = null;
-    let listName: string | null = null;
-    let folderId: string | null = null;
-    let folderName: string | null = null;
-
-    let currentId: string | null = clickupId;
-    const seen = new Set<string>();
-    for (let hop = 0; currentId && hop < 12; hop++) {
-      if (seen.has(currentId)) break; // ciclo defensivo
-      seen.add(currentId);
-      let t: any;
-      try {
-        t = await clickupFetch(`/task/${currentId}`);
-      } catch {
-        break; // el nodo ya no existe en ClickUp: devolvemos lo resuelto
-      }
-      if (!t?.id) break;
-      if (hop === 0) {
-        listId = t.list?.id ?? null;
-        listName = t.list?.name ?? null;
-        // ClickUp marca folder.hidden = true cuando la list cuelga directo del
-        // space (sin folder real). En ese caso no hay folder que mostrar.
-        folderId = t.folder?.hidden ? null : (t.folder?.id ?? null);
-        folderName = t.folder?.hidden ? null : (t.folder?.name ?? null);
-      }
-      path.unshift({ id: t.id, name: t.name ?? "(sin nombre)" });
-      currentId = t.parent ?? null;
-    }
-
-    return { listId, listName, folderId, folderName, path };
+    return await resolveTaskPathInternal(clickupId);
   },
 });
 
@@ -1790,5 +1823,70 @@ export const undoAssignedAdd = action({
       { clickupIds },
     );
     return result;
+  },
+});
+
+/**
+ * Resuelve y persiste la ubicación en ClickUp (folder → list → ancestros) de
+ * las tareas ya sincronizadas. Es lo que permite agrupar el tablero por
+ * proyecto sin pegarle a ClickUp en cada render.
+ *
+ * `refreshAll = false` (por defecto) solo completa las que no la tienen o la
+ * tienen a medias — es el backfill inicial y el mantenimiento habitual.
+ * `refreshAll = true` la recalcula para todas: sirve cuando renombraste fases
+ * o proyectos en ClickUp y las etiquetas quedaron viejas.
+ *
+ * Pública (action) con auth.
+ */
+export const backfillClickupPaths = action({
+  args: { sessionToken: v.string(), refreshAll: v.optional(v.boolean()) },
+  handler: async (
+    ctx,
+    { sessionToken, refreshAll },
+  ): Promise<{ updated: number; failed: number; total: number }> => {
+    const ok = await ctx.runQuery(internal.settings._checkSession, {
+      sessionToken,
+    });
+    if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+
+    const pending: { taskId: any; clickupId: string }[] = await ctx.runQuery(
+      internal.clickupMutations._listTasksNeedingPath,
+      { onlyMissing: !refreshAll },
+    );
+
+    // Caché por nodo: las tareas de un mismo proyecto comparten ancestros, así
+    // que resolver 20 tareas de una fase cuesta la cadena una sola vez.
+    const pathCache = new Map<string, any>();
+    let updated = 0;
+    let failed = 0;
+
+    for (const { taskId, clickupId } of pending) {
+      try {
+        let info = pathCache.get(clickupId);
+        if (!info) {
+          info = await resolveTaskPathInternal(clickupId);
+          pathCache.set(clickupId, info);
+        }
+        // El último nodo de la cadena es la tarea misma: no es un ancestro.
+        const ancestors = info.path
+          .slice(0, -1)
+          .map((n: { name: string }) => n.name);
+        await ctx.runMutation(internal.clickupMutations._setClickupPath, {
+          taskId,
+          clickupPath: {
+            folderName: info.folderName ?? undefined,
+            listName: info.listName ?? undefined,
+            ancestors,
+            resolvedAt: Date.now(),
+          },
+        });
+        updated++;
+      } catch {
+        // Tarea inaccesible o borrada en ClickUp: se cuenta y se sigue. No es
+        // crítico — sin ruta, la tarea cae en "Sueltas".
+        failed++;
+      }
+    }
+    return { updated, failed, total: pending.length };
   },
 });
