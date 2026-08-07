@@ -10,6 +10,7 @@ import {
   AlertTriangle,
   UserCog,
   FolderTree,
+  Copy,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "~/convex/_generated/api";
@@ -45,6 +46,43 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
   const [syncingAssignees, setSyncingAssignees] = useState(false);
   const backfillPaths = useAction(api.clickup.backfillClickupPaths);
   const [backfilling, setBackfilling] = useState(false);
+  const cleanupDupes = useAction(api.clickup.cleanupDuplicateTasks);
+  const [cleaning, setCleaning] = useState(false);
+
+  /**
+   * Busca la misma tarea de ClickUp importada más de una vez y deja una sola.
+   * Primero cuenta (dryRun) y pide confirmación: no toca nada sin avisar.
+   */
+  async function handleCleanupDuplicates() {
+    setCleaning(true);
+    try {
+      const preview = (await cleanupDupes({
+        sessionToken: token!,
+        dryRun: true,
+      })) as { groups: number; removed: number };
+      if (preview.groups === 0) {
+        toast.success("No hay tareas duplicadas");
+        return;
+      }
+      const okGo = confirm(
+        `Se encontraron ${preview.groups} tarea(s) duplicada(s) en el tablero ` +
+          `(${preview.removed} copia(s) de más).\n\n` +
+          `Se conserva la más vieja de cada una y se retiran las copias del ` +
+          `tablero. En ClickUp no se toca nada.\n\n¿Continuar?`,
+      );
+      if (!okGo) return;
+      const r = (await cleanupDupes({ sessionToken: token! })) as {
+        removed: number;
+      };
+      toast.success(`${r.removed} copia(s) retirada(s) del tablero`);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Error al limpiar duplicados",
+      );
+    } finally {
+      setCleaning(false);
+    }
+  }
 
   /**
    * Resuelve y guarda la ubicación en ClickUp de cada tarea sincronizada. Es
@@ -272,6 +310,19 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                         <FolderTree className="h-3.5 w-3.5" />
                       )}
                       Resolver proyectos
+                    </button>
+                    <button
+                      onClick={handleCleanupDuplicates}
+                      disabled={cleaning}
+                      title="Busca la misma tarea de ClickUp importada dos veces y deja una sola. No toca ClickUp."
+                      className="btn-secondary mt-2 px-2.5 py-1.5 text-xs"
+                    >
+                      {cleaning ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Copy className="h-3.5 w-3.5" />
+                      )}
+                      Limpiar duplicadas
                     </button>
                     <button
                       onClick={() => handleBackfillPaths(true)}

@@ -170,6 +170,28 @@ export const _createInboundTask = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+
+    // Idempotencia: una tarea de ClickUp no puede entrar dos veces al tablero.
+    // Sin este chequeo se creaban tarjetas duplicadas (dos "Ley 21.719"), y
+    // como desuscribirse resolvía por clickupId, quedaba una viva para
+    // siempre. Si ya existe activa, no se hace nada; si está borrada o
+    // ignorada, se restaura en vez de duplicarla.
+    const existing = await ctx.db
+      .query("tasks")
+      .withIndex("by_clickup_id", (q) => q.eq("clickupId", args.clickupId))
+      .collect();
+    const alive = existing.find((t) => t.deletedAt === undefined);
+    if (alive) return alive._id;
+    if (existing.length > 0) {
+      const revived = existing[0];
+      await ctx.db.patch(revived._id, {
+        deletedAt: undefined,
+        clickupInboundIgnored: undefined,
+        updatedAt: now,
+      });
+      return revived._id;
+    }
+
     // Insertar al inicio (order 0) de la columna destino, desplazando +1.
     const col = await ctx.db
       .query("tasks")
@@ -298,22 +320,29 @@ export const _updateAssignee = internalMutation({
 export const _ignoreInbound = internalMutation({
   args: { clickupId: v.string() },
   handler: async (ctx, { clickupId }) => {
-    const task = await ctx.db
+    // TODAS las tareas con ese clickupId, no solo la primera: si la misma
+    // tarea de ClickUp se importó dos veces (algo que hasta ahora no se
+    // impedía), `.first()` desuscribía una y dejaba la otra viva en el
+    // tablero — decía "listo" y la tarjeta seguía ahí.
+    const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_clickup_id", (q) => q.eq("clickupId", clickupId))
-      .first();
-    if (task) {
-      // Soft-delete: la tarea desaparece del tablero y de la página de sync.
-      // Se marca como ignorada para que no reaparezca en futuros escaneos.
-      const now = Date.now();
-      await ctx.db.patch(task._id, {
-        clickupInboundIgnored: true,
-        deletedAt: now,
-        updatedAt: now,
-      });
-    } else {
-      // No existe tarea con ese clickupId: crear un stub ignorado para que no
-      // reaparezca. Área patagonia, soft-deleted para no mostrarlo en la UI.
+      .collect();
+    const now = Date.now();
+    if (tasks.length > 0) {
+      for (const task of tasks) {
+        // Soft-delete: la tarea desaparece del tablero y de la página de sync.
+        // Se marca como ignorada para que no reaparezca en futuros escaneos.
+        // NO se toca nada en ClickUp.
+        await ctx.db.patch(task._id, {
+          clickupInboundIgnored: true,
+          deletedAt: task.deletedAt ?? now,
+          updatedAt: now,
+        });
+      }
+      return { affected: tasks.length };
+    }
+    {
       // No existe tarea con ese clickupId: crear un stub ignorado para que no
       // reaparezca. Área patagonia, soft-deleted para no mostrarlo en la UI.
       const now = Date.now();
@@ -410,5 +439,53 @@ export const _setClickupPath = internalMutation({
   },
   handler: async (ctx, { taskId, clickupPath }) => {
     await ctx.db.patch(taskId, { clickupPath });
+  },
+});
+
+/**
+ * Busca tareas activas que compartan clickupId (la misma tarea de ClickUp
+ * importada más de una vez) y deja una sola.
+ *
+ * Se conserva la MÁS VIEJA, que es la que probablemente tiene tu trabajo
+ * encima (notas, progreso, subtareas); las copias se soft-deletean, así que
+ * son recuperables desde la base si algo sale mal. No se toca ClickUp.
+ *
+ * `dryRun` solo cuenta, sin modificar nada.
+ */
+export const _dedupeClickupTasks = internalMutation({
+  args: { dryRun: v.boolean() },
+  handler: async (ctx, { dryRun }) => {
+    const all = await ctx.db.query("tasks").collect();
+    const byClickupId = new Map<string, typeof all>();
+    for (const t of all) {
+      if (!t.clickupId || t.deletedAt !== undefined) continue;
+      const arr = byClickupId.get(t.clickupId) ?? [];
+      arr.push(t);
+      byClickupId.set(t.clickupId, arr);
+    }
+
+    const now = Date.now();
+    let groups = 0;
+    let removed = 0;
+    const detail: { clickupId: string; title: string; copies: number }[] = [];
+
+    for (const [clickupId, tasks] of byClickupId) {
+      if (tasks.length < 2) continue;
+      groups++;
+      detail.push({
+        clickupId,
+        title: tasks[0].title,
+        copies: tasks.length,
+      });
+      const sorted = [...tasks].sort((a, b) => a.createdAt - b.createdAt);
+      // sorted[0] se queda; el resto se retira del tablero.
+      for (const dup of sorted.slice(1)) {
+        removed++;
+        if (!dryRun) {
+          await ctx.db.patch(dup._id, { deletedAt: now, updatedAt: now });
+        }
+      }
+    }
+    return { groups, removed, detail: detail.slice(0, 20) };
   },
 });

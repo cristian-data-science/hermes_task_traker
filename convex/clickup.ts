@@ -1895,3 +1895,34 @@ export const backfillClickupPaths = action({
     return { updated, failed, total: pending.length };
   },
 });
+
+/**
+ * Limpia tareas duplicadas: la misma tarea de ClickUp importada más de una
+ * vez al tablero. Deja la más vieja y retira las copias (soft-delete, sin
+ * tocar ClickUp).
+ *
+ * Existieron porque `_createInboundTask` no verificaba si el clickupId ya
+ * estaba en el tablero; eso ya se corrigió, así que esto es una limpieza de
+ * una sola vez para lo que quedó.
+ *
+ * Pública (action) con auth.
+ */
+export const cleanupDuplicateTasks = action({
+  args: { sessionToken: v.string(), dryRun: v.optional(v.boolean()) },
+  handler: async (
+    ctx,
+    { sessionToken, dryRun },
+  ): Promise<{
+    groups: number;
+    removed: number;
+    detail: { clickupId: string; title: string; copies: number }[];
+  }> => {
+    const ok = await ctx.runQuery(internal.settings._checkSession, {
+      sessionToken,
+    });
+    if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+    return await ctx.runMutation(internal.clickupMutations._dedupeClickupTasks, {
+      dryRun: dryRun === true,
+    });
+  },
+});
