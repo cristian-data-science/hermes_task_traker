@@ -127,6 +127,17 @@ export default defineSchema({
         resolvedAt: v.optional(v.number()),
       }),
     ),
+    // ===== Catch-up semanal =====
+    /**
+     * Pin "llevar al catch-up": la tarea aparece en el bloque "Temas para
+     * conversar" de la vista Catch-up. Se marca durante la semana, con el
+     * tema fresco, y se limpia al cerrar la semana.
+     */
+    catchupFlag: v.optional(v.boolean()),
+    /** Nota corta del porqué se marcó (qué querés conversar de esta tarea). */
+    catchupNote: v.optional(v.string()),
+    /** Cuándo se marcó, para ubicarla en la semana correcta. */
+    catchupFlaggedAt: v.optional(v.number()),
   })
     .index("by_status", ["status", "order"])
     .index("by_area", ["area", "order"])
@@ -144,6 +155,91 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
   }).index("by_task", ["taskId", "order"]),
+
+  // ===== Bitácora de actividad (alimenta la vista Catch-up) =====
+  /**
+   * Log append-only de lo que va pasando en el tablero. Existe porque los
+   * timestamps de `tasks` solo cuentan el estado FINAL (createdAt, completedAt,
+   * updatedAt): no sabrían decir "el jueves la moviste a en-curso y el viernes
+   * quedó en standby". El catch-up necesita justamente eso.
+   *
+   * Es append-only a propósito: nunca se edita ni se borra un evento. Si una
+   * tarea se elimina, su historial sobrevive — lo que hiciste esa semana
+   * sigue siendo cierto aunque la tarea ya no exista.
+   *
+   * Los campos `title`/`area` son SNAPSHOTS al momento del evento, no joins.
+   * Si la tarea se renombra después, el evento conserva cómo se llamaba
+   * entonces, que es lo que vas a reconocer al leer la semana.
+   */
+  events: defineTable({
+    taskId: v.id("tasks"),
+    kind: v.union(
+      v.literal("created"),
+      v.literal("status"),
+      v.literal("completed"),
+      v.literal("reopened"),
+      v.literal("progress"),
+      v.literal("subtask_done"),
+      v.literal("subtask_undone"),
+      v.literal("deleted"),
+      v.literal("flagged"),
+    ),
+    /** Timestamp del evento (ms). Índice principal de consulta por rango. */
+    at: v.number(),
+    /** Snapshot del área al momento del evento. */
+    area: v.string(),
+    /** Snapshot del título al momento del evento. */
+    title: v.string(),
+    fromStatus: v.optional(v.string()),
+    toStatus: v.optional(v.string()),
+    fromProgress: v.optional(v.number()),
+    toProgress: v.optional(v.number()),
+    /** Texto libre: título de la sub-tarea, nota del pin, etc. */
+    detail: v.optional(v.string()),
+    /** true si el evento lo originó el sync inbound de ClickUp, no vos. */
+    viaClickup: v.optional(v.boolean()),
+  })
+    .index("by_at", ["at"])
+    .index("by_task", ["taskId", "at"]),
+
+  // ===== Catch-ups cerrados (el ciclo semana a semana) =====
+  /**
+   * Una fila por semana cerrada. Guarda un SNAPSHOT congelado de lo que se
+   * presentó (no se recalcula después: lo que dijiste el martes pasado no
+   * cambia porque hoy hayas completado algo) más tus notas y los compromisos
+   * que asumiste para la semana siguiente.
+   *
+   * Los compromisos enlazados a una tarea (`taskId`) se resuelven solos
+   * leyendo el tablero; los sueltos se marcan a mano (`manualDone`).
+   */
+  catchups: defineTable({
+    /** Inicio del período (ms). Lo calcula el cliente en hora local. */
+    weekStart: v.number(),
+    /** Fin del período (ms, exclusivo). */
+    weekEnd: v.number(),
+    closedAt: v.number(),
+    /** Notas libres tuyas sobre la semana (markdown plano). */
+    notes: v.optional(v.string()),
+    /** JSON congelado de las métricas y listados al momento del cierre. */
+    snapshot: v.string(),
+    commitments: v.array(
+      v.object({
+        id: v.string(),
+        text: v.string(),
+        /** Tarea enlazada: permite resolver el cumplimiento automáticamente. */
+        taskId: v.optional(v.id("tasks")),
+        /** Marca manual para compromisos sin tarea enlazada. */
+        manualDone: v.optional(v.boolean()),
+        /**
+         * Cuántas semanas viene arrastrándose este compromiso. 0 = nuevo.
+         * Se muestra como "arrastrado ×N" — incómodo a propósito.
+         */
+        carryCount: v.optional(v.number()),
+      }),
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_weekStart", ["weekStart"]),
 
   // ===== Sesiones (token opaco, 30 días) =====
   sessions: defineTable({

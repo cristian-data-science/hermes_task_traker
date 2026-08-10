@@ -10,6 +10,7 @@ import {
   LogOut,
   Settings,
   Inbox,
+  ClipboardCheck,
 } from "lucide-react";
 import {
   AREAS,
@@ -22,7 +23,7 @@ import {
 import { THEMES, THEME_META, type ThemeId } from "../hooks/useTheme";
 import { cn } from "../lib/utils";
 
-export type ViewMode = "kanban" | "list" | "calendar";
+export type ViewMode = "kanban" | "list" | "calendar" | "catchup";
 
 interface ToolbarProps {
   view: ViewMode;
@@ -149,6 +150,12 @@ export function Toolbar({
                 onClick={() => onViewChange("calendar")}
                 icon={<CalendarDays className="h-4 w-4" />}
                 label="Calendario"
+              />
+              <ViewButton
+                active={view === "catchup"}
+                onClick={() => onViewChange("catchup")}
+                icon={<ClipboardCheck className="h-4 w-4" />}
+                label="Catch-up"
               />
             </div>
 

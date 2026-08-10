@@ -1,0 +1,198 @@
+/**
+ * Genera el texto plano del catch-up para pegar en un chat o un correo.
+ *
+ * ===== POR QUÉ NO ES UN VOLCADO DE LA PANTALLA =====
+ * La vista está pensada para leerse mientras conversás; el texto está pensado
+ * para que alguien que NO estuvo en la reunión entienda la semana. Por eso
+ * omite lo decorativo (colores, contadores redundantes) y prioriza el orden en
+ * que una jefatura pregunta: qué prometiste, qué hiciste, qué está abierto,
+ * qué está trabado, qué te cayó encima.
+ */
+
+import { format } from "date-fns";
+import { es } from "date-fns/locale";
+import type { FunctionReturnType } from "convex/server";
+import type { api } from "~/convex/_generated/api";
+
+export type WeekData = FunctionReturnType<typeof api.catchups.getWeek>;
+
+/** Etiqueta legible de un estado, sin depender del icono. */
+const STATUS_LABEL: Record<string, string> = {
+  urgente: "Urgente",
+  pendiente: "Pendiente",
+  "en-curso": "En curso",
+  standby: "Standby",
+  programado: "Programado",
+  completado: "Completado",
+};
+
+const OUTCOME_MARK: Record<string, string> = {
+  done: "[OK]",
+  progress: "[~]",
+  stalled: "[!]",
+  gone: "[-]",
+};
+
+/** Ubicación corta de una tarea: "Ley de Datos › desarrollo". */
+function place(item: { project: string | null; ancestors: string[] }): string {
+  const parts = [item.project, ...item.ancestors].filter(Boolean) as string[];
+  if (parts.length === 0) return "";
+  if (parts.length <= 2) return parts.join(" › ");
+  return `${parts[0]} › … › ${parts[parts.length - 1]}`;
+}
+
+const day = (ms: number) => format(new Date(ms), "EEEE d", { locale: es });
+
+/** Días completos entre dos instantes. */
+function daysAgo(since: number | null, now: number): number | null {
+  if (since === null) return null;
+  return Math.max(0, Math.floor((now - since) / 86400000));
+}
+
+/**
+ * Arma el resumen completo en markdown ligero (compatible con Teams, Slack y
+ * correo en texto plano).
+ */
+export function buildCatchupText(
+  data: WeekData,
+  opts: { windowLabel: string; notes?: string } = { windowLabel: "" },
+): string {
+  const now = Date.now();
+  const L: string[] = [];
+
+  L.push(`CATCH-UP · ${opts.windowLabel}`);
+  L.push("");
+
+  // ---- Compromisos de la semana anterior ---------------------------------
+  if (data.previous && data.previous.commitments.length > 0) {
+    L.push("## Compromisos de la semana pasada");
+    for (const c of data.previous.commitments) {
+      const carry = c.carryCount > 0 ? ` (arrastrado ×${c.carryCount})` : "";
+      L.push(`${OUTCOME_MARK[c.outcome] ?? "[?]"} ${c.text}${carry} — ${c.reason}`);
+    }
+    L.push("");
+  }
+
+  // ---- Titular -----------------------------------------------------------
+  const m = data.metrics;
+  const delta = m.completed - m.completedPrevWeek;
+  const deltaTxt =
+    delta === 0 ? "igual que la semana pasada" : `${delta > 0 ? "+" : ""}${delta} vs. semana pasada`;
+  L.push("## Resumen");
+  L.push(
+    `Completadas: ${m.completed} (${deltaTxt}) · Sub-tareas cerradas: ${m.subtasksClosed}`,
+  );
+  L.push(
+    `Abiertas ahora: ${m.inProgress} en curso · ${m.blocked} detenidas · Entraron: ${m.created}`,
+  );
+  L.push("");
+
+  // ---- Hecho -------------------------------------------------------------
+  if (data.done.length > 0) {
+    L.push("## Completado esta semana");
+    let lastDay = "";
+    for (const d of data.done) {
+      const dLabel = day(d.at);
+      if (dLabel !== lastDay) {
+        L.push(`**${dLabel}**`);
+        lastDay = dLabel;
+      }
+      const where = place(d);
+      L.push(`- ${d.title}${where ? ` — ${where}` : ""}`);
+      for (const s of d.subtasks) L.push(`    · ${s.title}`);
+    }
+    L.push("");
+  } else {
+    L.push("## Completado esta semana");
+    L.push("- Nada cerrado en esta ventana.");
+    L.push("");
+  }
+
+  // ---- Avances sin cierre ------------------------------------------------
+  // Una tarea grande puede no cerrarse en la semana y aun así haber avanzado.
+  // Sin este bloque, esas semanas se ven vacías aunque no lo estén.
+  const advanced = data.inProgress.filter((t) => t.advancedSubtasks.length > 0);
+  if (advanced.length > 0) {
+    L.push("## Avances en tareas todavía abiertas");
+    for (const t of advanced) {
+      L.push(`- ${t.title}${t.progress !== null ? ` (${t.progress}%)` : ""}`);
+      for (const s of t.advancedSubtasks) L.push(`    · ${s.title}`);
+    }
+    L.push("");
+  }
+
+  // ---- En curso ----------------------------------------------------------
+  if (data.inProgress.length > 0) {
+    L.push("## En curso ahora");
+    for (const t of data.inProgress) {
+      const d = daysAgo(t.since, now);
+      // El "~" marca que el dato es la edad de la tarea y no el tiempo real en
+      // el estado (tareas anteriores a la bitácora). Si se omitiera, el texto
+      // afirmaría algo que la app no sabe.
+      const approx = t.sinceKind === "created" ? "~" : "";
+      const age = d === null ? "" : d === 0 ? " · hoy" : ` · hace ${approx}${d} d`;
+      const where = place(t);
+      L.push(
+        `- ${t.title}${t.progress !== null ? ` (${t.progress}%)` : ""}${where ? ` — ${where}` : ""}${age}`,
+      );
+    }
+    L.push("");
+  }
+
+  // ---- Detenido ----------------------------------------------------------
+  if (data.blocked.length > 0) {
+    L.push("## Detenido / esperando");
+    for (const t of data.blocked) {
+      const d = daysAgo(t.since, now);
+      const approx = t.sinceKind === "created" ? "~" : "";
+      const age =
+        d === null ? "" : ` · ${approx}${d} d en ${STATUS_LABEL[t.status] ?? t.status}`;
+      L.push(`- ${t.title}${age}`);
+    }
+    L.push("");
+  }
+
+  // ---- Reabierto ---------------------------------------------------------
+  // Va antes de "entró esta semana" a propósito: es la mala noticia, y en un
+  // catch-up las malas noticias se dan temprano, no escondidas al final.
+  const reopened = new Map<string, (typeof data.moves)[number]>();
+  for (const m of data.moves) if (m.reopened) reopened.set(m.taskId, m);
+  if (reopened.size > 0) {
+    L.push("## Reabierto esta semana");
+    for (const m of reopened.values()) {
+      L.push(`- ${m.title} — volvió a ${STATUS_LABEL[m.to ?? ""] ?? m.to ?? "abierta"}`);
+    }
+    L.push("");
+  }
+
+  // ---- Entró esta semana -------------------------------------------------
+  if (data.incoming.length > 0) {
+    L.push("## Entró esta semana");
+    for (const t of data.incoming) {
+      const src = t.fromClickup ? "ClickUp" : "propia";
+      const closed = t.closedSameWeek ? " · ya cerrada" : "";
+      const who = t.requestedBy ? ` · pide: ${t.requestedBy}` : "";
+      L.push(`- ${t.title} (${src})${who}${closed}`);
+    }
+    L.push("");
+  }
+
+  // ---- Temas para conversar ----------------------------------------------
+  if (data.talkingPoints.length > 0) {
+    L.push("## Temas para conversar");
+    for (const t of data.talkingPoints) {
+      L.push(`- ${t.title}${t.note ? `: ${t.note}` : ""}`);
+    }
+    L.push("");
+  }
+
+  // ---- Notas -------------------------------------------------------------
+  const notes = opts.notes ?? data.closed?.notes;
+  if (notes && notes.trim()) {
+    L.push("## Notas");
+    L.push(notes.trim());
+    L.push("");
+  }
+
+  return L.join("\n").trimEnd() + "\n";
+}

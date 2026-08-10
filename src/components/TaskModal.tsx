@@ -28,6 +28,7 @@ import {
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
+import { CatchupNoteField } from "./CatchupPinButton";
 import {
   AREAS,
   STATUSES,
@@ -550,6 +551,10 @@ export function TaskModal({
                   </div>
                 </div>
               )}
+
+              {/* Pin de catch-up: solo al editar una tarea existente, porque
+                  necesita un id para persistir la marca. */}
+              {task && <CatchupNoteField task={task} />}
 
               {/* Notas */}
               <div className="mb-4">

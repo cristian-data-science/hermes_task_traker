@@ -9,6 +9,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
 import { internal } from "./_generated/api";
+import { logEvent, logStatusChange } from "./events";
 
 /** Literales de área y estado para reutilizar en validaciones. */
 const areaUnion = v.union(
@@ -251,6 +252,26 @@ export const create = mutation({
       updatedAt: now,
     });
 
+    // ===== Bitácora: la tarea nació =====
+    await logEvent(ctx, {
+      taskId,
+      kind: "created",
+      task: { title: sanitized.title ?? args.title, area: args.area },
+      at: now,
+      toStatus: args.status,
+    });
+    // Crear una tarea ya completada (registrar algo hecho a posteriori) cuenta
+    // como completada esa semana, no solo como creada.
+    if (args.status === "completado") {
+      await logEvent(ctx, {
+        taskId,
+        kind: "completed",
+        task: { title: sanitized.title ?? args.title, area: args.area },
+        at: now,
+        toStatus: "completado",
+      });
+    }
+
     // ===== Sync ClickUp outbound (solo patagonia) =====
     // El handler del scheduler valida enabled/área internamente; agendamos
     // sin más para que corra en background sin bloquear el retorno.
@@ -396,6 +417,35 @@ export const update = mutation({
       await ctx.db.patch(id, next);
     }
 
+    // ===== Bitácora =====
+    // Se registra con el título/área NUEVOS (los que quedaron tras el patch),
+    // porque es así como vas a reconocer la tarea al leer el catch-up.
+    const snapshot = {
+      title: patch.title ?? task.title,
+      area: patch.area ?? task.area,
+    };
+    if (newStatus && newStatus !== task.status) {
+      await logStatusChange(ctx, {
+        taskId: id,
+        task: snapshot,
+        from: task.status,
+        to: newStatus,
+        at: now,
+      });
+    }
+    // El progreso solo se registra si se movió de verdad. Guardar un evento
+    // por cada guardado del modal llenaría la semana de ruido sin contenido.
+    if (patch.progress !== undefined && patch.progress !== task.progress) {
+      await logEvent(ctx, {
+        taskId: id,
+        kind: "progress",
+        task: snapshot,
+        at: now,
+        fromProgress: task.progress,
+        toProgress: patch.progress,
+      });
+    }
+
     // ===== Sync ClickUp outbound (solo patagonia) =====
     // El área final puede haber cambiado: releemos para decidir.
     const updated = await ctx.db.get(id);
@@ -442,6 +492,17 @@ export const remove = mutation({
         .map((s) => ctx.db.patch(s._id, { deletedAt: now, updatedAt: now })),
     );
     await ctx.db.patch(id, { deletedAt: now, updatedAt: now });
+
+    // ===== Bitácora =====
+    // El evento sobrevive a la tarea: si la borraste el jueves, el catch-up
+    // igual puede contar que existió y qué pasó con ella esa semana.
+    await logEvent(ctx, {
+      taskId: id,
+      kind: "deleted",
+      task,
+      at: now,
+      fromStatus: task.status,
+    });
 
     // ===== Sync ClickUp: eliminar en ClickUp si estaba sincronizada =====
     // Al borrar en Hermes, borramos también en ClickUp (la tarea vino de acá).
@@ -534,6 +595,15 @@ export const changeStatus = mutation({
     });
     await Promise.all(updates);
 
+    // ===== Bitácora: arrastrar una tarjeta también es trabajo =====
+    await logStatusChange(ctx, {
+      taskId: id,
+      task,
+      from: oldStatus,
+      to: newStatus,
+      at: now,
+    });
+
     // ===== Sync ClickUp outbound (solo patagonia, solo si hubo cambio real) =====
     if (oldStatus !== newStatus && task.area === "patagonia" && task.clickupId) {
       await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
@@ -621,6 +691,19 @@ export const toggleComplete = mutation({
       );
     }
 
+    // ===== Bitácora =====
+    // Ojo: NO se registra un evento por cada sub-tarea del arrastre de arriba.
+    // Cerrar la tarea madre ya cuenta la historia; una tarea con 8 sub-tareas
+    // ahogaría el resumen de la semana en ruido y haría parecer que hiciste
+    // ocho cosas cuando hiciste una.
+    await logStatusChange(ctx, {
+      taskId: id,
+      task,
+      from: oldStatus,
+      to: newStatus,
+      at: now,
+    });
+
     // ===== Sync ClickUp outbound (solo patagonia) =====
     if (task.area === "patagonia" && task.clickupId) {
       await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
@@ -702,6 +785,55 @@ export const detachFromClickup = mutation({
       clickupSyncError: undefined,
       updatedAt: Date.now(),
     });
+    return id;
+  },
+});
+
+/**
+ * Pin "llevar al catch-up": marca o desmarca una tarea como tema a conversar
+ * con la jefatura, con una nota corta opcional.
+ *
+ * Existe para resolver el problema real: el martes a las 9 no te acordás de
+ * por qué el jueves anterior algo se trabó. Lo marcás en el momento, con el
+ * contexto fresco, y aparece solo en el bloque "Temas para conversar".
+ *
+ * El pin NO es un estado de la tarea ni toca ClickUp: es una anotación tuya
+ * para tu reunión.
+ */
+export const toggleCatchupFlag = mutation({
+  args: {
+    ...sessionArg,
+    id: v.id("tasks"),
+    /** Si se omite, alterna el valor actual. */
+    flagged: v.optional(v.boolean()),
+    note: v.optional(v.string()),
+  },
+  handler: async (ctx, { sessionToken, id, flagged, note }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(id);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    const now = Date.now();
+    const next = flagged ?? !task.catchupFlag;
+
+    await ctx.db.patch(id, {
+      catchupFlag: next,
+      // Al desmarcar se limpia la nota: dejarla colgando haría que reaparezca
+      // con un texto viejo la próxima vez que marques la misma tarea.
+      catchupNote: next ? note?.slice(0, TEXT_MAX * 3) : undefined,
+      catchupFlaggedAt: next ? (task.catchupFlaggedAt ?? now) : undefined,
+      updatedAt: now,
+    });
+
+    if (next) {
+      await logEvent(ctx, {
+        taskId: id,
+        kind: "flagged",
+        task,
+        at: now,
+        detail: note,
+      });
+    }
     return id;
   },
 });

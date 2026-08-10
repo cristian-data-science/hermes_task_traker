@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { requireAuth } from "./authGuard";
+import { logEvent } from "./events";
 
 /** Argumento de sesión obligatorio en toda función pública. */
 const sessionArg = { sessionToken: v.string() };
@@ -135,6 +136,21 @@ export const toggle = mutation({
     });
     // Si quedaron todas completadas → progreso 100% automático
     await syncProgressFromSubtasks(ctx, sub.taskId);
+
+    // ===== Bitácora =====
+    // Las sub-tareas son la evidencia granular del avance: una tarea grande
+    // que no se completa en toda la semana igual tiene entregables que
+    // mostrar, y salen de acá.
+    const parent = await ctx.db.get(sub.taskId);
+    if (parent) {
+      await logEvent(ctx, {
+        taskId: sub.taskId,
+        kind: done ? "subtask_done" : "subtask_undone",
+        task: parent,
+        at: now,
+        detail: sub.title,
+      });
+    }
     return id;
   },
 });

@@ -5,6 +5,7 @@ import {
   SETTINGS_KEY_LAST_INBOUND,
   type HermesStatus,
 } from "./clickupConfig";
+import { logEvent, logStatusChange } from "./events";
 
 /**
  * Mutaciones internas para la integración ClickUp.
@@ -239,6 +240,18 @@ export const _createInboundTask = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    // ===== Bitácora =====
+    // Las tareas importadas alimentan el bloque "Entró esta semana", que es
+    // lo que justifica por qué no avanzó lo planificado.
+    await logEvent(ctx, {
+      taskId,
+      kind: "created",
+      task: { title: args.title.slice(0, 200), area: "patagonia" },
+      at: now,
+      toStatus: args.status,
+      viaClickup: true,
+    });
     return taskId;
   },
 });
@@ -263,6 +276,20 @@ export const _applyInboundStatus = internalMutation({
       completedAt:
         args.status === "completado" ? (task.completedAt ?? now) : undefined,
       updatedAt: now,
+    });
+
+    // ===== Bitácora =====
+    // Un cambio aprobado desde el modal de sync inbound es trabajo tuyo igual
+    // (vos lo aprobaste), pero se marca `viaClickup` para poder distinguirlo:
+    // si algo se completó porque otra persona lo cerró en ClickUp, no es lo
+    // mismo que si lo cerraste vos, y el catch-up debe poder notarlo.
+    await logStatusChange(ctx, {
+      taskId: args.taskId,
+      task,
+      from: task.status,
+      to: args.status,
+      at: now,
+      viaClickup: true,
     });
   },
 });

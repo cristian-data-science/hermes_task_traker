@@ -11,6 +11,7 @@ import { Toolbar, type ViewMode } from "./components/Toolbar";
 import { KanbanView } from "./components/KanbanView";
 import { ListView } from "./components/ListView";
 import { CalendarView } from "./components/CalendarView";
+import { CatchupView } from "./components/CatchupView";
 import { TaskModal } from "./components/TaskModal";
 import { AssignedInboxModal } from "./components/AssignedInboxModal";
 import { ClickUpSettings } from "./components/ClickUpSettings";
@@ -169,14 +170,21 @@ function Dashboard({
                 onEditTask={openEdit}
                 onNewTask={(area) => openNew(undefined, area)}
               />
-            ) : (
+            ) : view === "calendar" ? (
               <CalendarView tasks={filteredTasks} onEditTask={openEdit} />
+            ) : (
+              // El catch-up NO recibe `filteredTasks`: su ventana temporal y su
+              // alcance de área los define él mismo. Filtrar el tablero por
+              // "urgente" no debería mutilar el resumen que le presentás a tu
+              // jefatura. Recibe la lista completa solo para poder abrir el
+              // modal de edición desde sus filas.
+              <CatchupView tasks={tasks} onEditTask={openEdit} />
             )}
           </motion.div>
         </AnimatePresence>
 
-        {/* Estado vacío */}
-        {filteredTasks.length === 0 && (
+        {/* Estado vacío (no aplica al catch-up: tiene sus propios vacíos) */}
+        {filteredTasks.length === 0 && view !== "catchup" && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
