@@ -12,6 +12,7 @@ import type * as auth from "../auth.js";
 import type * as authGuard from "../authGuard.js";
 import type * as authQuery from "../authQuery.js";
 import type * as catchupConfig from "../catchupConfig.js";
+import type * as catchupLogic from "../catchupLogic.js";
 import type * as catchups from "../catchups.js";
 import type * as clickup from "../clickup.js";
 import type * as clickupConfig from "../clickupConfig.js";
@@ -33,6 +34,7 @@ declare const fullApi: ApiFromModules<{
   authGuard: typeof authGuard;
   authQuery: typeof authQuery;
   catchupConfig: typeof catchupConfig;
+  catchupLogic: typeof catchupLogic;
   catchups: typeof catchups;
   clickup: typeof clickup;
   clickupConfig: typeof clickupConfig;

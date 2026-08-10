@@ -235,6 +235,16 @@ export default defineSchema({
          * Se muestra como "arrastrado ×N" — incómodo a propósito.
          */
         carryCount: v.optional(v.number()),
+        /**
+         * Identidad estable a través de los arrastres: todas las apariciones
+         * del MISMO compromiso, semana tras semana, comparten `rootId`.
+         *
+         * Es lo que permite reconstruir el linaje ("esto lo venís prometiendo
+         * hace 5 semanas") sin lo cual la bitácora es una pila de semanas
+         * sueltas. Opcional porque los cierres anteriores a este campo no lo
+         * tienen: para esos se deduce del sufijo del `id`.
+         */
+        rootId: v.optional(v.string()),
       }),
     ),
     createdAt: v.number(),

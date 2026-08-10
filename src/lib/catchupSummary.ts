@@ -16,6 +16,19 @@ import type { api } from "~/convex/_generated/api";
 
 export type WeekData = FunctionReturnType<typeof api.catchups.getWeek>;
 
+/**
+ * La parte del resumen que describe UNA semana concreta.
+ *
+ * Se separa del resto (`previous`, `closed`, `anchorDay`, que son contexto del
+ * ciclo) porque es exactamente lo que se congela al cerrar. Así el mismo
+ * componente y el mismo generador de texto sirven para la semana en vivo y
+ * para un snapshot guardado hace tres meses, sin ramas duplicadas.
+ */
+export type WeekBody = Pick<
+  WeekData,
+  "metrics" | "done" | "inProgress" | "blocked" | "incoming" | "moves" | "talkingPoints"
+>;
+
 /** Etiqueta legible de un estado, sin depender del icono. */
 const STATUS_LABEL: Record<string, string> = {
   urgente: "Urgente",
@@ -54,11 +67,22 @@ function daysAgo(since: number | null, now: number): number | null {
  * correo en texto plano).
  */
 export function buildCatchupText(
-  data: WeekData,
-  opts: { windowLabel: string; notes?: string } = { windowLabel: "" },
+  full: WeekData,
+  opts: {
+    windowLabel: string;
+    /**
+     * Cuerpo a volcar. Permite exportar el snapshot congelado de una semana
+     * cerrada en vez del recálculo en vivo. Si se omite, se usa el de `full`.
+     */
+    body?: WeekBody;
+    notes?: string;
+  },
 ): string {
   const now = Date.now();
   const L: string[] = [];
+  // `data` es el cuerpo (puede ser congelado); `full` conserva el contexto del
+  // ciclo (compromisos previos, notas del cierre), que no vive en el snapshot.
+  const data = { ...full, ...(opts.body ?? {}) };
 
   L.push(`CATCH-UP · ${opts.windowLabel}`);
   L.push("");

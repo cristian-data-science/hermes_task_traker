@@ -42,6 +42,7 @@ import {
   ACTIVE_STATUSES,
   BLOCKED_STATUSES,
 } from "./catchupConfig";
+import { rootIdOf, classifyChain, countFulfilled } from "./catchupLogic";
 
 const sessionArg = { sessionToken: v.string() };
 
@@ -105,6 +106,7 @@ export interface OpenItem extends Placement {
 /** Un compromiso de la semana anterior, ya resuelto contra el tablero. */
 export interface ResolvedCommitment {
   id: string;
+  rootId: string;
   text: string;
   taskId: string | null;
   carryCount: number;
@@ -113,6 +115,10 @@ export interface ResolvedCommitment {
   /** Explicación corta y honesta del outcome, para mostrar en la UI. */
   reason: string;
 }
+
+// `rootIdOf`, `classifyChain` y `countFulfilled` viven en `catchupLogic.ts`:
+// son las reglas que producen los números que presentás, y ahí se pueden
+// probar sin base de datos.
 
 // ============================================================
 //  HELPERS
@@ -382,6 +388,7 @@ async function resolveCommitments(
   for (const c of commitments) {
     const base = {
       id: c.id,
+      rootId: rootIdOf(c),
       text: c.text,
       taskId: (c.taskId as string | undefined) ?? null,
       carryCount: c.carryCount ?? 0,
@@ -432,6 +439,18 @@ async function resolveCommitments(
   return out;
 }
 
+/**
+ * Parsea un snapshot congelado. Devuelve null si está corrupto en vez de
+ * lanzar: una fila mala no puede tumbar la bitácora entera.
+ */
+function parseSnapshot(raw: string): WeekSummary | null {
+  try {
+    return JSON.parse(raw) as WeekSummary;
+  } catch {
+    return null;
+  }
+}
+
 // ============================================================
 //  QUERIES
 // ============================================================
@@ -471,10 +490,22 @@ export const getWeek = query({
             closedAt: closed.closedAt,
             notes: closed.notes ?? null,
             commitments: await resolveCommitments(ctx, closed.commitments, from),
+            /**
+             * El resumen TAL COMO SE PRESENTÓ ese día.
+             *
+             * Sin esto, navegar a una semana pasada mostraba los bloques "En
+             * curso" y "Detenido" recalculados con el tablero de HOY: parecía
+             * histórico y no lo era. Un error silencioso, del peor tipo, porque
+             * la pantalla no daba ninguna pista de que estaba mintiendo.
+             */
+            snapshot: parseSnapshot(closed.snapshot),
           }
         : null,
       previous: previous
         ? {
+            // El id viaja para poder marcar a mano los compromisos sin tarea
+            // enlazada desde el bloque "Venís de".
+            id: previous._id as string,
             weekStart: previous.weekStart,
             weekEnd: previous.weekEnd,
             closedAt: previous.closedAt,
@@ -529,12 +560,7 @@ export const getClosed = query({
     await requireAuth(ctx, sessionToken);
     const row = await ctx.db.get(id);
     if (!row) return null;
-    let snapshot: unknown = null;
-    try {
-      snapshot = JSON.parse(row.snapshot);
-    } catch {
-      snapshot = null;
-    }
+    const snapshot = parseSnapshot(row.snapshot);
     return {
       id: row._id as string,
       weekStart: row.weekStart,
@@ -544,6 +570,178 @@ export const getClosed = query({
       snapshot,
       commitments: await resolveCommitments(ctx, row.commitments, row.weekStart),
     };
+  },
+});
+
+/**
+ * Cadena de compromisos: el linaje completo de cada promesa a través de las
+ * semanas.
+ *
+ * ===== POR QUÉ ESTA VISTA EXISTE =====
+ * Sin ella, la bitácora es una pila de semanas sueltas y el arrastre solo se
+ * ve de a una semana por vez. "Esto lo venís prometiendo hace cinco martes"
+ * es una frase que la app puede decir y vos no podés reconstruir de memoria —
+ * y es exactamente la que más te conviene decir vos antes que tu jefatura.
+ *
+ * Un compromiso puede terminar de tres maneras, y las tres importan:
+ *  - **cumplido**: la tarea enlazada se completó (o lo marcaste a mano).
+ *  - **abierto**: sigue vivo en el último catch-up cerrado.
+ *  - **abandonado**: dejó de aparecer sin haberse cumplido. Esto es lo que
+ *    normalmente se pierde: no falla ruidosamente, simplemente desaparece.
+ */
+export const chain = query({
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    const rows = (await ctx.db.query("catchups").collect()).sort(
+      (a, b) => a.weekStart - b.weekStart,
+    );
+    if (rows.length === 0) return [];
+    const latestWeekStart = rows[rows.length - 1].weekStart;
+
+    interface Appearance {
+      weekStart: number;
+      weekEnd: number;
+      closedAt: number;
+      carryCount: number;
+      text: string;
+    }
+    const chains = new Map<
+      string,
+      {
+        rootId: string;
+        appearances: Appearance[];
+        taskId?: Id<"tasks">;
+        manualDone: boolean;
+      }
+    >();
+
+    for (const row of rows) {
+      for (const c of row.commitments) {
+        const key = rootIdOf(c);
+        const entry = chains.get(key) ?? {
+          rootId: key,
+          appearances: [],
+          taskId: undefined as Id<"tasks"> | undefined,
+          manualDone: false,
+        };
+        entry.appearances.push({
+          weekStart: row.weekStart,
+          weekEnd: row.weekEnd,
+          closedAt: row.closedAt,
+          carryCount: c.carryCount ?? 0,
+          text: c.text,
+        });
+        // La tarea enlazada y la marca manual se toman de la aparición MÁS
+        // RECIENTE: si enlazaste la tarea recién en la tercera semana, esa es
+        // la información buena.
+        if (c.taskId) entry.taskId = c.taskId;
+        if (c.manualDone) entry.manualDone = true;
+        chains.set(key, entry);
+      }
+    }
+
+    const out = [];
+    for (const entry of chains.values()) {
+      const last = entry.appearances[entry.appearances.length - 1];
+      const stillLive = last.weekStart === latestWeekStart;
+
+      const task = entry.taskId ? await ctx.db.get(entry.taskId) : null;
+      const alive = !!task && task.deletedAt === undefined;
+
+      const { outcome, reason } = classifyChain({
+        stillLive,
+        taskCompleted: alive && task.status === "completado",
+        manualDone: entry.manualDone,
+        taskAlive: alive,
+        taskStatus: task?.status,
+      });
+
+      out.push({
+        rootId: entry.rootId,
+        /** Último texto: si lo reformulaste, vale la versión más reciente. */
+        text: last.text,
+        taskId: (entry.taskId as string | undefined) ?? null,
+        appearances: entry.appearances,
+        weeks: entry.appearances.length,
+        firstWeek: entry.appearances[0].weekStart,
+        lastWeek: last.weekStart,
+        outcome,
+        reason,
+      });
+    }
+
+    // Lo más arrastrado primero: es lo que hay que mirar.
+    return out.sort(
+      (a, b) => b.weeks - a.weeks || b.lastWeek - a.lastWeek,
+    );
+  },
+});
+
+/**
+ * Serie temporal para el gráfico de la bitácora.
+ *
+ * ===== CÓMO SE MIDE EL CUMPLIMIENTO =====
+ * No se pregunta "¿la tarea está completada hoy?", porque eso premiaría un
+ * compromiso cumplido tres meses tarde como si se hubiera cumplido a tiempo.
+ * Se mira qué decidiste vos en el catch-up SIGUIENTE:
+ *
+ *  - si el compromiso volvió a aparecer arrastrado → no se cumplió;
+ *  - si desapareció y la tarea está completada (o lo marcaste) → se cumplió;
+ *  - si desapareció sin cerrarse → no se cumplió (se abandonó).
+ *
+ * La semana más reciente no tiene un "siguiente" contra el cual medirse, así
+ * que devuelve `rate: null` y el gráfico la dibuja como pendiente en vez de
+ * inventarle un 0% que arruinaría la tendencia.
+ */
+export const trend = query({
+  args: { ...sessionArg, weeks: v.optional(v.number()) },
+  handler: async (ctx, { sessionToken, weeks }) => {
+    await requireAuth(ctx, sessionToken);
+    const limit = Math.max(1, Math.min(52, Math.floor(weeks ?? 12)));
+    const all = (await ctx.db.query("catchups").collect()).sort(
+      (a, b) => a.weekStart - b.weekStart,
+    );
+
+    const out = [];
+    for (let i = 0; i < all.length; i++) {
+      const row = all[i];
+      const next = all[i + 1];
+      const snap = parseSnapshot(row.snapshot);
+
+      const total = row.commitments.length;
+      let done = 0;
+      if (next) {
+        // Se resuelven las tareas ANTES de contar: `countFulfilled` es puro y
+        // no puede leer la base, que es precisamente lo que lo hace testeable.
+        const completedIds = new Set<string>();
+        for (const c of row.commitments) {
+          if (!c.taskId) continue;
+          const task = await ctx.db.get(c.taskId);
+          if (task && task.deletedAt === undefined && task.status === "completado") {
+            completedIds.add(c.taskId);
+          }
+        }
+        done = countFulfilled(
+          row.commitments,
+          new Set(next.commitments.map(rootIdOf)),
+          (taskId) => completedIds.has(taskId),
+        );
+      }
+
+      out.push({
+        weekStart: row.weekStart,
+        weekEnd: row.weekEnd,
+        completed: snap?.metrics.completed ?? 0,
+        subtasksClosed: snap?.metrics.subtasksClosed ?? 0,
+        commitmentsTotal: total,
+        commitmentsDone: next ? done : null,
+        /** 0..1, o null si todavía no hay semana siguiente que la evalúe. */
+        rate: next && total > 0 ? done / total : null,
+      });
+    }
+
+    return out.slice(-limit);
   },
 });
 
@@ -609,6 +807,7 @@ export const close = mutation({
         taskId: v.optional(v.id("tasks")),
         manualDone: v.optional(v.boolean()),
         carryCount: v.optional(v.number()),
+        rootId: v.optional(v.string()),
       }),
     ),
     /**
@@ -633,6 +832,10 @@ export const close = mutation({
         ...c,
         text: c.text.trim().slice(0, COMMITMENT_MAX),
         carryCount: Math.max(0, Math.floor(c.carryCount ?? 0)),
+        // Un compromiso nuevo es la raíz de su propia cadena. Los arrastrados
+        // llegan con el rootId del original, y así el linaje se mantiene
+        // aunque reformules el texto en el camino.
+        rootId: c.rootId ?? rootIdOf(c),
       }))
       .filter((c) => c.text.length > 0);
 
@@ -686,6 +889,43 @@ export const close = mutation({
     }
 
     return id;
+  },
+});
+
+/**
+ * Marca a mano un compromiso como cumplido.
+ *
+ * Solo tiene sentido para los compromisos SIN tarea enlazada ("hablar con
+ * legales", "revisar el contrato"): los enlazados se resuelven solos y
+ * permitir pisarlos a mano abriría la puerta a maquillar la métrica, que es
+ * justo lo contrario de para lo que sirve.
+ */
+export const setCommitmentDone = mutation({
+  args: {
+    ...sessionArg,
+    catchupId: v.id("catchups"),
+    commitmentId: v.string(),
+    done: v.boolean(),
+  },
+  handler: async (ctx, { sessionToken, catchupId, commitmentId, done }) => {
+    await requireAuth(ctx, sessionToken);
+    const row = await ctx.db.get(catchupId);
+    if (!row) throw new Error("Catch-up no encontrado");
+
+    const target = row.commitments.find((c) => c.id === commitmentId);
+    if (!target) throw new Error("Compromiso no encontrado");
+    if (target.taskId) {
+      throw new Error(
+        "Este compromiso está enlazado a una tarea: se cumple completando la tarea, no marcándolo acá",
+      );
+    }
+
+    await ctx.db.patch(catchupId, {
+      commitments: row.commitments.map((c) =>
+        c.id === commitmentId ? { ...c, manualDone: done } : c,
+      ),
+      updatedAt: Date.now(),
+    });
   },
 });
 

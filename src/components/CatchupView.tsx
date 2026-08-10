@@ -17,6 +17,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
 import { es } from "date-fns/locale";
@@ -41,6 +42,14 @@ import {
   Minus,
   Inbox,
   Loader2,
+  Archive,
+  RefreshCw,
+  Link2,
+  CalendarRange,
+  ListChecks,
+  BarChart3,
+  Square,
+  CheckSquare,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "~/convex/_generated/api";
@@ -54,7 +63,11 @@ import {
 } from "~/convex/catchupConfig";
 import { useAuth } from "../hooks/useAuth";
 import { STATUS_META, type Status } from "../lib/constants";
-import { buildCatchupText, type WeekData } from "../lib/catchupSummary";
+import {
+  buildCatchupText,
+  type WeekData,
+  type WeekBody,
+} from "../lib/catchupSummary";
 import { cn } from "../lib/utils";
 
 interface CatchupViewProps {
@@ -69,6 +82,11 @@ interface CommitmentDraft {
   text: string;
   taskId?: Id<"tasks">;
   carryCount: number;
+  /**
+   * Identidad estable a través de los arrastres. Se propaga al arrastrar para
+   * que la bitácora pueda reconstruir el linaje aunque reformules el texto.
+   */
+  rootId: string;
 }
 
 const DAY_MS = 86400000;
@@ -100,6 +118,17 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
       : "skip",
   );
 
+  /**
+   * Semana cerrada CON snapshot: se puede mostrar lo que se presentó ese día.
+   *
+   * Por defecto se muestra el congelado, no el estado de hoy. Un catch-up
+   * cerrado es un documento, no un tablero en vivo: si al abrirlo mostrara el
+   * presente, la pantalla estaría afirmando cosas falsas sobre el pasado sin
+   * ninguna señal de que lo hace.
+   */
+  const frozen = !!data?.closed?.snapshot;
+  const [showFrozen, setShowFrozen] = useState(true);
+
   const windowLabel = formatWindowLabel(from, to);
   const isCurrent = offset === 0;
 
@@ -111,8 +140,23 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
     );
   }
 
+  // Alias ya estrechado: TypeScript pierde el narrowing de `data` dentro de
+  // los closures de abajo, y `data!` en cada uso ensucia más de lo que aclara.
+  const week = data;
+
+  /** Lo que se dibuja: el snapshot congelado o el cálculo en vivo. */
+  const body: WeekBody =
+    frozen && showFrozen ? week.closed!.snapshot! : (week as WeekBody);
+
   function copySummary() {
-    const text = buildCatchupText(data as WeekData, { windowLabel });
+    // El texto copiado sigue al toggle: si estás mirando lo que presentaste,
+    // eso es lo que se copia. Copiar una cosa distinta de la que se ve sería
+    // una trampa silenciosa.
+    const text = buildCatchupText(week as WeekData, {
+      windowLabel,
+      body,
+      notes: week.closed?.notes ?? undefined,
+    });
     navigator.clipboard
       .writeText(text)
       .then(() => toast.success("Resumen copiado"))
@@ -189,44 +233,17 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
         <PreviousBlock previous={data.previous} tasks={tasks} onEditTask={onEditTask} />
       )}
 
-      {/* ===== 2. Métricas ===== */}
-      <MetricsRow metrics={data.metrics} />
+      {/* Aviso + toggle cuando la semana está cerrada y hay snapshot */}
+      {frozen && (
+        <FrozenBanner
+          mode={showFrozen ? "frozen" : "today"}
+          closedAt={data.closed!.closedAt}
+          onToggle={() => setShowFrozen((v) => !v)}
+        />
+      )}
 
-      {/* ===== 3. Completado ===== */}
-      <DoneBlock done={data.done} tasks={tasks} onEditTask={onEditTask} />
-
-      {/* ===== 3b. Avances sin cierre ===== */}
-      <AdvancedBlock inProgress={data.inProgress} tasks={tasks} onEditTask={onEditTask} />
-
-      {/* ===== 4. En curso ===== */}
-      <OpenBlock
-        title="En curso ahora"
-        subtitle="Lo que está abierto y su antigüedad en el estado actual"
-        items={data.inProgress}
-        empty="No hay nada en curso ni urgente."
-        tasks={tasks}
-        onEditTask={onEditTask}
-      />
-
-      {/* ===== 5. Detenido ===== */}
-      <OpenBlock
-        title="Detenido / esperando"
-        subtitle="Standby y programado — lo que se conversa en el catch-up"
-        items={data.blocked}
-        empty="Nada detenido."
-        warnAfterDays={14}
-        tasks={tasks}
-        onEditTask={onEditTask}
-      />
-
-      {/* ===== 5b. Reabierto ===== */}
-      <ReopenedBlock moves={data.moves} tasks={tasks} onEditTask={onEditTask} />
-
-      {/* ===== 6. Entró esta semana ===== */}
-      <IncomingBlock incoming={data.incoming} tasks={tasks} onEditTask={onEditTask} />
-
-      {/* ===== 7. Temas para conversar ===== */}
-      <TalkingPointsBlock points={data.talkingPoints} tasks={tasks} onEditTask={onEditTask} />
+      {/* ===== 2 a 7: el cuerpo del resumen ===== */}
+      <CatchupBody body={body} tasks={tasks} onEditTask={onEditTask} />
 
       <AnimatePresence>
         {closing && (
@@ -248,6 +265,103 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
 // ============================================================
 //  BLOQUES
 // ============================================================
+
+/**
+ * El cuerpo del resumen de una semana.
+ *
+ * Se extrae en su propio componente para que la semana en vivo, una semana
+ * cerrada y un catch-up abierto desde la bitácora se dibujen con el MISMO
+ * código. Si fueran tres renders distintos, con el tiempo se desincronizarían
+ * y la versión histórica —la que menos se mira— sería la que quedaría rota.
+ */
+function CatchupBody({
+  body,
+  tasks,
+  onEditTask,
+}: {
+  body: WeekBody;
+  tasks: Doc<"tasks">[];
+  onEditTask: (t: Doc<"tasks">) => void;
+}) {
+  return (
+    <>
+      <MetricsRow metrics={body.metrics} />
+      <DoneBlock done={body.done} tasks={tasks} onEditTask={onEditTask} />
+      <AdvancedBlock inProgress={body.inProgress} tasks={tasks} onEditTask={onEditTask} />
+      <OpenBlock
+        title="En curso"
+        subtitle="Lo abierto y su antigüedad en el estado actual"
+        items={body.inProgress}
+        empty="No hay nada en curso ni urgente."
+        tasks={tasks}
+        onEditTask={onEditTask}
+      />
+      <OpenBlock
+        title="Detenido / esperando"
+        subtitle="Standby y programado — lo que se conversa en el catch-up"
+        items={body.blocked}
+        empty="Nada detenido."
+        warnAfterDays={14}
+        tasks={tasks}
+        onEditTask={onEditTask}
+      />
+      <ReopenedBlock moves={body.moves} tasks={tasks} onEditTask={onEditTask} />
+      <IncomingBlock incoming={body.incoming} tasks={tasks} onEditTask={onEditTask} />
+      <TalkingPointsBlock points={body.talkingPoints} tasks={tasks} onEditTask={onEditTask} />
+    </>
+  );
+}
+
+/**
+ * Sello de "esto es historia" con el toggle para comparar contra el presente.
+ *
+ * El sello no es decorativo: sin él, una semana cerrada y la semana en curso
+ * se ven idénticas, y no habría forma de saber si los números que estás
+ * leyendo son de entonces o de ahora.
+ */
+function FrozenBanner({
+  mode,
+  closedAt,
+  onToggle,
+}: {
+  mode: "frozen" | "today";
+  closedAt: number;
+  onToggle: () => void;
+}) {
+  const isFrozen = mode === "frozen";
+  return (
+    <div
+      className={cn(
+        "mb-4 flex flex-wrap items-center gap-2 rounded-el border-el px-3 py-2",
+        isFrozen ? "border-accent/40 bg-accent/5" : "border-amber-500/40 bg-amber-500/5",
+      )}
+    >
+      {isFrozen ? (
+        <Archive className="h-4 w-4 shrink-0 text-accent" />
+      ) : (
+        <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500" />
+      )}
+      <p className="min-w-0 flex-1 text-xs text-ink">
+        {isFrozen ? (
+          <>
+            <span className="font-semibold">Así lo presentaste</span> — congelado
+            al cerrar, el{" "}
+            {format(new Date(closedAt), "d 'de' MMMM 'a las' HH:mm", { locale: es })}.
+          </>
+        ) : (
+          <>
+            <span className="font-semibold">Estado de hoy</span> — estos bloques
+            reflejan el tablero actual, no cómo estaba esa semana.
+          </>
+        )}
+      </p>
+      <button onClick={onToggle} className="btn btn-secondary shrink-0 gap-1.5 text-xs">
+        <RefreshCw className="h-3.5 w-3.5" />
+        {isFrozen ? "Ver cómo está hoy" : "Ver lo que presenté"}
+      </button>
+    </div>
+  );
+}
 
 /** Contenedor común de cada sección, para que todas respiren igual. */
 function Section({
@@ -347,7 +461,10 @@ function PreviousBlock({
   tasks: Doc<"tasks">[];
   onEditTask: (t: Doc<"tasks">) => void;
 }) {
+  const { token } = useAuth();
+  const setDone = useMutation(api.catchups.setCommitmentDone);
   const done = previous.commitments.filter((c) => c.outcome === "done").length;
+
   return (
     <Section
       title="Venís de"
@@ -356,9 +473,20 @@ function PreviousBlock({
       <div className="overflow-hidden rounded-el border-el border-line bg-panel shadow-el">
         {previous.commitments.map((c) => {
           const task = c.taskId ? tasks.find((t) => t._id === c.taskId) : undefined;
+          // Sin tarea enlazada la app no puede saber si lo cumpliste: el
+          // check es la única fuente de verdad y por eso es clickeable.
+          // Con tarea enlazada NO lo es — se cumple completando la tarea, y
+          // permitir marcarlo a mano sería poder maquillar la métrica.
+          const manual = c.taskId === null;
           const mark =
             c.outcome === "done" ? (
-              <Check className="h-4 w-4 text-emerald-500" />
+              manual ? (
+                <CheckSquare className="h-4 w-4 text-emerald-500" />
+              ) : (
+                <Check className="h-4 w-4 text-emerald-500" />
+              )
+            ) : manual ? (
+              <Square className="h-4 w-4 text-faint" />
             ) : c.outcome === "progress" ? (
               <CircleDashed className="h-4 w-4 text-amber-500" />
             ) : c.outcome === "gone" ? (
@@ -375,7 +503,30 @@ function PreviousBlock({
               )}
               onClick={() => task && onEditTask(task)}
             >
-              <span className="mt-0.5 shrink-0">{mark}</span>
+              {manual ? (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (!token) return;
+                    void setDone({
+                      sessionToken: token,
+                      catchupId: previous.id as Id<"catchups">,
+                      commitmentId: c.id,
+                      done: c.outcome !== "done",
+                    }).catch((err: unknown) =>
+                      toast.error(
+                        err instanceof Error ? err.message : "No se pudo marcar",
+                      ),
+                    );
+                  }}
+                  title="Marcar como cumplido"
+                  className="mt-0.5 shrink-0 transition-transform hover:scale-110"
+                >
+                  {mark}
+                </button>
+              ) : (
+                <span className="mt-0.5 shrink-0">{mark}</span>
+              )}
               <div className="min-w-0 flex-1">
                 <p
                   className={cn(
@@ -953,9 +1104,12 @@ function CloseModal({
         text: c.text,
         taskId: (c.taskId as Id<"tasks"> | null) ?? undefined,
         carryCount: c.carryCount,
+        rootId: c.rootId,
       }));
     }
     // Arranque nuevo: se arrastra lo que quedó pendiente la semana pasada.
+    // "gone" (la tarea ya no existe) no se arrastra: no tendría contra qué
+    // resolverse y quedaría eternamente sin desenlace.
     const carried = (data.previous?.commitments ?? [])
       .filter((c) => c.outcome !== "done" && c.outcome !== "gone")
       .map((c) => ({
@@ -963,15 +1117,18 @@ function CloseModal({
         text: c.text,
         taskId: (c.taskId as Id<"tasks"> | null) ?? undefined,
         carryCount: c.carryCount + 1,
+        // El rootId NO cambia: es lo que une esta aparición con la original.
+        rootId: c.rootId,
       }));
     return carried;
   });
 
   function addDraft() {
-    setDrafts((d) => [
-      ...d,
-      { id: `new-${Date.now()}-${d.length}`, text: "", carryCount: 0 },
-    ]);
+    setDrafts((d) => {
+      const id = `new-${Date.now()}-${d.length}`;
+      // Un compromiso nuevo es la raíz de su propia cadena.
+      return [...d, { id, rootId: id, text: "", carryCount: 0 }];
+    });
   }
 
   async function submit() {
@@ -990,6 +1147,7 @@ function CloseModal({
             text: d.text.trim(),
             taskId: d.taskId,
             carryCount: d.carryCount,
+            rootId: d.rootId,
           })),
       });
       toast.success("Catch-up cerrado");
@@ -1181,13 +1339,25 @@ function CloseModal({
 //  BITÁCORA
 // ============================================================
 
-/** Panel lateral con el historial de catch-ups cerrados. */
+type HistoryTab = "weeks" | "chain" | "trend";
+
+/**
+ * Bitácora: el panel que convierte los catch-ups cerrados en algo consultable.
+ *
+ * Tres pestañas, tres preguntas distintas:
+ *  - **Semanas**: "¿qué presenté el 4 de agosto?" → abre el snapshot real.
+ *  - **Compromisos**: "¿qué vengo prometiendo hace rato?" → el linaje.
+ *  - **Tendencia**: "¿estoy mejorando?" → volumen y cumplimiento en el tiempo.
+ */
 function HistoryDrawer({ onClose }: { onClose: () => void }) {
-  const { token } = useAuth();
-  const rows = useQuery(
-    api.catchups.history,
-    token ? { sessionToken: token } : "skip",
-  );
+  const [tab, setTab] = useState<HistoryTab>("weeks");
+  const [openId, setOpenId] = useState<Id<"catchups"> | null>(null);
+
+  const TABS: { id: HistoryTab; label: string; Icon: typeof CalendarRange }[] = [
+    { id: "weeks", label: "Semanas", Icon: CalendarRange },
+    { id: "chain", label: "Compromisos", Icon: ListChecks },
+    { id: "trend", label: "Tendencia", Icon: BarChart3 },
+  ];
 
   return (
     <motion.div
@@ -1202,7 +1372,7 @@ function HistoryDrawer({ onClose }: { onClose: () => void }) {
         animate={{ x: 0, opacity: 1 }}
         exit={{ x: 40, opacity: 0 }}
         onClick={(e) => e.stopPropagation()}
-        className="flex h-full w-full max-w-sm flex-col border-l border-line bg-canvas shadow-el-lg"
+        className="flex h-full w-full max-w-md flex-col border-l border-line bg-canvas shadow-el-lg"
       >
         <div className="flex items-center gap-2 border-b border-line px-4 py-3">
           <History className="h-4 w-4 text-accent" />
@@ -1211,42 +1381,501 @@ function HistoryDrawer({ onClose }: { onClose: () => void }) {
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 space-y-2 overflow-y-auto p-3">
-          {rows === undefined ? (
-            <div className="grid place-items-center py-8">
-              <Loader2 className="h-5 w-5 animate-spin text-accent" />
-            </div>
-          ) : rows.length === 0 ? (
-            <EmptyRow text="Todavía no cerraste ningún catch-up." />
-          ) : (
-            rows.map((r) => (
-              <div
-                key={r.id}
-                className="rounded-el border-el border-line bg-panel p-3 shadow-el"
-              >
-                <p className="text-sm font-semibold text-ink">
-                  {formatWindowLabel(r.weekStart, r.weekEnd)}
-                </p>
-                <p className="text-[11px] text-faint">
-                  Cerrado el{" "}
-                  {format(new Date(r.closedAt), "d 'de' MMMM, HH:mm", { locale: es })}
-                </p>
-                {r.metrics && (
-                  <p className="mt-1 text-xs text-mute">
-                    {r.metrics.completed} completadas · {r.metrics.subtasksClosed} sub-tareas ·{" "}
-                    {r.commitmentCount} compromisos
-                  </p>
-                )}
-                {r.notes && (
-                  <p className="mt-1 line-clamp-3 text-[11px] italic text-faint">
-                    {r.notes}
-                  </p>
-                )}
-              </div>
-            ))
-          )}
+
+        <div className="flex gap-0.5 border-b border-line px-2 py-1.5">
+          {TABS.map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              onClick={() => setTab(id)}
+              className={cn(
+                "flex flex-1 items-center justify-center gap-1.5 rounded-el px-2 py-1.5 text-xs font-medium transition-colors",
+                tab === id
+                  ? "bg-accent text-acfg"
+                  : "text-mute hover:bg-panel2 hover:text-ink",
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-3">
+          {tab === "weeks" && <WeeksTab onOpen={setOpenId} />}
+          {tab === "chain" && <ChainTab />}
+          {tab === "trend" && <TrendTab />}
         </div>
       </motion.aside>
+
+      <AnimatePresence>
+        {openId && (
+          <ClosedCatchupPanel id={openId} onClose={() => setOpenId(null)} />
+        )}
+      </AnimatePresence>
     </motion.div>
+  );
+}
+
+/** Pestaña "Semanas": lista de cierres, cada uno abrible. */
+function WeeksTab({ onOpen }: { onOpen: (id: Id<"catchups">) => void }) {
+  const { token } = useAuth();
+  const rows = useQuery(
+    api.catchups.history,
+    token ? { sessionToken: token } : "skip",
+  );
+
+  if (rows === undefined) return <DrawerLoader />;
+  if (rows.length === 0)
+    return <EmptyRow text="Todavía no cerraste ningún catch-up." />;
+
+  return (
+    <div className="space-y-2">
+      {rows.map((r) => (
+        <button
+          key={r.id}
+          onClick={() => onOpen(r.id as Id<"catchups">)}
+          className="w-full rounded-el border-el border-line bg-panel p-3 text-left shadow-el transition-colors hover:border-accent/50 hover:bg-panel2"
+        >
+          <div className="flex items-center gap-2">
+            <p className="min-w-0 flex-1 text-sm font-semibold text-ink">
+              {formatWindowLabel(r.weekStart, r.weekEnd)}
+            </p>
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-faint" />
+          </div>
+          <p className="text-[11px] text-faint">
+            Cerrado el{" "}
+            {format(new Date(r.closedAt), "d 'de' MMMM, HH:mm", { locale: es })}
+          </p>
+          {r.metrics && (
+            <p className="mt-1 text-xs text-mute">
+              {r.metrics.completed} completadas · {r.metrics.subtasksClosed}{" "}
+              sub-tareas · {r.commitmentCount} compromisos
+            </p>
+          )}
+          {r.notes && (
+            <p className="mt-1 line-clamp-2 text-[11px] italic text-faint">
+              {r.notes}
+            </p>
+          )}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Pestaña "Compromisos": el linaje de cada promesa a través de las semanas.
+ *
+ * Los abandonados van arriba de los cumplidos aunque sean menos: un compromiso
+ * que se dejó de mencionar es información que no aparece en ningún otro lado.
+ */
+function ChainTab() {
+  const { token } = useAuth();
+  const chains = useQuery(
+    api.catchups.chain,
+    token ? { sessionToken: token } : "skip",
+  );
+
+  if (chains === undefined) return <DrawerLoader />;
+  if (chains.length === 0)
+    return <EmptyRow text="Sin compromisos registrados todavía." />;
+
+  const RANK: Record<string, number> = { dropped: 0, open: 1, done: 2 };
+  const sorted = [...chains].sort(
+    (a, b) => RANK[a.outcome] - RANK[b.outcome] || b.weeks - a.weeks,
+  );
+
+  const META: Record<
+    string,
+    { label: string; tone: string; Icon: typeof Check }
+  > = {
+    done: { label: "Cumplido", tone: "text-emerald-500", Icon: Check },
+    open: { label: "Abierto", tone: "text-amber-500", Icon: CircleDashed },
+    dropped: { label: "Abandonado", tone: "text-danger", Icon: AlertTriangle },
+  };
+
+  return (
+    <div className="space-y-2">
+      {sorted.map((c) => {
+        const meta = META[c.outcome];
+        return (
+          <div
+            key={c.rootId}
+            className="rounded-el border-el border-line bg-panel p-3 shadow-el"
+          >
+            <div className="flex items-start gap-2">
+              <meta.Icon className={cn("mt-0.5 h-4 w-4 shrink-0", meta.tone)} />
+              <div className="min-w-0 flex-1">
+                <p
+                  className={cn(
+                    "text-sm text-ink",
+                    c.outcome === "done" && "text-mute line-through",
+                  )}
+                >
+                  {c.text}
+                </p>
+                <p className="text-[11px] text-faint">{c.reason}</p>
+              </div>
+              {c.taskId && (
+                <Link2 className="mt-0.5 h-3 w-3 shrink-0 text-faint" />
+              )}
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span
+                className={cn(
+                  "rounded-full px-2 py-0.5 text-[10px] font-bold",
+                  c.weeks > 1
+                    ? "bg-danger/10 text-danger"
+                    : "bg-panel2 text-mute",
+                )}
+              >
+                {c.weeks === 1
+                  ? "1 semana"
+                  : `prometido ${c.weeks} semanas seguidas`}
+              </span>
+              <span className="text-[10px] text-faint">
+                {format(new Date(c.firstWeek), "d MMM", { locale: es })}
+                {c.weeks > 1 &&
+                  ` → ${format(new Date(c.lastWeek), "d MMM", { locale: es })}`}
+              </span>
+              <span className={cn("ml-auto text-[10px] font-semibold", meta.tone)}>
+                {meta.label}
+              </span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Pestaña "Tendencia": volumen entregado y cumplimiento en el tiempo. */
+function TrendTab() {
+  const { token } = useAuth();
+  const series = useQuery(
+    api.catchups.trend,
+    token ? { sessionToken: token, weeks: 12 } : "skip",
+  );
+
+  if (series === undefined) return <DrawerLoader />;
+  if (series.length === 0)
+    return <EmptyRow text="Cerrá al menos un catch-up para ver la tendencia." />;
+
+  return (
+    <div className="space-y-3">
+      <TrendChart series={series} />
+      <div className="rounded-el border-el border-line bg-panel p-3 text-[11px] text-faint">
+        <p className="mb-1 font-semibold text-mute">Cómo leer esto</p>
+        <p>
+          Las barras son lo entregado (tareas completadas). La línea es el
+          porcentaje de compromisos que cumpliste esa semana, medido por lo que
+          decidiste en el catch-up siguiente: si un compromiso volvió arrastrado,
+          cuenta como no cumplido.
+        </p>
+        <p className="mt-1">
+          La última semana aparece sin línea porque todavía no hay un catch-up
+          posterior que la evalúe.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Gráfico combinado, en SVG a mano.
+ *
+ * Sin librería de charts a propósito: es una serie de 12 puntos y traer una
+ * dependencia nueva al bundle por esto sería desproporcionado.
+ */
+function TrendChart({
+  series,
+}: {
+  series: NonNullable<FunctionReturnType<typeof api.catchups.trend>>;
+}) {
+  const W = 320;
+  const H = 150;
+  const PAD = { top: 12, right: 8, bottom: 22, left: 22 };
+  const innerW = W - PAD.left - PAD.right;
+  const innerH = H - PAD.top - PAD.bottom;
+
+  // La escala arranca en 1 aunque no haya nada, para no dividir por cero ni
+  // dibujar barras de altura infinita en una semana vacía.
+  const maxVol = Math.max(1, ...series.map((s) => s.completed));
+  const bandW = innerW / series.length;
+  const barW = Math.max(4, bandW * 0.55);
+
+  const x = (i: number) => PAD.left + bandW * i + bandW / 2;
+  const yVol = (v: number) => PAD.top + innerH - (v / maxVol) * innerH;
+  const yRate = (r: number) => PAD.top + innerH - r * innerH;
+
+  // La línea solo une puntos con rate conocido; los null cortan el trazo en
+  // vez de interpolarse, que sería inventar un dato.
+  const pts = series
+    .map((s, i) => (s.rate === null ? null : { x: x(i), y: yRate(s.rate) }))
+    .filter((p): p is { x: number; y: number } => p !== null);
+  const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+
+  return (
+    <div className="rounded-el border-el border-line bg-panel p-2 shadow-el">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img">
+        {/* Guías de 0 / 50 / 100% */}
+        {[0, 0.5, 1].map((r) => (
+          <g key={r}>
+            <line
+              x1={PAD.left}
+              x2={W - PAD.right}
+              y1={yRate(r)}
+              y2={yRate(r)}
+              stroke="var(--border)"
+              strokeDasharray="2 3"
+            />
+            <text
+              x={PAD.left - 4}
+              y={yRate(r) + 3}
+              textAnchor="end"
+              fontSize="7"
+              fill="var(--faint)"
+            >
+              {r * 100}%
+            </text>
+          </g>
+        ))}
+
+        {/* Barras de volumen */}
+        {series.map((s, i) => {
+          const h = innerH - (yVol(s.completed) - PAD.top);
+          return (
+            <rect
+              key={s.weekStart}
+              x={x(i) - barW / 2}
+              y={yVol(s.completed)}
+              width={barW}
+              height={Math.max(0, h)}
+              rx="2"
+              fill="var(--accent)"
+              opacity="0.28"
+            >
+              <title>
+                {`${format(new Date(s.weekStart), "d MMM", { locale: es })}: ${s.completed} completadas`}
+              </title>
+            </rect>
+          );
+        })}
+
+        {/* Línea de cumplimiento */}
+        {pts.length > 1 && (
+          <path d={path} fill="none" stroke="var(--accent)" strokeWidth="1.5" />
+        )}
+        {series.map((s, i) =>
+          s.rate === null ? (
+            // Semana sin evaluar: círculo hueco, para que se distinga de un 0%.
+            <circle
+              key={s.weekStart}
+              cx={x(i)}
+              cy={yRate(0)}
+              r="2.5"
+              fill="none"
+              stroke="var(--faint)"
+              strokeDasharray="1 1"
+            >
+              <title>Todavía sin evaluar</title>
+            </circle>
+          ) : (
+            <circle
+              key={s.weekStart}
+              cx={x(i)}
+              cy={yRate(s.rate)}
+              r="2.5"
+              fill="var(--accent)"
+            >
+              <title>
+                {`${Math.round(s.rate * 100)}% (${s.commitmentsDone}/${s.commitmentsTotal})`}
+              </title>
+            </circle>
+          ),
+        )}
+
+        {/* Etiquetas del eje X: una de cada dos, para que no se pisen */}
+        {series.map((s, i) =>
+          i % 2 === 0 || series.length <= 6 ? (
+            <text
+              key={s.weekStart}
+              x={x(i)}
+              y={H - 6}
+              textAnchor="middle"
+              fontSize="7"
+              fill="var(--faint)"
+            >
+              {format(new Date(s.weekStart), "d/M")}
+            </text>
+          ) : null,
+        )}
+      </svg>
+    </div>
+  );
+}
+
+/**
+ * Un catch-up cerrado, abierto en solo lectura.
+ *
+ * Muestra el snapshot congelado —lo que efectivamente presentaste— y no el
+ * estado actual del tablero. Los compromisos sí se resuelven contra el
+ * presente, porque ahí la pregunta que interesa es "¿en qué terminó lo que
+ * prometí ese día?".
+ */
+function ClosedCatchupPanel({
+  id,
+  onClose,
+}: {
+  id: Id<"catchups">;
+  onClose: () => void;
+}) {
+  const { token } = useAuth();
+  const row = useQuery(
+    api.catchups.getClosed,
+    token ? { sessionToken: token, id } : "skip",
+  );
+  const tasks =
+    useQuery(api.tasks.list, token ? { sessionToken: token } : "skip") ?? [];
+
+  function copy() {
+    if (!row?.snapshot) return;
+    const text = buildCatchupText(
+      {
+        ...(row.snapshot as WeekBody),
+        previous: null,
+        closed: null,
+        anchorDay: 2,
+      } as unknown as WeekData,
+      {
+        windowLabel: formatWindowLabel(row.weekStart, row.weekEnd),
+        notes: row.notes ?? undefined,
+      },
+    );
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success("Resumen copiado"))
+      .catch(() => toast.error("No se pudo copiar"));
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[60] grid place-items-center bg-black/60 p-4"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.97, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        exit={{ scale: 0.97, opacity: 0 }}
+        onClick={(e) => e.stopPropagation()}
+        className="flex max-h-[88vh] w-full max-w-3xl flex-col overflow-hidden rounded-el-lg border-el border-line bg-canvas shadow-el-lg"
+      >
+        <div className="flex items-center gap-2 border-b border-line px-4 py-3">
+          <Archive className="h-4 w-4 shrink-0 text-accent" />
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate font-display text-sm font-bold text-ink">
+              {row ? formatWindowLabel(row.weekStart, row.weekEnd) : "Cargando…"}
+            </h3>
+            {row && (
+              <p className="text-[11px] text-faint">
+                Presentado el{" "}
+                {format(new Date(row.closedAt), "d 'de' MMMM 'a las' HH:mm", {
+                  locale: es,
+                })}{" "}
+                · solo lectura
+              </p>
+            )}
+          </div>
+          <button onClick={copy} className="btn btn-secondary gap-1.5 text-xs">
+            <Copy className="h-3.5 w-3.5" />
+            Copiar
+          </button>
+          <button onClick={onClose} className="btn-ghost p-1.5">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 py-4">
+          {row === undefined ? (
+            <DrawerLoader />
+          ) : row === null ? (
+            <EmptyRow text="Este catch-up ya no existe." />
+          ) : (
+            <>
+              {row.commitments.length > 0 && (
+                <Section
+                  title="Compromisos asumidos ese día"
+                  subtitle="Resueltos contra el tablero de hoy"
+                >
+                  <div className="overflow-hidden rounded-el border-el border-line bg-panel shadow-el">
+                    {row.commitments.map((c) => (
+                      <div
+                        key={c.id}
+                        className="flex items-start gap-2.5 border-b border-line px-3 py-2.5 last:border-0"
+                      >
+                        <span className="mt-0.5 shrink-0">
+                          {c.outcome === "done" ? (
+                            <Check className="h-4 w-4 text-emerald-500" />
+                          ) : c.outcome === "progress" ? (
+                            <CircleDashed className="h-4 w-4 text-amber-500" />
+                          ) : c.outcome === "gone" ? (
+                            <Trash2 className="h-4 w-4 text-faint" />
+                          ) : (
+                            <AlertTriangle className="h-4 w-4 text-danger" />
+                          )}
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm text-ink">{c.text}</p>
+                          <p className="text-[11px] text-faint">{c.reason}</p>
+                        </div>
+                        {c.carryCount > 0 && (
+                          <span className="shrink-0 rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-bold text-danger">
+                            ×{c.carryCount}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </Section>
+              )}
+
+              {row.notes && (
+                <Section title="Notas">
+                  <div className="whitespace-pre-wrap rounded-el border-el border-line bg-panel p-3 text-sm text-mute shadow-el">
+                    {row.notes}
+                  </div>
+                </Section>
+              )}
+
+              {row.snapshot ? (
+                <CatchupBody
+                  body={row.snapshot as WeekBody}
+                  tasks={tasks}
+                  onEditTask={() => {
+                    // Solo lectura a propósito: editar desde un documento
+                    // histórico invitaría a confundir el pasado con el presente.
+                  }}
+                />
+              ) : (
+                <EmptyRow text="El resumen congelado de esta semana no se pudo leer." />
+              )}
+            </>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+/** Spinner compartido por las pestañas de la bitácora. */
+function DrawerLoader() {
+  return (
+    <div className="grid place-items-center py-8">
+      <Loader2 className="h-5 w-5 animate-spin text-accent" />
+    </div>
   );
 }
