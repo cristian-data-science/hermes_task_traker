@@ -190,7 +190,10 @@ export function buildCatchupText(
       const d = daysAgo(t.since, now);
       const approx = t.sinceKind === "created" ? "~" : "";
       const age = d === null || d === 0 ? "" : ` · esperando hace ${approx}${d} d`;
-      L.push(`- ${t.title}${age}`);
+      // El bloque mezcla urgentes y pendientes: sin el estado, en texto plano
+      // no habría forma de distinguirlas (en pantalla lo hace el chip).
+      const st = STATUS_LABEL[t.status] ?? t.status;
+      L.push(`- [${st}] ${t.title}${age}`);
     }
     L.push("");
   }

@@ -305,10 +305,10 @@ function CatchupBody({
       />
       <OpenBlock
         title="En cola"
-        subtitle="Urgentes esperando que las tomes"
+        subtitle="Lo que espera que lo tomes — urgentes primero"
         items={queuedOf(body)}
-        empty="Nada urgente en espera."
-        warnAfterDays={7}
+        empty="Nada en espera."
+        warnAfterDays={14}
         tasks={tasks}
         onEditTask={onEditTask}
       />
@@ -597,7 +597,7 @@ function MetricsRow({ metrics }: { metrics: WeekData["metrics"] }) {
       // empezar, no una que se esté haciendo. Mezclarlas inflaba el número.
       label: "En cola",
       value: metrics.queued ?? 0,
-      foot: <span className="text-faint">urgentes por tomar</span>,
+      foot: <span className="text-faint">urgentes y pendientes</span>,
     },
     {
       label: "Detenidas",
