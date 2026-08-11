@@ -41,6 +41,7 @@ import {
   parseAnchorDay,
   ACTIVE_STATUSES,
   QUEUED_STATUSES,
+  PENDING_STATUSES,
   BLOCKED_STATUSES,
 } from "./catchupConfig";
 import { rootIdOf, classifyChain, countFulfilled } from "./catchupLogic";
@@ -232,6 +233,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     (t) =>
       (ACTIVE_STATUSES as readonly string[]).includes(t.status) ||
       (QUEUED_STATUSES as readonly string[]).includes(t.status) ||
+      (PENDING_STATUSES as readonly string[]).includes(t.status) ||
       (BLOCKED_STATUSES as readonly string[]).includes(t.status),
   );
 
@@ -282,19 +284,15 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     .map(toOpenItem)
     .sort(byAge);
 
-  // La cola respeta el orden de QUEUED_STATUSES (urgentes antes que
-  // pendientes) y, dentro de cada estado, lo más viejo primero. Ordenar la
-  // cola solo por antigüedad enterraría una urgente de ayer debajo de
-  // pendientes de hace un mes.
   const queued = openTasks
     .filter((t) => (QUEUED_STATUSES as readonly string[]).includes(t.status))
     .map(toOpenItem)
-    .sort(
-      (a, b) =>
-        (QUEUED_STATUSES as readonly string[]).indexOf(a.status) -
-          (QUEUED_STATUSES as readonly string[]).indexOf(b.status) ||
-        byAge(a, b),
-    );
+    .sort(byAge);
+
+  const pending = openTasks
+    .filter((t) => (PENDING_STATUSES as readonly string[]).includes(t.status))
+    .map(toOpenItem)
+    .sort(byAge);
 
   const blocked = openTasks
     .filter((t) => (BLOCKED_STATUSES as readonly string[]).includes(t.status))
@@ -373,6 +371,8 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
       inProgress: inProgress.length,
       /** Urgentes: esperando que las tomes, no en marcha. */
       queued: queued.length,
+      /** Backlog vivo, sin urgencia declarada. */
+      pending: pending.length,
       blocked: blocked.length,
       /**
        * Ya no se muestra en la vista (inflaba el titular con una unidad que no
@@ -386,6 +386,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     done,
     inProgress,
     queued,
+    pending,
     blocked,
     incoming,
     moves,

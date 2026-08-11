@@ -66,6 +66,7 @@ import { STATUS_META, type Status } from "../lib/constants";
 import {
   buildCatchupText,
   queuedOf,
+  pendingOf,
   type WeekData,
   type WeekBody,
 } from "../lib/catchupSummary";
@@ -289,9 +290,10 @@ function CatchupBody({
       <MetricsRow metrics={body.metrics} />
       <DoneBlock done={body.done} tasks={tasks} onEditTask={onEditTask} />
       <AdvancedBlock
-        // Las urgentes también pueden haber avanzado en sub-tareas: si solo se
-        // mirara `inProgress`, ese avance se perdería del resumen.
-        inProgress={[...body.inProgress, ...queuedOf(body)]}
+        // Cualquier tarea abierta puede haber avanzado en sub-tareas sin
+        // cerrarse. Si solo se mirara `inProgress`, ese avance se perdería del
+        // resumen y la semana se vería más vacía de lo que fue.
+        inProgress={[...body.inProgress, ...queuedOf(body), ...pendingOf(body)]}
         tasks={tasks}
         onEditTask={onEditTask}
       />
@@ -305,10 +307,19 @@ function CatchupBody({
       />
       <OpenBlock
         title="En cola"
-        subtitle="Lo que espera que lo tomes — urgentes primero"
+        subtitle="Urgentes esperando que las tomes"
         items={queuedOf(body)}
-        empty="Nada en espera."
-        warnAfterDays={14}
+        empty="Nada urgente en espera."
+        warnAfterDays={7}
+        tasks={tasks}
+        onEditTask={onEditTask}
+      />
+      <OpenBlock
+        title="Pendientes"
+        subtitle="Backlog vivo, sin urgencia declarada"
+        items={pendingOf(body)}
+        empty="Sin pendientes."
+        warnAfterDays={30}
         tasks={tasks}
         onEditTask={onEditTask}
       />
@@ -597,7 +608,12 @@ function MetricsRow({ metrics }: { metrics: WeekData["metrics"] }) {
       // empezar, no una que se esté haciendo. Mezclarlas inflaba el número.
       label: "En cola",
       value: metrics.queued ?? 0,
-      foot: <span className="text-faint">urgentes y pendientes</span>,
+      foot: <span className="text-faint">urgentes por tomar</span>,
+    },
+    {
+      label: "Pendientes",
+      value: metrics.pending ?? 0,
+      foot: <span className="text-faint">backlog vivo</span>,
     },
     {
       label: "Detenidas",
@@ -616,7 +632,7 @@ function MetricsRow({ metrics }: { metrics: WeekData["metrics"] }) {
   ];
 
   return (
-    <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+    <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
       {cards.map((c) => (
         <div
           key={c.label}

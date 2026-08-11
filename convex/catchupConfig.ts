@@ -163,14 +163,16 @@ export function formatWindowLabel(from: number, to: number): string {
 export const ACTIVE_STATUSES = ["en-curso"] as const;
 
 /**
- * Estados que están esperando que los tomes: entran al catch-up como
- * "En cola", separados de lo que ya está en marcha.
+ * "En cola": lo urgente, que espera que lo tomes ya.
  *
- * `urgente` y `pendiente` comparten bloque porque responden la misma pregunta
- * —qué hay por delante— y se diferencian por su chip de estado. Van ordenadas
- * con las urgentes arriba.
+ * Va separado de `pendiente` a propósito. Meterlos juntos daba un número que
+ * no se puede accionar: dos urgentes entre veinte pendientes desaparecen en
+ * el promedio, y en el catch-up lo urgente es justo lo que hay que nombrar.
  */
-export const QUEUED_STATUSES = ["urgente", "pendiente"] as const;
+export const QUEUED_STATUSES = ["urgente"] as const;
+
+/** "Pendientes": el backlog vivo, lo que hay por delante sin urgencia. */
+export const PENDING_STATUSES = ["pendiente"] as const;
 
 /** Estados que cuentan como "detenido / esperando algo". */
 export const BLOCKED_STATUSES = ["standby", "programado"] as const;

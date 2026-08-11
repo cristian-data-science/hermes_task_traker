@@ -30,6 +30,7 @@ export type WeekBody = Pick<
   | "done"
   | "inProgress"
   | "queued"
+  | "pending"
   | "blocked"
   | "incoming"
   | "moves"
@@ -46,6 +47,11 @@ export type WeekBody = Pick<
  */
 export function queuedOf(body: WeekBody): WeekBody["queued"] {
   return body.queued ?? [];
+}
+
+/** Igual que `queuedOf`, para el bloque de pendientes. */
+export function pendingOf(body: WeekBody): WeekBody["pending"] {
+  return body.pending ?? [];
 }
 
 /** Etiqueta legible de un estado, sin depender del icono. */
@@ -124,7 +130,8 @@ export function buildCatchupText(
   L.push("## Resumen");
   L.push(`Completadas: ${m.completed} (${deltaTxt})`);
   L.push(
-    `Abiertas ahora: ${m.inProgress} en curso · ${m.queued ?? 0} en cola · ${m.blocked} detenidas · Entraron: ${m.created}`,
+    `Abiertas ahora: ${m.inProgress} en curso · ${m.queued ?? 0} en cola · ` +
+      `${m.pending ?? 0} pendientes · ${m.blocked} detenidas · Entraron: ${m.created}`,
   );
   L.push("");
 
@@ -182,21 +189,21 @@ export function buildCatchupText(
     L.push("");
   }
 
-  // ---- En cola -----------------------------------------------------------
-  const queued = queuedOf(data);
-  if (queued.length > 0) {
-    L.push("## En cola");
-    for (const t of queued) {
+  // ---- En cola y pendientes ----------------------------------------------
+  /** Ambos bloques se listan igual; solo cambia el encabezado. */
+  const pushWaiting = (title: string, items: typeof data.inProgress) => {
+    if (items.length === 0) return;
+    L.push(`## ${title}`);
+    for (const t of items) {
       const d = daysAgo(t.since, now);
       const approx = t.sinceKind === "created" ? "~" : "";
       const age = d === null || d === 0 ? "" : ` · esperando hace ${approx}${d} d`;
-      // El bloque mezcla urgentes y pendientes: sin el estado, en texto plano
-      // no habría forma de distinguirlas (en pantalla lo hace el chip).
-      const st = STATUS_LABEL[t.status] ?? t.status;
-      L.push(`- [${st}] ${t.title}${age}`);
+      L.push(`- ${t.title}${age}`);
     }
     L.push("");
-  }
+  };
+  pushWaiting("En cola (urgentes)", queuedOf(data));
+  pushWaiting("Pendientes", pendingOf(data));
 
   // ---- Detenido ----------------------------------------------------------
   if (data.blocked.length > 0) {
