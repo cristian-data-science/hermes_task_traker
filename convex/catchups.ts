@@ -40,6 +40,7 @@ import {
   SETTINGS_KEY_CATCHUP_DAY,
   parseAnchorDay,
   ACTIVE_STATUSES,
+  QUEUED_STATUSES,
   BLOCKED_STATUSES,
 } from "./catchupConfig";
 import { rootIdOf, classifyChain, countFulfilled } from "./catchupLogic";
@@ -230,6 +231,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
   const openTasks = live.filter(
     (t) =>
       (ACTIVE_STATUSES as readonly string[]).includes(t.status) ||
+      (QUEUED_STATUSES as readonly string[]).includes(t.status) ||
       (BLOCKED_STATUSES as readonly string[]).includes(t.status),
   );
 
@@ -277,6 +279,11 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
 
   const inProgress = openTasks
     .filter((t) => (ACTIVE_STATUSES as readonly string[]).includes(t.status))
+    .map(toOpenItem)
+    .sort(byAge);
+
+  const queued = openTasks
+    .filter((t) => (QUEUED_STATUSES as readonly string[]).includes(t.status))
     .map(toOpenItem)
     .sort(byAge);
 
@@ -355,13 +362,21 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
       completedPrevWeek: prevDone,
       created: incoming.length,
       inProgress: inProgress.length,
+      /** Urgentes: esperando que las tomes, no en marcha. */
+      queued: queued.length,
       blocked: blocked.length,
+      /**
+       * Ya no se muestra en la vista (inflaba el titular con una unidad que no
+       * es comparable a una tarea), pero se sigue calculando: los snapshots
+       * viejos lo tienen y sacarlo del tipo los volvería ilegibles.
+       */
       subtasksClosed,
       /** Cuántas de las que entraron esta semana ya se cerraron. */
       closedSameWeek: incoming.filter((i) => i.closedSameWeek).length,
     },
     done,
     inProgress,
+    queued,
     blocked,
     incoming,
     moves,

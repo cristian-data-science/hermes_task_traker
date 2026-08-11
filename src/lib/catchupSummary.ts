@@ -26,8 +26,27 @@ export type WeekData = FunctionReturnType<typeof api.catchups.getWeek>;
  */
 export type WeekBody = Pick<
   WeekData,
-  "metrics" | "done" | "inProgress" | "blocked" | "incoming" | "moves" | "talkingPoints"
+  | "metrics"
+  | "done"
+  | "inProgress"
+  | "queued"
+  | "blocked"
+  | "incoming"
+  | "moves"
+  | "talkingPoints"
 >;
+
+/**
+ * Lee `queued` de un cuerpo que puede venir de un snapshot viejo.
+ *
+ * Los catch-ups cerrados antes de separar "En cola" de "En curso" no tienen
+ * ese campo: TypeScript cree que sí porque el tipo es el actual, pero el JSON
+ * guardado no lo trae. Sin este acceso defensivo, abrir un catch-up de esa
+ * época rompería la vista entera.
+ */
+export function queuedOf(body: WeekBody): WeekBody["queued"] {
+  return body.queued ?? [];
+}
 
 /** Etiqueta legible de un estado, sin depender del icono. */
 const STATUS_LABEL: Record<string, string> = {
@@ -103,11 +122,9 @@ export function buildCatchupText(
   const deltaTxt =
     delta === 0 ? "igual que la semana pasada" : `${delta > 0 ? "+" : ""}${delta} vs. semana pasada`;
   L.push("## Resumen");
+  L.push(`Completadas: ${m.completed} (${deltaTxt})`);
   L.push(
-    `Completadas: ${m.completed} (${deltaTxt}) · Sub-tareas cerradas: ${m.subtasksClosed}`,
-  );
-  L.push(
-    `Abiertas ahora: ${m.inProgress} en curso · ${m.blocked} detenidas · Entraron: ${m.created}`,
+    `Abiertas ahora: ${m.inProgress} en curso · ${m.queued ?? 0} en cola · ${m.blocked} detenidas · Entraron: ${m.created}`,
   );
   L.push("");
 
@@ -135,7 +152,9 @@ export function buildCatchupText(
   // ---- Avances sin cierre ------------------------------------------------
   // Una tarea grande puede no cerrarse en la semana y aun así haber avanzado.
   // Sin este bloque, esas semanas se ven vacías aunque no lo estén.
-  const advanced = data.inProgress.filter((t) => t.advancedSubtasks.length > 0);
+  const advanced = [...data.inProgress, ...queuedOf(data)].filter(
+    (t) => t.advancedSubtasks.length > 0,
+  );
   if (advanced.length > 0) {
     L.push("## Avances en tareas todavía abiertas");
     for (const t of advanced) {
@@ -159,6 +178,19 @@ export function buildCatchupText(
       L.push(
         `- ${t.title}${t.progress !== null ? ` (${t.progress}%)` : ""}${where ? ` — ${where}` : ""}${age}`,
       );
+    }
+    L.push("");
+  }
+
+  // ---- En cola -----------------------------------------------------------
+  const queued = queuedOf(data);
+  if (queued.length > 0) {
+    L.push("## En cola");
+    for (const t of queued) {
+      const d = daysAgo(t.since, now);
+      const approx = t.sinceKind === "created" ? "~" : "";
+      const age = d === null || d === 0 ? "" : ` · esperando hace ${approx}${d} d`;
+      L.push(`- ${t.title}${age}`);
     }
     L.push("");
   }

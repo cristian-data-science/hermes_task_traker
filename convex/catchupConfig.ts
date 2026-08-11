@@ -56,16 +56,58 @@ export function parseAnchorDay(raw: string | undefined | null): number {
 }
 
 /**
- * Devuelve el inicio (00:00 hora local) del día ancla más reciente respecto a
- * `ref`. Si hoy ES el día ancla, devuelve hoy a las 00:00 — la semana nueva
- * arranca el mismo día del catch-up, que es cuando la conversación ocurre.
+ * Inicio (00:00 hora local) de la ventana de catch-up que contiene a `ref`.
+ *
+ * ===== EL DÍA DEL CATCH-UP CIERRA LA SEMANA, NO LA ABRE =====
+ * Esta función devolvía HOY cuando hoy era el día ancla, con el razonamiento
+ * de que "la semana nueva arranca el día de la conversación". Estaba mal, y se
+ * notaba justo el peor día: al abrir la vista el martes a la mañana para
+ * preparar la reunión, la ventana iba de hoy al martes siguiente y aparecía
+ * vacía. Todo el trabajo de la semana quedaba en la ventana anterior.
+ *
+ * El pedido original era "desde el martes anterior hasta este, rango de siete
+ * días". O sea: el día del catch-up es el ÚLTIMO día de la ventana, no el
+ * primero. Uno presenta lo que hizo hasta ese momento, incluido lo de esa
+ * misma mañana.
+ *
+ * Así, con ancla en martes:
+ *   - martes 11  → [miércoles 5 … martes 11]   ← lo que vas a presentar hoy
+ *   - miércoles 12 → [miércoles 12 … martes 18] ← la semana que recién arranca
+ *   - sábado 15  → [miércoles 12 … martes 18]
+ *
+ * Las ventanas no se solapan y siempre miden 7 días.
  */
 export function startOfCurrentWeek(anchorDay: number, ref: Date = new Date()): number {
   const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
-  // Cuántos días hay que retroceder para caer en el día ancla.
-  const back = (d.getDay() - anchorDay + 7) % 7;
-  d.setDate(d.getDate() - back);
-  return d.getTime();
+  // Días hasta el ancla anterior. El `|| 7` es la clave: si hoy ES el día
+  // ancla, el resto da 0 y hay que irse a la semana pasada, no quedarse hoy.
+  const back = (d.getDay() - anchorDay + 7) % 7 || 7;
+  // +1 porque el ancla pertenece a la ventana que TERMINA en él: la siguiente
+  // arranca al día posterior.
+  d.setDate(d.getDate() - back + 1);
+  return startOfDay(d);
+}
+
+/**
+ * Primer instante del día, a prueba de cambios de hora.
+ *
+ * ===== POR QUÉ NO ALCANZA CON new Date(y, m, d) =====
+ * El día en que Chile adelanta el reloj, las 00:00 NO EXISTEN: el día empieza
+ * a la 01:00. `new Date(2026, 8, 6)` devuelve entonces las 01:00, y si esa
+ * hora se arrastra con `setDate()` a otra fecha —donde la medianoche sí
+ * existe— la ventana queda corrida una hora.
+ *
+ * Eso no sería un detalle cosmético: `getWeek` busca el catch-up cerrado con
+ * una igualdad EXACTA de `weekStart`. Una hora de desfase y una semana que sí
+ * cerraste aparecería como abierta, con su snapshot inaccesible.
+ *
+ * Normalizando al final, el resultado es siempre el primer instante real del
+ * día de destino (00:00, o 01:00 los días en que la medianoche no existe).
+ */
+function startOfDay(d: Date): number {
+  const out = new Date(d);
+  out.setHours(0, 0, 0, 0);
+  return out.getTime();
 }
 
 /**
@@ -79,17 +121,18 @@ export function weekWindow(weekStart: number): { from: number; to: number } {
     start.getMonth(),
     start.getDate() + 7,
   );
-  return { from: weekStart, to: end.getTime() };
+  // Ojo: `to - from` NO siempre son 168 horas. La semana del cambio de hora
+  // mide 167 o 169, y está bien que así sea: la ventana la definen los días
+  // del calendario local, no una cantidad fija de milisegundos.
+  return { from: weekStart, to: startOfDay(end) };
 }
 
 /** Desplaza una semana N posiciones (negativo = hacia atrás). */
 export function shiftWeek(weekStart: number, delta: number): number {
   const d = new Date(weekStart);
-  return new Date(
-    d.getFullYear(),
-    d.getMonth(),
-    d.getDate() + delta * 7,
-  ).getTime();
+  return startOfDay(
+    new Date(d.getFullYear(), d.getMonth(), d.getDate() + delta * 7),
+  );
 }
 
 /** Cantidad de días completos entre dos timestamps (redondeado hacia abajo). */
@@ -109,8 +152,21 @@ export function formatWindowLabel(from: number, to: number): string {
   return `${fmt(from)} → ${fmt(to - DAY_MS)}`;
 }
 
-/** Estados que cuentan como "trabajo en marcha" en el resumen. */
-export const ACTIVE_STATUSES = ["en-curso", "urgente"] as const;
+/**
+ * Estados que cuentan como "trabajo en marcha" en el resumen.
+ *
+ * Solo `en-curso`. Antes incluía `urgente`, y eso inflaba el número que más se
+ * mira: una tarea urgente es una que hay que empezar, no una que se esté
+ * haciendo. Mezclarlas hacía parecer que había el doble de trabajo en marcha
+ * del que realmente había.
+ */
+export const ACTIVE_STATUSES = ["en-curso"] as const;
+
+/**
+ * Estados que están esperando que los tomes: entran al catch-up como
+ * "En cola", separados de lo que ya está en marcha.
+ */
+export const QUEUED_STATUSES = ["urgente"] as const;
 
 /** Estados que cuentan como "detenido / esperando algo". */
 export const BLOCKED_STATUSES = ["standby", "programado"] as const;

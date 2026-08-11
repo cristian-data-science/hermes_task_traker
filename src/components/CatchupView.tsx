@@ -65,6 +65,7 @@ import { useAuth } from "../hooks/useAuth";
 import { STATUS_META, type Status } from "../lib/constants";
 import {
   buildCatchupText,
+  queuedOf,
   type WeekData,
   type WeekBody,
 } from "../lib/catchupSummary";
@@ -287,12 +288,27 @@ function CatchupBody({
     <>
       <MetricsRow metrics={body.metrics} />
       <DoneBlock done={body.done} tasks={tasks} onEditTask={onEditTask} />
-      <AdvancedBlock inProgress={body.inProgress} tasks={tasks} onEditTask={onEditTask} />
+      <AdvancedBlock
+        // Las urgentes también pueden haber avanzado en sub-tareas: si solo se
+        // mirara `inProgress`, ese avance se perdería del resumen.
+        inProgress={[...body.inProgress, ...queuedOf(body)]}
+        tasks={tasks}
+        onEditTask={onEditTask}
+      />
       <OpenBlock
         title="En curso"
-        subtitle="Lo abierto y su antigüedad en el estado actual"
+        subtitle="Lo que estás trabajando y hace cuánto"
         items={body.inProgress}
-        empty="No hay nada en curso ni urgente."
+        empty="No hay nada en curso."
+        tasks={tasks}
+        onEditTask={onEditTask}
+      />
+      <OpenBlock
+        title="En cola"
+        subtitle="Urgentes esperando que las tomes"
+        items={queuedOf(body)}
+        empty="Nada urgente en espera."
+        warnAfterDays={7}
         tasks={tasks}
         onEditTask={onEditTask}
       />
@@ -572,14 +588,16 @@ function MetricsRow({ metrics }: { metrics: WeekData["metrics"] }) {
       ),
     },
     {
-      label: "Sub-tareas cerradas",
-      value: metrics.subtasksClosed,
-      foot: <span className="text-faint">avance granular</span>,
-    },
-    {
       label: "En curso",
       value: metrics.inProgress,
-      foot: <span className="text-faint">abiertas ahora</span>,
+      foot: <span className="text-faint">trabajándose ahora</span>,
+    },
+    {
+      // Urgente ya no suma a "En curso": una tarea urgente es una que hay que
+      // empezar, no una que se esté haciendo. Mezclarlas inflaba el número.
+      label: "En cola",
+      value: metrics.queued ?? 0,
+      foot: <span className="text-faint">urgentes por tomar</span>,
     },
     {
       label: "Detenidas",
@@ -1448,8 +1466,7 @@ function WeeksTab({ onOpen }: { onOpen: (id: Id<"catchups">) => void }) {
           </p>
           {r.metrics && (
             <p className="mt-1 text-xs text-mute">
-              {r.metrics.completed} completadas · {r.metrics.subtasksClosed}{" "}
-              sub-tareas · {r.commitmentCount} compromisos
+              {r.metrics.completed} completadas · {r.commitmentCount} compromisos
             </p>
           )}
           {r.notes && (
