@@ -106,10 +106,22 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
   const backfillPaths = useAction(api.clickup.backfillClickupPaths);
   const [resolving, setResolving] = useState(false);
 
-  async function handleResolveProjects() {
+  /**
+   * Relee desde ClickUp dónde vive cada tarea.
+   *
+   * `refreshAll = false` solo completa las que no tienen ubicación. Sirve para
+   * el arranque, pero NO arregla una tarea que se movió de proyecto en
+   * ClickUp: esa ya tiene ruta, aunque sea la vieja, y el backfill la saltea.
+   * Por eso el menú ofrece la versión completa — sin ella no había ninguna
+   * forma de corregir una ubicación desactualizada.
+   */
+  async function handleResolveProjects(refreshAll = false) {
     setResolving(true);
     try {
-      const r = (await backfillPaths({ sessionToken: token! })) as {
+      const r = (await backfillPaths({
+        sessionToken: token!,
+        refreshAll,
+      })) as {
         updated: number;
         failed: number;
         total: number;
@@ -400,6 +412,38 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
                   </button>
                 );
               })}
+
+              {/* Mantenimiento de la agrupación por proyecto.
+                  Vive en el menú y no en el aviso de abajo porque ese aviso
+                  solo aparece cuando NINGUNA tarea tiene proyecto resuelto:
+                  una vez resuelta la primera, desaparecía y ya no quedaba
+                  ninguna forma de recalcular una ubicación que cambió. */}
+              <div className="mt-1 border-t border-line pt-1">
+                <span className="block px-1.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-faint">
+                  Proyectos
+                </span>
+                <button
+                  onClick={() => {
+                    setMenuOpen(false);
+                    void handleResolveProjects(true);
+                  }}
+                  disabled={resolving}
+                  className="flex w-full items-center gap-2 rounded-el px-1.5 py-1.5 text-sm transition-colors hover:bg-panel2 disabled:opacity-60"
+                >
+                  {resolving ? (
+                    <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
+                  ) : (
+                    <FolderTree className="h-3.5 w-3.5 shrink-0 text-accent" />
+                  )}
+                  <span className="flex-1 text-left text-ink">
+                    Recalcular ubicaciones
+                  </span>
+                </button>
+                <p className="px-1.5 pb-1 text-[10px] leading-tight text-faint">
+                  Relee de ClickUp en qué proyecto vive cada tarea. Usalo si
+                  moviste algo de list y quedó agrupado donde no va.
+                </p>
+              </div>
             </div>
           </>
         )}
@@ -415,7 +459,7 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
             caen en «Sueltas».
           </span>
           <button
-            onClick={handleResolveProjects}
+            onClick={() => void handleResolveProjects(false)}
             disabled={resolving}
             className="btn-primary shrink-0 px-2.5 py-1 text-[11px] disabled:opacity-60"
           >

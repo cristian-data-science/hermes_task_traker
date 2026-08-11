@@ -59,7 +59,29 @@ export interface GroupOptions {
   ambiguousListNames?: Set<string>;
 }
 
-/** Devuelve el grupo de una tarea. */
+/**
+ * Devuelve el grupo de una tarea.
+ *
+ * ===== QUIÉN MANDA: LA RUTA RESUELTA, NO EL DESTINO ELEGIDO =====
+ * Hay dos datos que dicen dónde vive una tarea y NO son lo mismo:
+ *
+ *  - `clickupPath` es la ubicación REAL, leída de ClickUp por el backfill.
+ *  - `clickupListId` es el destino que se eligió en el selector al crearla
+ *    desde Hermes. Es una intención local, y queda congelada: si después la
+ *    tarea se mueve de list en ClickUp, este campo sigue apuntando al destino
+ *    viejo para siempre.
+ *
+ * Antes ganaba `clickupListId`, y eso producía el bug de "Revisar y aplicar
+ * mejoras interfaz app ley de datos": creada apuntando a Mesa Técnica y movida
+ * después a Ley de Datos, se seguía agrupando en Mesa Técnica aunque ClickUp
+ * dijera otra cosa.
+ *
+ * Peor todavía: la clave del grupo salía de `clickupListId` mientras la
+ * etiqueta salía de `clickupPath.listName`. Podían discrepar, y entonces dos
+ * proyectos REALMENTE distintos colisionaban bajo una misma clave y se
+ * dibujaban bajo el encabezado del primero que apareciera. Por eso ahora la
+ * clave y la etiqueta salen siempre del mismo dato: no pueden contradecirse.
+ */
 export function groupOfTask(
   task: GroupableTask,
   opts: GroupOptions = {},
@@ -68,34 +90,40 @@ export function groupOfTask(
   if (!task.clickupId && !task.clickupListId) return LOOSE_GROUP;
 
   const listName = task.clickupPath?.listName?.trim();
+  const folderName = task.clickupPath?.folderName?.trim();
 
-  // Mesa Técnica es una list de verdad, no un cajón de sobras: se muestra con
-  // su propio nombre en vez de mezclarse con las sueltas. Se usa el nombre
-  // real de ClickUp cuando la ruta ya está resuelta, y si todavía no lo está
-  // igual la reconocemos por su listId (que sale de la config).
-  if (opts.mesaListId && task.clickupListId === opts.mesaListId) {
+  // 1) Ruta resuelta = la verdad. Manda sobre cualquier intención local.
+  if (listName) {
+    const ambiguous = opts.ambiguousListNames?.has(listName) ?? false;
+    const label =
+      ambiguous && folderName ? `${folderName} · ${listName}` : listName;
     return {
-      key: `list:${opts.mesaListId}`,
-      label: listName || "Mesa Técnica",
+      // Se incluye el folder en la clave (aunque no siempre en la etiqueta)
+      // para que dos lists homónimas en folders distintos sigan siendo grupos
+      // distintos, que era la razón original de usar el listId.
+      key: `path:${folderName ?? ""}/${listName}`,
+      label,
       isLoose: false,
     };
   }
 
-  // Sincronizada pero sin ruta resuelta todavía (backfill pendiente): no
-  // inventamos un grupo, cae en sueltas hasta que se resuelva.
-  if (!listName) return LOOSE_GROUP;
+  // 2) Sin ruta resuelta todavía: se cae a la intención local como respaldo.
+  //
+  // Mesa Técnica es una list de verdad, no un cajón de sobras, así que tiene
+  // grupo propio en vez de mezclarse con las sueltas. Mientras el backfill no
+  // corra, sus tareas pueden quedar repartidas entre este grupo y el de arriba
+  // (mismo proyecto, claves distintas). Es transitorio y se arregla solo al
+  // resolver ubicaciones desde el menú del tablero.
+  if (opts.mesaListId && task.clickupListId === opts.mesaListId) {
+    return {
+      key: `list:${opts.mesaListId}`,
+      label: "Mesa Técnica",
+      isLoose: false,
+    };
+  }
 
-  const folderName = task.clickupPath?.folderName?.trim();
-  const ambiguous = opts.ambiguousListNames?.has(listName) ?? false;
-  const label = ambiguous && folderName ? `${folderName} · ${listName}` : listName;
-
-  return {
-    // La clave usa el listId cuando está: dos lists homónimas en folders
-    // distintos son grupos distintos aunque se vean parecido.
-    key: task.clickupListId ? `list:${task.clickupListId}` : `name:${label}`,
-    label,
-    isLoose: false,
-  };
+  // 3) Sincronizada, sin ruta y sin destino conocido: no inventamos un grupo.
+  return LOOSE_GROUP;
 }
 
 /**
