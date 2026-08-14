@@ -393,6 +393,9 @@ export const syncTask = internalAction({
           clickupUrl: newUrl,
           clickupListId: finalListId,
         });
+        // Resolver la ruta ya: sin esto, la tarea linkeada a un proyecto
+        // seguía agrupada en «Sueltas» hasta el recálculo manual.
+        await syncClickupPath(ctx, taskId, newId);
       } else {
         // ===== UPDATE (incluye status/complete) =====
         const body = buildTaskBody(task, false);
@@ -435,6 +438,7 @@ export const syncTask = internalAction({
               clickupUrl: newUrl,
               clickupListId: dest.listId,
             });
+            await syncClickupPath(ctx, taskId, newId);
             await ctx.runMutation(internal.clickupMutations._touchLastSync);
             return;
           }
@@ -1623,6 +1627,38 @@ async function resolveTaskPathInternal(clickupId: string): Promise<{
   }
 
   return { listId, listName, folderId, folderName, path };
+}
+
+/**
+ * Resuelve contra ClickUp dónde vive la tarea y persiste su `clickupPath`.
+ *
+ * Se invoca al crear/anclar una tarea desde el sync para que la agrupación
+ * por proyecto la ubique de inmediato: antes la ruta solo la llenaba el
+ * backfill manual («Recalcular ubicaciones»), así que una tarea recién
+ * linkeada a un proyecto seguía apareciendo en «Sueltas» hasta que alguien
+ * corriera ese recálculo.
+ *
+ * Falla silenciosa: la ruta es información de conveniencia para agrupar; un
+ * fallo acá no debe marcar la tarea con error de sync (sin ruta, la tarea
+ * cae en «Sueltas» hasta el próximo recálculo manual).
+ */
+async function syncClickupPath(ctx: any, taskId: any, clickupId: string) {
+  try {
+    const info = await resolveTaskPathInternal(clickupId);
+    // El último nodo de la cadena es la tarea misma: no es un ancestro.
+    const ancestors = info.path.slice(0, -1).map((n) => n.name);
+    await ctx.runMutation(internal.clickupMutations._setClickupPath, {
+      taskId,
+      clickupPath: {
+        folderName: info.folderName ?? undefined,
+        listName: info.listName ?? undefined,
+        ancestors,
+        resolvedAt: Date.now(),
+      },
+    });
+  } catch {
+    // Sin ruta la tarea queda en «Sueltas» hasta el próximo recálculo.
+  }
 }
 
 export const resolveTaskPath = action({
