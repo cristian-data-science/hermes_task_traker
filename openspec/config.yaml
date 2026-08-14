@@ -1,0 +1,51 @@
+schema: spec-driven
+
+context: |
+  App: Hermes Task Tracker — dashboard personal de tareas (uso unipersonal,
+  usuario: Cristian). UI 100% en español (rioplatense).
+
+  Stack: React 18 + TypeScript + Vite + Tailwind CSS 3 (tokens semánticos via
+  CSS vars: bg-panel, text-ink, border-line, rounded-el, etc.) + framer-motion
+  + lucide-react + @dnd-kit + date-fns (locale es). Backend: Convex
+  (functions en convex/, schema en convex/schema.ts, settings key-value).
+
+  Arquitectura:
+  - Frontend: src/components (vistas: KanbanView, ListView, CalendarView,
+    CatchupView; modales: TaskModal, ClickUpSettings, AssignedInboxModal...),
+    src/hooks (useAuth, useTheme, useHiddenColumns, useGroupByProject,
+    useSubtaskCounts), src/lib (constants, dates, projectGroup, rsa, utils).
+  - Backend: convex/tasks.ts (CRUD + reorder + changeStatus + detach),
+    convex/subtasks.ts, convex/auth.ts + authGuard.ts + authQuery.ts (login
+    RSA challenge-response), convex/clickup.ts + clickupMutations.ts +
+    clickupConfig.ts (integración ClickUp del team Patagonia), convex/settings.ts
+    (config key-value), convex/catchups.ts (resumen semanal + bitácora).
+  - DB: tablas tasks, subtasks, sessions, settings, challenges, catchups
+    (soft-delete via deletedAt en tasks/subtasks).
+
+  Convenciones de código:
+  - Comentarios de bloque en español explicando el PORQUÉ y los bugs
+    históricos que motivaron cada decisión (ese contexto es sagrado: no
+    borrarlo al refactorear).
+  - Mutations/queries públicas: requireAuth(ctx, sessionToken) SIEMPRE;
+    actions públicas: ctx.runQuery(internal.settings._checkSession).
+  - Estado de UI persistente: localStorage (tema, columnas ocultas,
+    agrupamiento, destinos recientes).
+  - Fechas: strings libres; formato canónico yyyy-MM-dd (parseTaskDates
+    tolera ISO, dd-mmm-yyyy, dd/mm/yyyy y "29 de julio de 2026").
+
+  Deploy: frontend en Vercel (auto-deploy al push a master), backend en
+  Convex producción (npx convex deploy --cmd "npm run build"). El sync
+  ClickUp outbound SOLO corre en producción (HERMES_ENV=production; override
+  dev con settings clickup.forceSyncDev).
+
+  Comandos: npm run dev (Vite), npm run build (tsc -b + vite build),
+  npm run seed (import inicial, requiere HERMES_ADMIN_TOKEN en .env.local).
+
+rules:
+  proposal:
+    - Escribir en español, mismo tono que el código.
+    - Toda propuesta que toque ClickUp debe decir explícitamente qué se
+      escribe/borra en el workspace real y bajo qué guardas corre.
+  tasks:
+    - Incluir verificación con tsc -b y build antes de dar por completa
+      cualquier tarea de código.

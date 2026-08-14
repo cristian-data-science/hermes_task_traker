@@ -223,6 +223,30 @@ producción de Convex (ej: `https://<deployment>.convex.cloud`).
 > (`Strict-Transport-Security`) y `X-Frame-Options: DENY` no se pueden forzar vía
 > `<meta>` en el HTML; configúralas en el panel del hosting (Vercel/Netlify/Convex).
 
+## 📐 Especificaciones (OpenSpec)
+
+El contexto del proyecto vive empaquetado en `openspec/` con
+[OpenSpec](https://github.com/Fission-AI/OpenSpec) (spec-driven development):
+
+- **`openspec/config.yaml`** — stack, arquitectura, convenciones y guards de
+  deploy: el contexto que lee el agente al planificar cualquier cambio.
+- **`openspec/specs/<capacidad>/spec.md`** — especificaciones estables de lo
+  construido: 11 capacidades, 61 requisitos con escenarios WHEN/THEN
+  (tasks, vistas, sub-tareas, fechas, auth, seguridad, sync ClickUp
+  outbound/inbound, destino ClickUp, catch-up semanal, theming).
+- **`openspec/changes/`** — propuestas de cambio (deltas) para funcionalidades
+  futuras: se archivean sobre los specs estables al implementarse.
+
+Flujo para una feature nueva (requiere `npx @fission-ai/openspec init --tools zcode`
+la primera vez en cada máquina, para regenerar los comandos `/opsx:*`):
+
+1. **Proponer**: `/opsx:propose "idea"` → genera proposal + delta spec +
+   design + tasks (solo planificación, no toca código).
+2. **Implementar**: `/opsx:apply <change>` con las tasks como guía.
+3. **Archivar**: `/opsx:archive <change>` → fusiona el delta en los specs
+   estables.
+4. **Validar**: `npx @fission-ai/openspec validate --specs --strict`.
+
 ## 📂 Estructura del proyecto
 
 ```
