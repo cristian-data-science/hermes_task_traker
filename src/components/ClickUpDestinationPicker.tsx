@@ -456,7 +456,11 @@ export function ClickUpDestinationPicker({
           type="button"
           onClick={() => {
             setMode("mesa");
-            onChange(undefined, undefined);
+            // Se emite la list de Mesa EXPLÍCITAMENTE: el sync outbound es
+            // opt-in (solo publica tareas con destino explícito), así que
+            // "mandarla a Mesa Técnica" tiene que distinguirse de "sin
+            // destino / solo local" (que es onChange(undefined, undefined)).
+            onChange(undefined, config.mesaTecnica.listId);
           }}
           className={cn(
             "rounded-el px-2 py-1.5 text-xs font-medium transition-colors",

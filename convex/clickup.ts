@@ -356,6 +356,12 @@ export const syncTask = internalAction({
 
       if (!task.clickupId) {
         // ===== CREATE =====
+        // Opt-in: sin destino explícito elegido en el picker (ni list ni
+        // parent), la tarea es SOLO LOCAL y no se publica en ClickUp.
+        // Antes todo lo de Patagonia caía acá — incluidas tareas locales
+        // sin asociación — y el default de resolveOutboundDestination las
+        // mandaba a Mesa Técnica sin que nadie lo pidiera.
+        if (!task.clickupListId && !task.clickupParentId) return;
         const body = buildTaskBody(task, true);
         const created = await clickupFetch(`/list/${dest.listId}/task`, {
           method: "POST",
@@ -405,6 +411,11 @@ export const syncTask = internalAction({
             await ctx.runMutation(internal.clickupMutations._unlinkClickUp, {
               taskId,
             });
+            // Solo se recrea si la tarea tiene destino explícito. Si no lo
+            // tiene (importada sin anclaje, o alguien la borró de ClickUp a
+            // mano para sacarla de ahí), queda desvinculada y local:
+            // recrearla en Mesa Técnica sería re-publicarla sin pedirlo.
+            if (!task.clickupListId && !task.clickupParentId) return;
             // Recrear en el destino correcto.
             const created = await clickupFetch(`/list/${dest.listId}/task`, {
               method: "POST",
