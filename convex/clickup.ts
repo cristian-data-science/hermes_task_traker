@@ -1308,7 +1308,9 @@ export const applySubscriptions = action({
       assignees?: number[];
       assigneeName?: string;
       folderName?: string;
+      folderId?: string;
       listName?: string;
+      listId?: string;
     }[] = [];
     /** Nodos que se suscribieron pero cuyo detalle no se pudo traer. */
     const failed: { id: string; label: string; error: string }[] = [];
@@ -1333,6 +1335,8 @@ export const applySubscriptions = action({
               : undefined,
             // folder/list vienen en la misma respuesta: cero llamadas extra.
             folderName: t.folder?.hidden ? undefined : t.folder?.name,
+            folderId: t.folder?.hidden ? undefined : t.folder?.id,
+            listId: t.list?.id,
             listName: t.list?.name,
           });
         } catch (err) {
@@ -1385,6 +1389,8 @@ export const applySubscriptions = action({
                 // respuesta, sin llamadas extra. Faltaba en esta rama (alta
                 // por folder/list), así que esas tareas entraban sin proyecto.
                 folderName: t.folder?.hidden ? undefined : t.folder?.name,
+                folderId: t.folder?.hidden ? undefined : t.folder?.id,
+                listId: t.list?.id,
                 listName: t.list?.name,
               });
             }
@@ -1425,8 +1431,10 @@ export const applySubscriptions = action({
           // Ubicación para agrupar el tablero. Los ancestros los completa el
           // backfill: acá solo tenemos el padre directo, no la cadena.
           clickupPath:
-            task.listName || task.folderName
+            task.listId || task.listName || task.folderName
               ? {
+                  listId: task.listId,
+                  folderId: task.folderId,
                   folderName: task.folderName,
                   listName: task.listName,
                   resolvedAt: Date.now(),
@@ -1652,6 +1660,8 @@ async function syncClickupPath(ctx: any, taskId: any, clickupId: string) {
       clickupPath: {
         folderName: info.folderName ?? undefined,
         listName: info.listName ?? undefined,
+        listId: info.listId ?? undefined,
+        folderId: info.folderId ?? undefined,
         ancestors,
         resolvedAt: Date.now(),
       },
@@ -1931,6 +1941,8 @@ export const backfillClickupPaths = action({
           clickupPath: {
             folderName: info.folderName ?? undefined,
             listName: info.listName ?? undefined,
+            listId: info.listId ?? undefined,
+            folderId: info.folderId ?? undefined,
             ancestors,
             resolvedAt: Date.now(),
           },

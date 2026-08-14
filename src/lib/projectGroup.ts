@@ -24,6 +24,8 @@ export interface GroupableTask {
   clickupPath?: {
     folderName?: string;
     listName?: string;
+    listId?: string;
+    folderId?: string;
     ancestors?: string[];
   };
 }
@@ -91,17 +93,30 @@ export function groupOfTask(
 
   const listName = task.clickupPath?.listName?.trim();
   const folderName = task.clickupPath?.folderName?.trim();
+  const listId = task.clickupPath?.listId;
 
   // 1) Ruta resuelta = la verdad. Manda sobre cualquier intención local.
   if (listName) {
+    // La list de Mesa Técnica puede llamarse distinto en ClickUp ("Tareas
+    // Mesa Técnica") que en la config. Se unifica por id y etiqueta para que
+    // no aparezcan DOS grupos para la misma list según si la ruta de cada
+    // tarea llegó a resolverse o no.
+    const isMesa = !!opts.mesaListId && listId === opts.mesaListId;
     const ambiguous = opts.ambiguousListNames?.has(listName) ?? false;
-    const label =
-      ambiguous && folderName ? `${folderName} · ${listName}` : listName;
+    const label = isMesa
+      ? "Mesa Técnica"
+      : ambiguous && folderName
+        ? `${folderName} · ${listName}`
+        : listName;
     return {
-      // Se incluye el folder en la clave (aunque no siempre en la etiqueta)
-      // para que dos lists homónimas en folders distintos sigan siendo grupos
-      // distintos, que era la razón original de usar el listId.
-      key: `path:${folderName ?? ""}/${listName}`,
+      // La clave preferida es el listId (estable): es lo que usa también el
+      // respaldo de abajo, así ambos caminos producen EL MISMO grupo. Sin
+      // listId (rutas viejas resueltas antes de guardarlo) se cae a la clave
+      // por nombre, que sigue distinguiendo lists homónimas por folder; un
+      // "Recalcular ubicaciones" las migra a la clave por id.
+      key: listId
+        ? `list:${listId}`
+        : `path:${folderName ?? ""}/${listName}`,
       label,
       isLoose: false,
     };
@@ -110,10 +125,10 @@ export function groupOfTask(
   // 2) Sin ruta resuelta todavía: se cae a la intención local como respaldo.
   //
   // Mesa Técnica es una list de verdad, no un cajón de sobras, así que tiene
-  // grupo propio en vez de mezclarse con las sueltas. Mientras el backfill no
-  // corra, sus tareas pueden quedar repartidas entre este grupo y el de arriba
-  // (mismo proyecto, claves distintas). Es transitorio y se arregla solo al
-  // resolver ubicaciones desde el menú del tablero.
+  // grupo propio en vez de mezclarse con las sueltas. Usa la MISMA clave y
+  // etiqueta que el caso de arriba cuando la ruta resuelta es la list de
+  // Mesa: sin esto, la misma list aparecía como dos grupos ("Mesa Técnica"
+  // y su nombre real en ClickUp) según si cada tarea tenía la ruta resuelta.
   if (opts.mesaListId && task.clickupListId === opts.mesaListId) {
     return {
       key: `list:${opts.mesaListId}`,

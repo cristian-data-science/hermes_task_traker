@@ -168,6 +168,8 @@ export const _createInboundTask = internalMutation({
       v.object({
         folderName: v.optional(v.string()),
         listName: v.optional(v.string()),
+        listId: v.optional(v.string()),
+        folderId: v.optional(v.string()),
         ancestors: v.optional(v.array(v.string())),
         resolvedAt: v.optional(v.number()),
       }),
@@ -468,6 +470,8 @@ export const _setClickupPath = internalMutation({
     clickupPath: v.object({
       folderName: v.optional(v.string()),
       listName: v.optional(v.string()),
+      listId: v.optional(v.string()),
+      folderId: v.optional(v.string()),
       ancestors: v.optional(v.array(v.string())),
       resolvedAt: v.optional(v.number()),
     }),
