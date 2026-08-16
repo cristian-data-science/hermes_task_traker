@@ -253,6 +253,53 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_weekStart", ["weekStart"]),
 
+  // ===== Repertorio de piano =====
+  /**
+   * Canciones del repertorio de piano de Cris. Independiente de `tasks`:
+   * una canción no es una tarea (sin área, estimate ni dueDate). Tiene su
+   * propio ciclo de vida con estados de aprendizaje.
+   */
+  songs: defineTable({
+    title: v.string(),
+    /** Intérprete original (si difiere del compositor). */
+    artist: v.optional(v.string()),
+    /** Autor/compositor de la obra. */
+    composer: v.optional(v.string()),
+    /** Género musical (texto libre: "neoclásica", "alternative rock", ...). */
+    genre: v.optional(v.string()),
+    /** Clasificación temática del repertorio. */
+    category: v.union(
+      v.literal("clasica"),
+      v.literal("cine"),
+      v.literal("rock"),
+      v.literal("pop"),
+      v.literal("indie"),
+    ),
+    /** Estado de aprendizaje. */
+    status: v.union(
+      v.literal("por-empezar"),
+      v.literal("aprendiendo"),
+      v.literal("en-pausa"),
+      v.literal("dominada"),
+    ),
+    /** Tempo en pulsos por minuto. */
+    bpm: v.optional(v.number()),
+    /** Tonalidad (ej. "C minor", "Am"). */
+    keySignature: v.optional(v.string()),
+    /** Dificultad subjetiva 1-5. */
+    difficulty: v.optional(v.number()),
+    /** URL de referencia (tutorial, partitura, video). */
+    source: v.optional(v.string()),
+    notes: v.optional(v.string()),
+    order: v.number(),
+    /** Borrado lógico: timestamp cuando se eliminó, o undefined si está activa. */
+    deletedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_category", ["category", "order"])
+    .index("by_status", ["status", "order"]),
+
   // ===== Sesiones (token opaco, 30 días) =====
   sessions: defineTable({
     token: v.string(),
