@@ -468,9 +468,12 @@ async function resolveCommitments(
  * Parsea un snapshot congelado. Devuelve null si está corrupto en vez de
  * lanzar: una fila mala no puede tumbar la bitácora entera.
  */
-function parseSnapshot(raw: string): WeekSummary | null {
+/** Snapshot congelado; `headline` existe desde la vista 2.0 (opcional). */
+export type FrozenSnapshot = WeekSummary & { headline?: string };
+
+function parseSnapshot(raw: string): FrozenSnapshot | null {
   try {
-    return JSON.parse(raw) as WeekSummary;
+    return JSON.parse(raw) as FrozenSnapshot;
   } catch {
     return null;
   }
@@ -560,8 +563,11 @@ export const history = query({
         // El snapshot se guarda como JSON string. Si alguna vez quedara
         // corrupto, la bitácora no debe caerse entera por una fila mala.
         let metrics: Record<string, number> | null = null;
+        let headline: string | null = null;
         try {
-          metrics = JSON.parse(c.snapshot)?.metrics ?? null;
+          const snap = JSON.parse(c.snapshot);
+          metrics = snap?.metrics ?? null;
+          headline = snap?.headline ?? null;
         } catch {
           metrics = null;
         }
@@ -573,6 +579,7 @@ export const history = query({
           notes: c.notes ?? null,
           commitmentCount: c.commitments.length,
           metrics,
+          headline,
         };
       });
   },
@@ -841,6 +848,12 @@ export const close = mutation({
      * que el bloque pierda todo su valor de señal.
      */
     clearFlags: v.optional(v.boolean()),
+    /**
+     * La frase ejecutiva de la semana, tal como se mostraba al cerrar. Se
+     * congela dentro del snapshot: abrir una semana vieja debe mostrar la
+     * frase que se presentó ese día, no un recálculo.
+     */
+    headline: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAuth(ctx, args.sessionToken);
@@ -864,7 +877,10 @@ export const close = mutation({
       }))
       .filter((c) => c.text.length > 0);
 
-    const snapshot = JSON.stringify(await buildSummary(ctx, from, to));
+    const snapshot = JSON.stringify({
+      ...(await buildSummary(ctx, from, to)),
+      headline: args.headline?.trim().slice(0, 300) || undefined,
+    });
     const now = Date.now();
     const notes = args.notes?.slice(0, NOTES_MAX);
 
