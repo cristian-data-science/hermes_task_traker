@@ -350,15 +350,17 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     0,
   );
 
-  // Delta vs. la semana anterior. Se calcula restando el largo exacto de la
-  // ventana; con cambio de hora puede desviarse una hora, lo cual es
-  // irrelevante para un contador de tareas.
-  const span = to - from;
+  // Delta vs. la semana anterior: su ventana REAL es [from-7d, from+1d) —
+  // martes a martes+1 con el solape del día ancla (ver catchupConfig).
+  // Días calendario, no milisegundos, para sobrevivir al cambio de hora.
+  const f = new Date(from);
+  const prevFrom = new Date(f.getFullYear(), f.getMonth(), f.getDate() - 7).setHours(0, 0, 0, 0);
+  const prevTo = new Date(f.getFullYear(), f.getMonth(), f.getDate() + 1).setHours(0, 0, 0, 0);
   const prevDone = scoped.filter(
     (t) =>
       t.completedAt !== undefined &&
-      t.completedAt >= from - span &&
-      t.completedAt < from,
+      t.completedAt >= prevFrom &&
+      t.completedAt < prevTo,
   ).length;
 
   return {

@@ -122,11 +122,14 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
   useEffect(() => {
     if (!token || offset !== 0 || ensuredFor.current === from) return;
     ensuredFor.current = from;
-    const span = to - from;
+    // La semana anterior arranca 7 días atrás (mismo día ancla) y su ventana
+    // la cierra weekWindow — martes a martes con el día final inclusivo.
+    const prevFrom = shiftWeek(from, -1);
+    const prev = weekWindow(prevFrom);
     void ensureClosed({
       sessionToken: token,
-      prevFrom: from - span,
-      prevTo: from,
+      prevFrom,
+      prevTo: prev.to,
     })
       .then((r) => {
         if ((r as { closed: boolean }).closed) {
