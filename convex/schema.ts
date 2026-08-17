@@ -253,6 +253,20 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_weekStart", ["weekStart"]),
 
+  // ===== Exclusiones del catch-up =====
+  /**
+   * Tareas quitadas a mano del resumen de UNA semana (la X de la vista).
+   * Solo afectan la vista y sus contadores: la tarea sigue en el tablero y
+   * en ClickUp. Como viven por `weekStart`, el cierre congela el snapshot
+   * sin la tarea y la semana siguiente vuelve a mostrarla (si sigue viva).
+   */
+  catchupExclusions: defineTable({
+    /** Semana a la que aplica la exclusión (= `from` de la ventana). */
+    weekStart: v.number(),
+    taskId: v.id("tasks"),
+    createdAt: v.number(),
+  }).index("by_weekStart", ["weekStart"]),
+
   // ===== Repertorio de piano =====
   /**
    * Canciones del repertorio de piano de Cris. Independiente de `tasks`:

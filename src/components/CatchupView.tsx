@@ -156,6 +156,63 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
   const body: WeekBody =
     frozen && showFrozen ? week.closed!.snapshot! : (week as WeekBody);
 
+  /** ¿El body es el cálculo vivo (editable)? El snapshot congelado no se toca. */
+  const editable = !(frozen && showFrozen);
+
+  // La X de cada fila: quita la tarea de ESTE resumen (solo la vista y sus
+  // contadores; la tarea sigue en el tablero y en ClickUp). Toast con Deshacer.
+  const excludeTask = useMutation(api.catchups.setExcluded);
+  function handleExclude(taskId: string, title: string) {
+    if (!token) return;
+    void excludeTask({
+      sessionToken: token,
+      weekStart: from,
+      taskId: taskId as Id<"tasks">,
+      excluded: true,
+    })
+      .then(() => {
+        toast.custom(
+          (t) => (
+            <div
+              className="flex items-center gap-3 rounded-el px-3 py-2.5 text-sm shadow-el-lg"
+              style={{
+                background: "var(--surface-2)",
+                border: "var(--bw) solid var(--border)",
+                color: "var(--text)",
+                fontFamily: "var(--font-sans)",
+              }}
+            >
+              <X className="h-4 w-4 shrink-0 text-danger" />
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium">Quitada del resumen</span>
+                <span className="block max-w-[240px] truncate text-xs opacity-75">
+                  {title}
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  toast.dismiss(t.id);
+                  void excludeTask({
+                    sessionToken: token!,
+                    weekStart: from,
+                    taskId: taskId as Id<"tasks">,
+                    excluded: false,
+                  }).catch(() => toast.error("No se pudo restaurar"));
+                }}
+                className="rounded-md border px-2 py-1 text-xs font-semibold transition-colors hover:bg-panel2"
+                style={{ borderColor: "var(--border)", color: "var(--text)" }}
+              >
+                Deshacer
+              </button>
+            </div>
+          ),
+          { duration: 5000, position: "top-right" },
+        );
+      })
+      .catch(() => toast.error("No se pudo quitar la tarea"));
+  }
+
   /** La frase: la congelada si hay snapshot, si no la calculada en vivo. */
   const headline =
     frozen && showFrozen && week.closed?.snapshot?.headline
@@ -266,7 +323,12 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
       )}
 
       {/* ===== 4. El cuerpo ===== */}
-      <DoneSection done={body.done} tasks={tasks} onEditTask={onEditTask} />
+      <DoneSection
+        done={body.done}
+        tasks={tasks}
+        onEditTask={onEditTask}
+        onExclude={editable ? handleExclude : undefined}
+      />
       <ActiveSection
         inProgress={body.inProgress}
         blocked={body.blocked}
@@ -274,8 +336,14 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
         moves={body.moves}
         tasks={tasks}
         onEditTask={onEditTask}
+        onExclude={editable ? handleExclude : undefined}
       />
-      <TalkingSection points={body.talkingPoints} tasks={tasks} onEditTask={onEditTask} />
+      <TalkingSection
+        points={body.talkingPoints}
+        tasks={tasks}
+        onEditTask={onEditTask}
+        onExclude={editable ? handleExclude : undefined}
+      />
 
       <AnimatePresence>
         {closing && (
@@ -399,6 +467,7 @@ function Section({
 /** Fila compacta de una tarea: título + lugar + edad. Click abre el modal. */
 function TaskRow({
   title,
+  taskId,
   project,
   ancestors,
   clickupUrl,
@@ -406,9 +475,12 @@ function TaskRow({
   sub,
   task,
   onEditTask,
+  onExclude,
   danger,
 }: {
   title: string;
+  /** Para la X de exclusión (presente aunque la tarea ya no exista). */
+  taskId?: string;
   project: string | null;
   ancestors: string[];
   clickupUrl: string | null;
@@ -416,6 +488,8 @@ function TaskRow({
   sub?: string;
   task?: Doc<"tasks">;
   onEditTask: (t: Doc<"tasks">) => void;
+  /** Quitar del resumen (solo esta semana). Ausente en el snapshot congelado. */
+  onExclude?: (taskId: string, title: string) => void;
   danger?: boolean;
 }) {
   const where = [project, ...ancestors].filter(Boolean);
@@ -423,7 +497,7 @@ function TaskRow({
   return (
     <div
       className={cn(
-        "flex items-center gap-2 border-b border-line px-3 py-2 last:border-0",
+        "group flex items-center gap-2 border-b border-line px-3 py-2 last:border-0",
         task && "cursor-pointer hover:bg-panel2",
       )}
       onClick={() => task && onEditTask(task)}
@@ -447,6 +521,19 @@ function TaskRow({
         </a>
       )}
       {right}
+      {onExclude && taskId && (
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onExclude(taskId, title);
+          }}
+          title="Quitar del resumen (solo esta semana)"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded text-faint opacity-0 transition-all hover:bg-danger/10 hover:text-danger group-hover:opacity-100"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
     </div>
   );
 }
@@ -599,10 +686,12 @@ function DoneSection({
   done,
   tasks,
   onEditTask,
+  onExclude,
 }: {
   done: WeekBody["done"];
   tasks: Doc<"tasks">[];
   onEditTask: (t: Doc<"tasks">) => void;
+  onExclude?: (taskId: string, title: string) => void;
 }) {
   if (done.length === 0) {
     return (
@@ -631,6 +720,7 @@ function DoneSection({
               <TaskRow
                 key={d.taskId}
                 title={d.title}
+                taskId={d.taskId}
                 project={d.project}
                 ancestors={d.ancestors}
                 clickupUrl={d.clickupUrl}
@@ -643,6 +733,7 @@ function DoneSection({
                 }
                 task={d.stillExists ? tasks.find((t) => t._id === d.taskId) : undefined}
                 onEditTask={onEditTask}
+                onExclude={onExclude}
               />
             ))}
           </div>
@@ -660,6 +751,7 @@ function ActiveSection({
   moves,
   tasks,
   onEditTask,
+  onExclude,
 }: {
   inProgress: WeekBody["inProgress"];
   blocked: WeekBody["blocked"];
@@ -667,6 +759,7 @@ function ActiveSection({
   moves: WeekBody["moves"];
   tasks: Doc<"tasks">[];
   onEditTask: (t: Doc<"tasks">) => void;
+  onExclude?: (taskId: string, title: string) => void;
 }) {
   const [showWaiting, setShowWaiting] = useState(false);
   // Las reabiertas esta semana: badge puntual, no bloque aparte.
@@ -689,12 +782,14 @@ function ActiveSection({
       <TaskRow
         key={t.taskId}
         title={t.title}
+        taskId={t.taskId}
         project={t.project}
         ancestors={t.ancestors}
         clickupUrl={t.clickupUrl}
         sub={subParts.join(" · ") || undefined}
         task={tasks.find((x) => x._id === t.taskId)}
         onEditTask={onEditTask}
+        onExclude={onExclude}
         danger={isBlocked}
         right={
           <span className="flex shrink-0 items-center gap-1.5">
@@ -755,10 +850,12 @@ function TalkingSection({
   points,
   tasks,
   onEditTask,
+  onExclude,
 }: {
   points: WeekBody["talkingPoints"];
   tasks: Doc<"tasks">[];
   onEditTask: (t: Doc<"tasks">) => void;
+  onExclude?: (taskId: string, title: string) => void;
 }) {
   if (points.length === 0) return null;
   return (
@@ -768,12 +865,14 @@ function TalkingSection({
           <TaskRow
             key={p.taskId}
             title={p.title}
+            taskId={p.taskId}
             project={p.project}
             ancestors={p.ancestors}
             clickupUrl={p.clickupUrl}
             sub={p.note ?? undefined}
             task={tasks.find((t) => t._id === p.taskId)}
             onEditTask={onEditTask}
+            onExclude={onExclude}
           />
         ))}
       </div>

@@ -140,6 +140,15 @@ function inScope(task: Doc<"tasks">): boolean {
   return CATCHUP_AREAS.includes(task.area);
 }
 
+/** Lee las tareas excluidas de una semana (la X de la vista), como Set<string>. */
+async function readExclusions(ctx: QueryCtx, weekStart: number): Promise<Set<string>> {
+  const rows = await ctx.db
+    .query("catchupExclusions")
+    .withIndex("by_weekStart", (q) => q.eq("weekStart", weekStart))
+    .collect();
+  return new Set(rows.map((r) => String(r.taskId)));
+}
+
 /** Lee el día ancla configurado (martes por defecto). */
 async function readAnchorDay(ctx: QueryCtx): Promise<number> {
   const row = await ctx.db
@@ -209,7 +218,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     doneAt.set(e.taskId, prev === undefined ? e.at : Math.min(prev, e.at));
   }
 
-  const done: DoneItem[] = [];
+  let done: DoneItem[] = [];
   for (const [taskId, at] of doneAt) {
     const t = tasksById.get(taskId);
     if (!t) continue;
@@ -279,22 +288,22 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
   // explicar, y debe estar arriba, no enterrado al final de la lista.
   const byAge = (a: OpenItem, b: OpenItem) => (a.since ?? 0) - (b.since ?? 0);
 
-  const inProgress = openTasks
+  let inProgress = openTasks
     .filter((t) => (ACTIVE_STATUSES as readonly string[]).includes(t.status))
     .map(toOpenItem)
     .sort(byAge);
 
-  const queued = openTasks
+  let queued = openTasks
     .filter((t) => (QUEUED_STATUSES as readonly string[]).includes(t.status))
     .map(toOpenItem)
     .sort(byAge);
 
-  const pending = openTasks
+  let pending = openTasks
     .filter((t) => (PENDING_STATUSES as readonly string[]).includes(t.status))
     .map(toOpenItem)
     .sort(byAge);
 
-  const blocked = openTasks
+  let blocked = openTasks
     .filter((t) => (BLOCKED_STATUSES as readonly string[]).includes(t.status))
     .map(toOpenItem)
     .sort(byAge);
@@ -302,7 +311,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
   // --- ENTRÓ ESTA SEMANA --------------------------------------------------
   // Carga no planificada: lo que apareció después de tu último catch-up.
   // Es el bloque que justifica por qué no avanzó otra cosa.
-  const incoming = scoped
+  let incoming = scoped
     .filter((t) => t.createdAt >= from && t.createdAt < to)
     .map((t) => ({
       taskId: t._id,
@@ -319,7 +328,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     .sort((a, b) => a.createdAt - b.createdAt);
 
   // --- MOVIMIENTOS (solo desde la bitácora) -------------------------------
-  const moves = scopedEvents
+  let moves = scopedEvents
     .filter((e) => e.kind === "status" || e.kind === "reopened")
     .map((e) => ({
       taskId: e.taskId,
@@ -332,7 +341,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     .sort((a, b) => a.at - b.at);
 
   // --- TEMAS PARA CONVERSAR (pin manual) ----------------------------------
-  const talkingPoints = live
+  let talkingPoints = live
     .filter((t) => t.catchupFlag)
     .map((t) => ({
       taskId: t._id,
@@ -344,6 +353,22 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     }))
     .sort((a, b) => (b.flaggedAt ?? 0) - (a.flaggedAt ?? 0));
 
+  // --- EXCLUSIONES (la X de la vista) --------------------------------------
+  // Tareas quitadas a mano del resumen de ESTA semana: no se listan ni
+  // cuentan en las métricas. La tarea sigue viva en el tablero y en ClickUp.
+  const excl = await readExclusions(ctx, from);
+  if (excl.size > 0) {
+    const keep = <T extends { taskId: string }>(arr: T[]) =>
+      arr.filter((x) => !excl.has(x.taskId));
+    done = keep(done);
+    inProgress = keep(inProgress);
+    queued = keep(queued);
+    pending = keep(pending);
+    blocked = keep(blocked);
+    incoming = keep(incoming);
+    talkingPoints = keep(talkingPoints);
+  }
+
   // --- MÉTRICAS -----------------------------------------------------------
   const subtasksClosed = Array.from(subtasksClosedByTask.values()).reduce(
     (acc, l) => acc + l.length,
@@ -353,14 +378,17 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
   // Delta vs. la semana anterior: su ventana REAL es [from-7d, from+1d) —
   // martes a martes+1 con el solape del día ancla (ver catchupConfig).
   // Días calendario, no milisegundos, para sobrevivir al cambio de hora.
+  // Aplican las exclusiones de ESA semana, no las de esta.
   const f = new Date(from);
   const prevFrom = new Date(f.getFullYear(), f.getMonth(), f.getDate() - 7).setHours(0, 0, 0, 0);
   const prevTo = new Date(f.getFullYear(), f.getMonth(), f.getDate() + 1).setHours(0, 0, 0, 0);
+  const prevExcl = await readExclusions(ctx, prevFrom);
   const prevDone = scoped.filter(
     (t) =>
       t.completedAt !== undefined &&
       t.completedAt >= prevFrom &&
-      t.completedAt < prevTo,
+      t.completedAt < prevTo &&
+      !prevExcl.has(String(t._id)),
   ).length;
 
   return {
@@ -1007,6 +1035,39 @@ export const ensurePreviousClosed = mutation({
     });
 
     return { closed: true };
+  },
+});
+
+/**
+ * Quita (o restaura) una tarea del resumen de UNA semana — la X de la vista.
+ * Solo afecta esa ventana y sus contadores; la tarea no se toca en el tablero
+ * ni en ClickUp. Al cerrar la semana, el snapshot se congela sin ella.
+ * Idempotente.
+ */
+export const setExcluded = mutation({
+  args: {
+    ...sessionArg,
+    weekStart: v.number(),
+    taskId: v.id("tasks"),
+    excluded: v.boolean(),
+  },
+  handler: async (ctx, { sessionToken, weekStart, taskId, excluded }) => {
+    await requireAuth(ctx, sessionToken);
+    const rows = await ctx.db
+      .query("catchupExclusions")
+      .withIndex("by_weekStart", (q) => q.eq("weekStart", weekStart))
+      .collect();
+    const mine = rows.filter((r) => r.taskId === taskId);
+    if (excluded && mine.length === 0) {
+      await ctx.db.insert("catchupExclusions", {
+        weekStart,
+        taskId,
+        createdAt: Date.now(),
+      });
+    } else if (!excluded && mine.length > 0) {
+      await Promise.all(mine.map((r) => ctx.db.delete(r._id)));
+    }
+    return { excluded };
   },
 });
 
