@@ -289,7 +289,7 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                       Sincronización desde ClickUp
                     </p>
                     <p className="mt-0.5 text-xs text-mute">
-                      Elegí qué carpetas, proyectos o tareas querés importar y
+                      Elige qué carpetas, proyectos o tareas quieres importar y
                       mantener sincronizadas. Explorás el árbol de ClickUp y
                       marcás qué traer.
                     </p>
@@ -355,7 +355,7 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                   <div>
                     <p className="label">Áreas visibles</p>
                     <p className="mb-2 text-xs text-mute">
-                      Ocultá áreas que no uses. Es solo visual: las tareas
+                      Oculta áreas que no uses. Es solo visual: las tareas
                       siguen existiendo y sincronizándose.
                     </p>
                     <div className="space-y-2">

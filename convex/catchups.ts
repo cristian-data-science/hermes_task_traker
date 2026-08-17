@@ -505,7 +505,7 @@ export const getWeek = query({
       .first();
 
     // El catch-up cerrado inmediatamente anterior: de ahí salen los
-    // compromisos que se muestran arriba de todo ("Venís de…").
+    // compromisos que se muestran arriba de todo ("Semana anterior").
     const allClosed = await ctx.db.query("catchups").collect();
     const previous = allClosed
       .filter((c) => c.weekStart < from)
@@ -534,7 +534,7 @@ export const getWeek = query({
       previous: previous
         ? {
             // El id viaja para poder marcar a mano los compromisos sin tarea
-            // enlazada desde el bloque "Venís de".
+            // enlazada desde el bloque "Semana anterior".
             id: previous._id as string,
             weekStart: previous.weekStart,
             weekEnd: previous.weekEnd,
@@ -613,8 +613,8 @@ export const getClosed = query({
  *
  * ===== POR QUÉ ESTA VISTA EXISTE =====
  * Sin ella, la bitácora es una pila de semanas sueltas y el arrastre solo se
- * ve de a una semana por vez. "Esto lo venís prometiendo hace cinco martes"
- * es una frase que la app puede decir y vos no podés reconstruir de memoria —
+ * ve de a una semana por vez. "Esto lo vienes prometiendo hace cinco martes"
+ * es una frase que la app puede decir y vos no puedes reconstruir de memoria —
  * y es exactamente la que más te conviene decir vos antes que tu jefatura.
  *
  * Un compromiso puede terminar de tres maneras, y las tres importan:
@@ -946,7 +946,7 @@ export const close = mutation({
  *  - NO se limpian los pines 📌: todavía no los conversaste.
  *  - El snapshot se guarda sin headline; la UI lo genera con las métricas
  *    congeladas (graceful degradation ya soportada).
- *  - Siempre podés "Editar cierre" después: el auto-cierre no sella nada
+ *  - Siempre puedes "Editar cierre" después: el auto-cierre no sella nada
  *    para siempre.
  *
  * Idempotente: si la semana ya está cerrada, no toca nada.

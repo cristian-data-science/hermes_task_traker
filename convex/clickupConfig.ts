@@ -173,7 +173,7 @@ export function parseClickupConfig(raw: string | undefined): ClickupConfig {
  *      en el picker (clickupListId); si no hay, Mesa Técnica (ClickUp acepta
  *      parent cross-list dentro del mismo space).
  *   3. Sin parentId pero CON clickupListId → tarea plana (nivel 0) en esa list.
- *      Es el caso "elegí proyecto + plano (sin anidar)" del picker: antes caía
+ *      Es el caso "eligió proyecto + plano (sin anidar)" del picker: antes caía
  *      silenciosamente en Mesa Técnica porque esta función ignoraba el listId.
  *   4. Sin parentId ni listId → Mesa Técnica.
  */

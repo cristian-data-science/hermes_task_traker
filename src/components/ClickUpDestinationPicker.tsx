@@ -524,7 +524,7 @@ export function ClickUpDestinationPicker({
                 }}
                 className="input py-1.5 text-sm"
               >
-                <option value="">— Elegí un proyecto —</option>
+                <option value="">— Elige un proyecto —</option>
                 {folders.map((f) => (
                   <option key={f.folderId} value={f.folderId}>
                     {f.folderName}
@@ -540,7 +540,7 @@ export function ClickUpDestinationPicker({
                 <p className="px-2 py-1.5 text-[11px] leading-snug text-mute">
                   Esta tarea ya está anclada a un destino que no coincide con
                   ninguno de los proyectos listados. Si no tocás nada, el destino
-                  se mantiene; elegí un proyecto solo si querés moverla.
+                  se mantiene; elige un proyecto solo si quieres moverla.
                 </p>
               )}
 

@@ -251,7 +251,7 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
       {/* ===== 2. Tres números ===== */}
       <ChipsRow body={body} />
 
-      {/* ===== 3. Venís de… ===== */}
+      {/* ===== 3. Semana anterior ===== */}
       {data.previous && data.previous.commitments.length > 0 && (
         <PreviousBlock previous={data.previous} tasks={tasks} onEditTask={onEditTask} />
       )}
@@ -475,7 +475,7 @@ function PreviousBlock({
   const done = previous.commitments.filter((c) => c.outcome === "done").length;
 
   return (
-    <Section title="Venís de" count={previous.commitments.length}>
+    <Section title="Semana anterior" count={previous.commitments.length}>
       <p className="mb-1.5 text-xs text-mute">
         {done}/{previous.commitments.length} compromisos cumplidos
       </p>
@@ -750,7 +750,7 @@ function ActiveSection({
   );
 }
 
-/** Las pineadas: lo que querés levantar en la conversación. */
+/** Las pineadas: lo que quieres levantar en la conversación. */
 function TalkingSection({
   points,
   tasks,
@@ -912,7 +912,7 @@ function CloseModal({
             </div>
             {drafts.length === 0 && (
               <p className="rounded-el border-el border-line bg-panel px-3 py-2.5 text-xs text-mute">
-                Sin compromisos. Añadí 3 a 5: es lo que la semana que viene se resuelve solo
+                Sin compromisos. Añade de 3 a 5: es lo que la semana que viene se resuelve solo
                 contra el tablero.
               </p>
             )}

@@ -41,7 +41,7 @@ interface PendingChange {
  * Página completa de sincronización ClickUp: un explorador del workspace con
  * checkboxes de 3 estados para suscribirse a folders/lists/tareas.
  *
- * Marcás qué querés importar y mantener sincronizado, y "Aplicar" dispara el
+ * Marcás qué quieres importar y mantener sincronizado, y "Aplicar" dispara el
  * importe inmediato + persiste las suscripciones.
  */
 export function ClickUpSyncPage({ onBack }: ClickUpSyncPageProps) {
