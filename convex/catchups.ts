@@ -350,15 +350,17 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     0,
   );
 
-  // Delta vs. la semana anterior. Se calcula restando el largo exacto de la
-  // ventana; con cambio de hora puede desviarse una hora, lo cual es
-  // irrelevante para un contador de tareas.
-  const span = to - from;
+  // Delta vs. la semana anterior: su ventana REAL es [from-7d, from+1d) —
+  // martes a martes+1 con el solape del día ancla (ver catchupConfig).
+  // Días calendario, no milisegundos, para sobrevivir al cambio de hora.
+  const f = new Date(from);
+  const prevFrom = new Date(f.getFullYear(), f.getMonth(), f.getDate() - 7).setHours(0, 0, 0, 0);
+  const prevTo = new Date(f.getFullYear(), f.getMonth(), f.getDate() + 1).setHours(0, 0, 0, 0);
   const prevDone = scoped.filter(
     (t) =>
       t.completedAt !== undefined &&
-      t.completedAt >= from - span &&
-      t.completedAt < from,
+      t.completedAt >= prevFrom &&
+      t.completedAt < prevTo,
   ).length;
 
   return {
@@ -468,9 +470,12 @@ async function resolveCommitments(
  * Parsea un snapshot congelado. Devuelve null si está corrupto en vez de
  * lanzar: una fila mala no puede tumbar la bitácora entera.
  */
-function parseSnapshot(raw: string): WeekSummary | null {
+/** Snapshot congelado; `headline` existe desde la vista 2.0 (opcional). */
+export type FrozenSnapshot = WeekSummary & { headline?: string };
+
+function parseSnapshot(raw: string): FrozenSnapshot | null {
   try {
-    return JSON.parse(raw) as WeekSummary;
+    return JSON.parse(raw) as FrozenSnapshot;
   } catch {
     return null;
   }
@@ -500,7 +505,7 @@ export const getWeek = query({
       .first();
 
     // El catch-up cerrado inmediatamente anterior: de ahí salen los
-    // compromisos que se muestran arriba de todo ("Venís de…").
+    // compromisos que se muestran arriba de todo ("Semana anterior").
     const allClosed = await ctx.db.query("catchups").collect();
     const previous = allClosed
       .filter((c) => c.weekStart < from)
@@ -529,7 +534,7 @@ export const getWeek = query({
       previous: previous
         ? {
             // El id viaja para poder marcar a mano los compromisos sin tarea
-            // enlazada desde el bloque "Venís de".
+            // enlazada desde el bloque "Semana anterior".
             id: previous._id as string,
             weekStart: previous.weekStart,
             weekEnd: previous.weekEnd,
@@ -560,8 +565,11 @@ export const history = query({
         // El snapshot se guarda como JSON string. Si alguna vez quedara
         // corrupto, la bitácora no debe caerse entera por una fila mala.
         let metrics: Record<string, number> | null = null;
+        let headline: string | null = null;
         try {
-          metrics = JSON.parse(c.snapshot)?.metrics ?? null;
+          const snap = JSON.parse(c.snapshot);
+          metrics = snap?.metrics ?? null;
+          headline = snap?.headline ?? null;
         } catch {
           metrics = null;
         }
@@ -573,6 +581,7 @@ export const history = query({
           notes: c.notes ?? null,
           commitmentCount: c.commitments.length,
           metrics,
+          headline,
         };
       });
   },
@@ -604,8 +613,8 @@ export const getClosed = query({
  *
  * ===== POR QUÉ ESTA VISTA EXISTE =====
  * Sin ella, la bitácora es una pila de semanas sueltas y el arrastre solo se
- * ve de a una semana por vez. "Esto lo venís prometiendo hace cinco martes"
- * es una frase que la app puede decir y vos no podés reconstruir de memoria —
+ * ve de a una semana por vez. "Esto lo vienes prometiendo hace cinco martes"
+ * es una frase que la app puede decir y vos no puedes reconstruir de memoria —
  * y es exactamente la que más te conviene decir vos antes que tu jefatura.
  *
  * Un compromiso puede terminar de tres maneras, y las tres importan:
@@ -841,6 +850,12 @@ export const close = mutation({
      * que el bloque pierda todo su valor de señal.
      */
     clearFlags: v.optional(v.boolean()),
+    /**
+     * La frase ejecutiva de la semana, tal como se mostraba al cerrar. Se
+     * congela dentro del snapshot: abrir una semana vieja debe mostrar la
+     * frase que se presentó ese día, no un recálculo.
+     */
+    headline: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireAuth(ctx, args.sessionToken);
@@ -864,7 +879,10 @@ export const close = mutation({
       }))
       .filter((c) => c.text.length > 0);
 
-    const snapshot = JSON.stringify(await buildSummary(ctx, from, to));
+    const snapshot = JSON.stringify({
+      ...(await buildSummary(ctx, from, to)),
+      headline: args.headline?.trim().slice(0, 300) || undefined,
+    });
     const now = Date.now();
     const notes = args.notes?.slice(0, NOTES_MAX);
 
@@ -914,6 +932,81 @@ export const close = mutation({
     }
 
     return id;
+  },
+});
+
+/**
+ * Lazy close: sella la semana anterior si su ventana ya venció y quedó sin
+ * cerrar. La vista lo invoca al montarse; así el historial nunca tiene huecos
+ * aunque nunca aprietes "Cerrar".
+ *
+ * Diferencias deliberadas con el cierre manual:
+ *  - Los compromisos se ARRASTRAN solos (los no cumplidos, +1 arrastre);
+ *    nadie los revisó, así que no se inventan otros.
+ *  - NO se limpian los pines 📌: todavía no los conversaste.
+ *  - El snapshot se guarda sin headline; la UI lo genera con las métricas
+ *    congeladas (graceful degradation ya soportada).
+ *  - Siempre puedes "Editar cierre" después: el auto-cierre no sella nada
+ *    para siempre.
+ *
+ * Idempotente: si la semana ya está cerrada, no toca nada.
+ */
+export const ensurePreviousClosed = mutation({
+  args: {
+    ...sessionArg,
+    /** Inicio de la semana a cerrar (la anterior a la que se está viendo). */
+    prevFrom: v.number(),
+    /** Fin de esa semana (exclusivo). Debe estar en el pasado. */
+    prevTo: v.number(),
+  },
+  handler: async (ctx, { sessionToken, prevFrom, prevTo }) => {
+    await requireAuth(ctx, sessionToken);
+    if (!(prevTo > prevFrom)) throw new Error("Ventana inválida");
+
+    // Solo semanas que ya terminaron. El lunes, la semana en curso sigue
+    // abierta con su botón manual: esto no la toca.
+    if (prevTo > Date.now()) return { closed: false, reason: "not-ended" };
+
+    const existing = await ctx.db
+      .query("catchups")
+      .withIndex("by_weekStart", (q) => q.eq("weekStart", prevFrom))
+      .first();
+    if (existing) return { closed: false, reason: "already-closed" };
+
+    // Arrastrar los compromisos no cumplidos del cierre inmediatamente
+    // anterior (si existe), igual que haría el modal manual.
+    const before = (await ctx.db.query("catchups").collect())
+      .filter((c) => c.weekStart < prevFrom)
+      .sort((a, b) => b.weekStart - a.weekStart)[0];
+    let carried: { id: string; text: string; taskId?: Id<"tasks">; carryCount: number; rootId: string }[] = [];
+    if (before) {
+      const resolved = await resolveCommitments(ctx, before.commitments, before.weekStart);
+      carried = resolved
+        .filter((c) => c.outcome !== "done" && c.outcome !== "gone")
+        .map((c) => ({
+          id: `${c.id}-auto`,
+          text: c.text.slice(0, COMMITMENT_MAX),
+          taskId: (c.taskId as Id<"tasks"> | null) ?? undefined,
+          carryCount: c.carryCount + 1,
+          // El rootId NO cambia: une esta aparición con la original.
+          rootId: c.rootId,
+        }));
+    }
+
+    const snapshot = JSON.stringify(await buildSummary(ctx, prevFrom, prevTo));
+    const now = Date.now();
+    await ctx.db.insert("catchups", {
+      weekStart: prevFrom,
+      weekEnd: prevTo,
+      closedAt: now,
+      notes: undefined,
+      snapshot,
+      commitments: carried,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return { closed: true };
   },
 });
 

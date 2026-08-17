@@ -54,6 +54,59 @@ export function pendingOf(body: WeekBody): WeekBody["pending"] {
   return body.pending ?? [];
 }
 
+/**
+ * La frase ejecutiva de la semana: el resumen entero en una lectura.
+ *
+ * "Cerraste 7 tareas (+2 vs semana pasada). 3 en curso, 1 detenida hace 12
+ * días, 2 entraron nuevas."
+ *
+ * Se genera en el cliente para que la semana viva y el snapshot congelado
+ * usen exactamente el mismo cálculo: al cerrar, esta misma frase se guarda en
+ * el snapshot y es lo que se muestra al reabrir esa semana.
+ */
+export function buildHeadline(body: WeekBody): string {
+  const m = body.metrics;
+  const parts: string[] = [];
+
+  if (m.completed === 0) {
+    parts.push("Nada completado esta semana");
+  } else {
+    const delta = m.completed - m.completedPrevWeek;
+    const deltaTxt =
+      delta === 0
+        ? "igual que la semana pasada"
+        : `(${delta > 0 ? "+" : ""}${delta} vs semana pasada)`;
+    parts.push(`Cerraste ${m.completed} ${m.completed === 1 ? "tarea" : "tareas"} ${deltaTxt}`);
+  }
+
+  const open: string[] = [];
+  if (m.inProgress > 0) open.push(`${m.inProgress} en curso`);
+  if (m.blocked > 0) {
+    // La detenida más vieja, para que la frase señale el problema concreto.
+    const oldest = [...body.blocked]
+      .filter((t) => t.since !== null)
+      .sort((a, b) => (a.since ?? 0) - (b.since ?? 0))[0];
+    const age =
+      oldest && oldest.since !== null
+        ? ` hace ${Math.max(1, Math.floor((Date.now() - oldest.since) / 86400000))} días`
+        : "";
+    open.push(`${m.blocked} detenida${m.blocked !== 1 ? "s" : ""}${age}`);
+  }
+  const waiting = (m.queued ?? 0) + (m.pending ?? 0);
+  if (waiting > 0) open.push(`${waiting} en espera`);
+  if (open.length > 0) parts.push(open.join(", ") + ".");
+
+  if (m.created > 0) {
+    parts.push(`${m.created} ${m.created === 1 ? "entró nueva" : "entraron nuevas"}.`);
+  }
+
+  if (parts.length === 0) return "Semana sin movimiento.";
+  // La primera parte termina en ")" o palabra — se une con ". " a las demás.
+  const first = parts.shift()!;
+  const rest = parts.map((p) => (p.endsWith(".") ? p : p + ".")).join(" ");
+  return rest ? `${first}. ${rest}` : `${first}.`;
+}
+
 /** Etiqueta legible de un estado, sin depender del icono. */
 const STATUS_LABEL: Record<string, string> = {
   urgente: "Urgente",
@@ -123,16 +176,8 @@ export function buildCatchupText(
   }
 
   // ---- Titular -----------------------------------------------------------
-  const m = data.metrics;
-  const delta = m.completed - m.completedPrevWeek;
-  const deltaTxt =
-    delta === 0 ? "igual que la semana pasada" : `${delta > 0 ? "+" : ""}${delta} vs. semana pasada`;
   L.push("## Resumen");
-  L.push(`Completadas: ${m.completed} (${deltaTxt})`);
-  L.push(
-    `Abiertas ahora: ${m.inProgress} en curso · ${m.queued ?? 0} en cola · ` +
-      `${m.pending ?? 0} pendientes · ${m.blocked} detenidas · Entraron: ${m.created}`,
-  );
+  L.push(buildHeadline(data));
   L.push("");
 
   // ---- Hecho -------------------------------------------------------------

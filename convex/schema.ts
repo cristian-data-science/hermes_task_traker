@@ -136,7 +136,7 @@ export default defineSchema({
      * tema fresco, y se limpia al cerrar la semana.
      */
     catchupFlag: v.optional(v.boolean()),
-    /** Nota corta del porqué se marcó (qué querés conversar de esta tarea). */
+    /** Nota corta del porqué se marcó (qué quieres conversar de esta tarea). */
     catchupNote: v.optional(v.string()),
     /** Cuándo se marcó, para ubicarla en la semana correcta. */
     catchupFlaggedAt: v.optional(v.number()),
@@ -241,7 +241,7 @@ export default defineSchema({
          * Identidad estable a través de los arrastres: todas las apariciones
          * del MISMO compromiso, semana tras semana, comparten `rootId`.
          *
-         * Es lo que permite reconstruir el linaje ("esto lo venís prometiendo
+         * Es lo que permite reconstruir el linaje ("esto lo vienes prometiendo
          * hace 5 semanas") sin lo cual la bitácora es una pila de semanas
          * sueltas. Opcional porque los cierres anteriores a este campo no lo
          * tienen: para esos se deduce del sufijo del `id`.

@@ -58,33 +58,32 @@ export function parseAnchorDay(raw: string | undefined | null): number {
 /**
  * Inicio (00:00 hora local) de la ventana de catch-up que contiene a `ref`.
  *
- * ===== EL DÍA DEL CATCH-UP CIERRA LA SEMANA, NO LA ABRE =====
- * Esta función devolvía HOY cuando hoy era el día ancla, con el razonamiento
- * de que "la semana nueva arranca el día de la conversación". Estaba mal, y se
- * notaba justo el peor día: al abrir la vista el martes a la mañana para
- * preparar la reunión, la ventana iba de hoy al martes siguiente y aparecía
- * vacía. Todo el trabajo de la semana quedaba en la ventana anterior.
+ * ===== MARTES A MARTES, CON EL MARTES FINAL INCLUSIVO =====
+ * La ventana siempre arranca el día ancla y termina el ancla siguiente
+ * (inclusivo): 8 días calendario. "No importa que sean más de siete días":
+ * lo completado el día de la reunión también es parte de esa semana, y el
+ * rango se lee martes → martes sin excepciones.
  *
- * El pedido original era "desde el martes anterior hasta este, rango de siete
- * días". O sea: el día del catch-up es el ÚLTIMO día de la ventana, no el
- * primero. Uno presenta lo que hizo hasta ese momento, incluido lo de esa
- * misma mañana.
+ * El día de la reunión, la ventana sigue siendo la que TERMINA hoy (para
+ * preparar y presentar). Recién al día siguiente pasa a la semana nueva.
  *
  * Así, con ancla en martes:
- *   - martes 11  → [miércoles 5 … martes 11]   ← lo que vas a presentar hoy
- *   - miércoles 12 → [miércoles 12 … martes 18] ← la semana que recién arranca
- *   - sábado 15  → [miércoles 12 … martes 18]
+ *   - lunes 17    → [martes 11 … martes 18]  ← la que vas a presentar mañana
+ *   - martes 18   → [martes 11 … martes 18]  ← presentás hoy, hoy cuenta
+ *   - miércoles 19 → [martes 18 … martes 25] ← la semana nueva
  *
- * Las ventanas no se solapan y siempre miden 7 días.
+ * Consecuencia aceptada a propósito: dos ventanas consecutivas comparten el
+ * día ancla (el martes 18 entra en la semana que se presenta ese día y en la
+ * siguiente). Es el solape explícito que pidió el diseño: claridad del rango
+ * por encima de la exclusividad de la métrica.
  */
 export function startOfCurrentWeek(anchorDay: number, ref: Date = new Date()): number {
   const d = new Date(ref.getFullYear(), ref.getMonth(), ref.getDate());
-  // Días hasta el ancla anterior. El `|| 7` es la clave: si hoy ES el día
-  // ancla, el resto da 0 y hay que irse a la semana pasada, no quedarse hoy.
-  const back = (d.getDay() - anchorDay + 7) % 7 || 7;
-  // +1 porque el ancla pertenece a la ventana que TERMINA en él: la siguiente
-  // arranca al día posterior.
-  d.setDate(d.getDate() - back + 1);
+  // Días desde el último ancla (0 si hoy ES el ancla). El día ancla pertenece
+  // a la ventana que TERMINA en él, así que si hoy es ancla hay que irse 7
+  // días atrás: la que presentás hoy es la que empezó el ancla anterior.
+  const since = (d.getDay() - anchorDay + 7) % 7;
+  d.setDate(d.getDate() - (since === 0 ? 7 : since));
   return startOfDay(d);
 }
 
@@ -112,18 +111,21 @@ function startOfDay(d: Date): number {
 
 /**
  * Ventana de una semana de catch-up a partir de su inicio.
- * `to` es exclusivo: [from, to).
+ *
+ * `to` es exclusivo y marca el día POSTERIOR al ancla final: [martes, miércoles+7)
+ * = 8 días calendario, para que el martes de cierre quede incluido completo.
+ * Ver el comentario de `startOfCurrentWeek` sobre el solape aceptado.
  */
 export function weekWindow(weekStart: number): { from: number; to: number } {
   const start = new Date(weekStart);
   const end = new Date(
     start.getFullYear(),
     start.getMonth(),
-    start.getDate() + 7,
+    start.getDate() + 8,
   );
-  // Ojo: `to - from` NO siempre son 168 horas. La semana del cambio de hora
-  // mide 167 o 169, y está bien que así sea: la ventana la definen los días
-  // del calendario local, no una cantidad fija de milisegundos.
+  // Ojo: `to - from` NO siempre son 192 horas. La semana del cambio de hora
+  // mide una más o una menos, y está bien: la ventana la definen los días del
+  // calendario local, no una cantidad fija de milisegundos.
   return { from: weekStart, to: startOfDay(end) };
 }
 

@@ -127,7 +127,7 @@ export function ClickUpTreeNavigator({
       ) : (
         <div className="space-y-0.5">
           <p className="px-1 pb-1 text-[10px] leading-snug text-faint">
-            Elegí dónde cae la tarea. Clic en un nombre = la tarea queda como su
+            Elige dónde caerá la tarea. Clic en un nombre = la tarea queda como su
             <strong> hija</strong>. Clic en <ChevronRight className="inline h-2.5 w-2.5" /> para ver subtareas y bajar de nivel.
           </p>
           <div className="max-h-56 space-y-0.5 overflow-y-auto">

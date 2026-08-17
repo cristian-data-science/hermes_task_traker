@@ -85,7 +85,7 @@ export function CatchupPinButton({
 
 /**
  * Bloque del pin dentro del modal de tarea: además de marcar, permite escribir
- * la nota de UNA línea que explica qué querés conversar.
+ * la nota de UNA línea que explica qué quieres conversar.
  *
  * La nota es lo que hace útil al pin. Una tarea marcada sin contexto te obliga
  * a reconstruir el martes por qué la marcaste el jueves — exactamente el
@@ -148,7 +148,7 @@ export function CatchupNoteField({ task }: { task: Doc<"tasks"> }) {
           // Se guarda al salir del campo y no en cada tecla: escribir una nota
           // no debería disparar una escritura por carácter.
           onBlur={() => void persist(true, note)}
-          placeholder="¿Qué querés conversar de esta tarea?"
+          placeholder="¿Qué quieres conversar de esta tarea?"
           className="input mt-2 text-sm"
         />
       )}

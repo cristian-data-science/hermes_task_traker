@@ -160,7 +160,7 @@ export function ProjectDiscovery({ config }: ProjectDiscoveryProps) {
         <div>
           <p className="label mb-0">Proyectos disponibles</p>
           <p className="text-xs text-mute">
-            Folders de ClickUp donde tenés tareas asignadas.
+            Carpetas de ClickUp donde tienes tareas asignadas.
           </p>
         </div>
         <button

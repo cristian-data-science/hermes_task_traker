@@ -347,7 +347,7 @@ export function InboundSyncModal({ open, onClose }: InboundSyncModalProps) {
                     <div>
                       <p className="label">Proyectos</p>
                       <p className="mb-2 text-xs text-mute">
-                        Apagá los que no te interesan sincronizar.
+                        Apaga los que no te interesan sincronizar.
                       </p>
                       <div className="space-y-1">
                         {groups.map((g) => {

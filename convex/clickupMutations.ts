@@ -232,7 +232,7 @@ export const _createInboundTask = internalMutation({
       clickupUrl: `https://app.clickup.com/t/${args.clickupId}`,
       clickupSyncedAt: now,
       clickupPath: args.clickupPath,
-      // Preservar el responsable original de ClickUp. Si sos vos → executor=cris.
+      // Preservar el responsable original de ClickUp. Si eres tú → executor=cris.
       // Si es otro → guardamos su nombre en clickupAssignee y dejamos executor
       // sin setear (no forzamos "claw" que es el agente Hermes, no la persona real).
       clickupAssignee: args.assigneeName,
