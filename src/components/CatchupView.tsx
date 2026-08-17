@@ -16,7 +16,7 @@
  * la frase o en el texto copiado.
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -110,6 +110,33 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
 
   const frozen = !!data?.closed?.snapshot;
   const [showFrozen, setShowFrozen] = useState(true);
+
+  /**
+   * Lazy close: al abrir la vista, sellar la semana anterior si venció sin
+   * cerrar (arrastre automático de compromisos, pines intactos). El botón
+   * manual sigue disponible para la semana en curso — esto nunca la toca.
+   * Idempotente y con guard para no repetir la llamada por semana vista.
+   */
+  const ensureClosed = useMutation(api.catchups.ensurePreviousClosed);
+  const ensuredFor = useRef<number | null>(null);
+  useEffect(() => {
+    if (!token || offset !== 0 || ensuredFor.current === from) return;
+    ensuredFor.current = from;
+    const span = to - from;
+    void ensureClosed({
+      sessionToken: token,
+      prevFrom: from - span,
+      prevTo: from,
+    })
+      .then((r) => {
+        if ((r as { closed: boolean }).closed) {
+          toast.success("Semana anterior cerrada automáticamente");
+        }
+      })
+      .catch(() => {
+        // Silencioso: si falla, el cierre manual sigue disponible.
+      });
+  }, [token, offset, from, to, ensureClosed]);
 
   const windowLabel = formatWindowLabel(from, to);
   const isCurrent = offset === 0;

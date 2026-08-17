@@ -934,6 +934,81 @@ export const close = mutation({
 });
 
 /**
+ * Lazy close: sella la semana anterior si su ventana ya venció y quedó sin
+ * cerrar. La vista lo invoca al montarse; así el historial nunca tiene huecos
+ * aunque nunca aprietes "Cerrar".
+ *
+ * Diferencias deliberadas con el cierre manual:
+ *  - Los compromisos se ARRASTRAN solos (los no cumplidos, +1 arrastre);
+ *    nadie los revisó, así que no se inventan otros.
+ *  - NO se limpian los pines 📌: todavía no los conversaste.
+ *  - El snapshot se guarda sin headline; la UI lo genera con las métricas
+ *    congeladas (graceful degradation ya soportada).
+ *  - Siempre podés "Editar cierre" después: el auto-cierre no sella nada
+ *    para siempre.
+ *
+ * Idempotente: si la semana ya está cerrada, no toca nada.
+ */
+export const ensurePreviousClosed = mutation({
+  args: {
+    ...sessionArg,
+    /** Inicio de la semana a cerrar (la anterior a la que se está viendo). */
+    prevFrom: v.number(),
+    /** Fin de esa semana (exclusivo). Debe estar en el pasado. */
+    prevTo: v.number(),
+  },
+  handler: async (ctx, { sessionToken, prevFrom, prevTo }) => {
+    await requireAuth(ctx, sessionToken);
+    if (!(prevTo > prevFrom)) throw new Error("Ventana inválida");
+
+    // Solo semanas que ya terminaron. El lunes, la semana en curso sigue
+    // abierta con su botón manual: esto no la toca.
+    if (prevTo > Date.now()) return { closed: false, reason: "not-ended" };
+
+    const existing = await ctx.db
+      .query("catchups")
+      .withIndex("by_weekStart", (q) => q.eq("weekStart", prevFrom))
+      .first();
+    if (existing) return { closed: false, reason: "already-closed" };
+
+    // Arrastrar los compromisos no cumplidos del cierre inmediatamente
+    // anterior (si existe), igual que haría el modal manual.
+    const before = (await ctx.db.query("catchups").collect())
+      .filter((c) => c.weekStart < prevFrom)
+      .sort((a, b) => b.weekStart - a.weekStart)[0];
+    let carried: { id: string; text: string; taskId?: Id<"tasks">; carryCount: number; rootId: string }[] = [];
+    if (before) {
+      const resolved = await resolveCommitments(ctx, before.commitments, before.weekStart);
+      carried = resolved
+        .filter((c) => c.outcome !== "done" && c.outcome !== "gone")
+        .map((c) => ({
+          id: `${c.id}-auto`,
+          text: c.text.slice(0, COMMITMENT_MAX),
+          taskId: (c.taskId as Id<"tasks"> | null) ?? undefined,
+          carryCount: c.carryCount + 1,
+          // El rootId NO cambia: une esta aparición con la original.
+          rootId: c.rootId,
+        }));
+    }
+
+    const snapshot = JSON.stringify(await buildSummary(ctx, prevFrom, prevTo));
+    const now = Date.now();
+    await ctx.db.insert("catchups", {
+      weekStart: prevFrom,
+      weekEnd: prevTo,
+      closedAt: now,
+      notes: undefined,
+      snapshot,
+      commitments: carried,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    return { closed: true };
+  },
+});
+
+/**
  * Marca a mano un compromiso como cumplido.
  *
  * Solo tiene sentido para los compromisos SIN tarea enlazada ("hablar con
