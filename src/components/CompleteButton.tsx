@@ -43,6 +43,7 @@ export function CompleteButton({
       toast.custom(
         (t) => (
           <UndoToast
+            taskTitle={task.title}
             onUndo={async () => {
               toast.dismiss(t.id);
               try {
@@ -92,8 +93,8 @@ export function CompleteButton({
   );
 }
 
-/** Globo de "Deshacer" consistente con el tema. */
-function UndoToast({ onUndo }: { onUndo: () => void }) {
+/** Globo de "Deshacer" consistente con el tema. Muestra QUÉ tarea se completó. */
+function UndoToast({ onUndo, taskTitle }: { onUndo: () => void; taskTitle: string }) {
   return (
     <div
       className="flex items-center gap-3 rounded-el px-3 py-2.5 text-sm shadow-el-lg"
@@ -108,7 +109,12 @@ function UndoToast({ onUndo }: { onUndo: () => void }) {
         className="h-4 w-4 shrink-0"
         style={{ color: "var(--status-completado)" }}
       />
-      <span className="flex-1 font-medium">Tarea completada</span>
+      <span className="min-w-0 flex-1">
+        <span className="block font-medium">Completada</span>
+        <span className="block max-w-[240px] truncate text-xs opacity-75">
+          {taskTitle}
+        </span>
+      </span>
       <button
         type="button"
         onClick={onUndo}

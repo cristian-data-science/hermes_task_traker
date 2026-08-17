@@ -20,6 +20,7 @@ import type * as clickupMutations from "../clickupMutations.js";
 import type * as events from "../events.js";
 import type * as seed from "../seed.js";
 import type * as settings from "../settings.js";
+import type * as songs from "../songs.js";
 import type * as subtasks from "../subtasks.js";
 import type * as tasks from "../tasks.js";
 
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   events: typeof events;
   seed: typeof seed;
   settings: typeof settings;
+  songs: typeof songs;
   subtasks: typeof subtasks;
   tasks: typeof tasks;
 }>;
