@@ -2007,6 +2007,22 @@ export interface SearchEntry {
 }
 
 /**
+ * Un "contenedor" buscable: un folder (proyecto) o una list. Elegir uno no
+ * ancla la tarea a ningún nodo: abre la jerarquía en el picker para que el
+ * usuario elija el nivel exacto a mano.
+ */
+export interface SearchContainer {
+  kind: "folder" | "list";
+  id: string;
+  name: string;
+  folderId: string;
+  folderName: string;
+  /** List donde abrir el árbol (para folder: su primera list). */
+  listId: string;
+  listName: string;
+}
+
+/**
  * Índice plano de TODAS las tareas del space (con subtareas) para el buscador
  * de destino: el usuario escribe, el cliente filtra este índice en memoria.
  *
@@ -2019,7 +2035,9 @@ export interface SearchEntry {
  */
 export const getSearchIndex = action({
   args: { sessionToken: v.string() },
-  handler: async (ctx, { sessionToken }): Promise<{ entries: SearchEntry[] }> => {
+  handler: async (ctx, {
+    sessionToken,
+  }): Promise<{ entries: SearchEntry[]; containers: SearchContainer[] }> => {
     const ok = await ctx.runQuery(internal.settings._checkSession, {
       sessionToken,
     });
@@ -2033,7 +2051,32 @@ export const getSearchIndex = action({
     // Lanzar en paralelo: todas las páginas de todas las lists, cada fetch
     // con su metadata de ubicación (folder/list) pegada al costado.
     const jobs: { fetch: Promise<any>; meta: { folderId: string; folderName: string; listId: string; listName: string } }[] = [];
+    const containers: SearchContainer[] = [];
     for (const folder of folders) {
+      const lists = (folder.lists ?? []).filter(
+        (l: any) => !l.archived,
+      ) as { id: string; name: string }[];
+      if (lists.length === 0) continue;
+      containers.push({
+        kind: "folder",
+        id: folder.id,
+        name: folder.name ?? "?",
+        folderId: folder.id,
+        folderName: folder.name ?? "?",
+        listId: lists[0].id,
+        listName: lists[0].name,
+      });
+      for (const list of lists) {
+        containers.push({
+          kind: "list",
+          id: list.id,
+          name: list.name,
+          folderId: folder.id,
+          folderName: folder.name ?? "?",
+          listId: list.id,
+          listName: list.name,
+        });
+      }
       for (const list of folder.lists ?? []) {
         if (list.archived) continue;
         const m = {
@@ -2076,6 +2119,6 @@ export const getSearchIndex = action({
         });
       }
     });
-    return { entries };
+    return { entries, containers };
   },
 });

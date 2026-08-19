@@ -383,16 +383,26 @@ export function ClickUpDestinationPicker({
   if (!config) return null;
 
   /**
-   * Al elegir un resultado del buscador: anclar la tarea bajo ese nodo y
-   * sincronizar TODO el estado de ubicación (folder del dropdown, list,
-   * breadcrumb y la rama del árbol a expandir). El nodo elegido pasa a ser
-   * tratado como el "destino guardado" (initialValueRef) para que el
-   * breadcrumb y la expansión le pertenezcan.
+   * Al elegir un resultado del buscador:
+   *  - Tarea/sección: ancla la tarea bajo ese nodo y sincroniza TODO el
+   *    estado de ubicación (folder, list, breadcrumb, rama del árbol).
+   *  - Proyecto/lista: NO ancla — abre la jerarquía en esa ubicación para
+   *    que el usuario elija el nivel exacto a mano en el árbol.
    */
   function handleSearchPick(hit: SearchHit) {
     setMode("proyecto");
     setSelectedFolderId(hit.folderId);
     setResolvedListId(hit.listId);
+    userPickedFolderRef.current = false;
+    if (hit.kind !== "task") {
+      // Contenedor: abrir folder + list, sin ancla. El breadcrumb cae al
+      // branch "folder › list (nivel 0)" y el árbol muestra las raíces.
+      setSavedPath(null);
+      initialValueRef.current = undefined;
+      initialListIdRef.current = hit.listId;
+      onChange(undefined, hit.listId);
+      return;
+    }
     setSavedPath({
       listId: hit.listId,
       listName: hit.listName,
@@ -403,7 +413,6 @@ export function ClickUpDestinationPicker({
     // Que el nuevo destino cuente como "el guardado" para breadcrumb/expansión.
     initialValueRef.current = hit.id;
     initialListIdRef.current = hit.listId;
-    userPickedFolderRef.current = false;
     onChange(hit.id, hit.listId);
   }
 
@@ -721,8 +730,10 @@ function norm(s: string): string {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-/** Un resultado del buscador: nodo + breadcrumb de su ubicación. */
+/** Un resultado del buscador: tarea (ancla) o contenedor (abre jerarquía). */
 export interface SearchHit {
+  /** task = ancla bajo ese nodo · folder/list = abre para elegir a mano. */
+  kind: "task" | "list" | "folder";
   id: string;
   name: string;
   listId: string;
@@ -755,6 +766,9 @@ export function DestinationSearch({
   const [entries, setEntries] = useState<Awaited<
     ReturnType<typeof getIndex>
   >["entries"] | null>(null);
+  const [containers, setContainers] = useState<Awaited<
+    ReturnType<typeof getIndex>
+  >["containers"] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -781,6 +795,7 @@ export function DestinationSearch({
     try {
       const result = await getIndex({ sessionToken: token });
       setEntries(result.entries);
+      setContainers(result.containers);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "No se pudo cargar el índice",
@@ -790,23 +805,62 @@ export function DestinationSearch({
     }
   }
 
-  // Resultados: filtrado local con score (nombre empieza > nombre contiene >
-  // ubicación contiene). Breadcrumb armado subiendo por `parent`.
+  // Resultados: matching por TOKENS (todas las palabras deben estar, en
+  // cualquier orden — así "ley de datos" encuentra "Ley de protección de
+  // datos"). Los contenedores (proyecto/lista) compiten con las tareas y
+  // ganan los empates por nombre más corto: al buscar el proyecto, el
+  // proyecto sale primero.
   const hits = (() => {
     const q = norm(query.trim());
-    if (!entries || q.length < 2) return [];
-    const byId = new Map(entries.map((e) => [e.id, e]));
+    if (q.length < 2 || (!entries && !containers)) return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const allIn = (t: string) => tokens.every((k) => norm(t).includes(k));
     const scored: { hit: SearchHit; score: number }[] = [];
-    for (const e of entries) {
+
+    // Contenedores: elegir un proyecto/lista NO ancla — abre la jerarquía.
+    for (const c of containers ?? []) {
+      let score = 0;
+      if (norm(c.name).startsWith(q)) score = 4;
+      else if (allIn(c.name)) score = 3;
+      else if (allIn(`${c.folderName} ${c.name}`)) score = 2;
+      else continue;
+      scored.push({
+        hit: {
+          kind: c.kind,
+          id: c.id,
+          name: c.name,
+          listId: c.listId,
+          listName: c.listName,
+          folderId: c.folderId,
+          folderName: c.folderName,
+          path: [],
+        },
+        score,
+      });
+    }
+
+    // Tareas: ancla bajo el nodo elegido, con breadcrumb de ancestros.
+    const byId = new Map((entries ?? []).map((e) => [e.id, e]));
+    for (const e of entries ?? []) {
       const nName = norm(e.name);
       let score = 0;
-      if (nName.startsWith(q)) score = 3;
-      else if (nName.includes(q)) score = 2;
-      else if (norm(`${e.folderName} ${e.listName}`).includes(q)) score = 1;
-      else continue;
-      // Breadcrumb: ancestros desde la raíz hasta el nodo (inclusive).
+      if (nName.startsWith(q)) score = 4;
+      else if (allIn(nName)) score = 3;
+      else if (allIn(`${e.folderName} ${e.listName}`)) score = 2;
+      else {
+        // ¿Está en la jerarquía? Solo si el índice ya cargó los ancestros.
+        const parts = [e.folderName, e.listName];
+        let cur = e.parent ? byId.get(e.parent) : undefined;
+        let guard = 0;
+        while (cur && guard++ < 12) {
+          parts.push(cur.name);
+          cur = cur.parent ? byId.get(cur.parent) : undefined;
+        }
+        if (!allIn(parts.join(" "))) continue;
+        score = 1;
+      }
       const path: { id: string; name: string }[] = [];
-      let cur: (typeof entries)[number] | undefined = e;
+      let cur: NonNullable<typeof entries>[number] | undefined = e;
       let guard = 0;
       while (cur && guard++ < 12) {
         path.unshift({ id: cur.id, name: cur.name });
@@ -814,6 +868,7 @@ export function DestinationSearch({
       }
       scored.push({
         hit: {
+          kind: "task",
           id: e.id,
           name: e.name,
           listId: e.listId,
@@ -920,7 +975,14 @@ export function DestinationSearch({
                     i === activeIdx ? "bg-panel2" : "hover:bg-panel2",
                   )}
                 >
-                  <p className="truncate text-sm font-medium text-ink">{h.name}</p>
+                  <p className="flex items-center gap-1.5 text-sm font-medium text-ink">
+                    {h.kind !== "task" && (
+                      <span className="shrink-0 rounded bg-accent/15 px-1 py-0.5 text-[9px] font-bold uppercase text-accent">
+                        {h.kind === "folder" ? "proyecto" : "lista"}
+                      </span>
+                    )}
+                    <span className="truncate">{h.name}</span>
+                  </p>
                   <p className="truncate text-[10px] text-faint">{crumb}</p>
                 </button>
               );
