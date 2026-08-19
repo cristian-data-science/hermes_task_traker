@@ -1988,3 +1988,94 @@ export const cleanupDuplicateTasks = action({
     });
   },
 });
+
+// ============================================================
+//  ÍNDICE DE BÚSQUEDA (buscador de destino del picker)
+// ============================================================
+
+/** Una tarea del índice de búsqueda, aplanada con su ubicación. */
+export interface SearchEntry {
+  id: string;
+  name: string;
+  status: string;
+  /** ClickUp id del padre directo (null = raíz de la list). */
+  parent: string | null;
+  listId: string;
+  listName: string;
+  folderId: string;
+  folderName: string;
+}
+
+/**
+ * Índice plano de TODAS las tareas del space (con subtareas) para el buscador
+ * de destino: el usuario escribe, el cliente filtra este índice en memoria.
+ *
+ * La búsqueda server-side de ClickUp (`?query=` en team tasks) se ignora en
+ * este workspace (probado: devuelve lo mismo para cualquier texto), así que
+ * el índice se trae completo UNA vez y el filtrado es local e instantáneo.
+ *
+ * Folders en paralelo → lists con subtasks paginadas en paralelo.
+ * Pública (action) con auth.
+ */
+export const getSearchIndex = action({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, { sessionToken }): Promise<{ entries: SearchEntry[] }> => {
+    const ok = await ctx.runQuery(internal.settings._checkSession, {
+      sessionToken,
+    });
+    if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+
+    const fdata = await clickupFetch(
+      `/space/${CLICKUP_SPACE_ID}/folder?archived=false`,
+    );
+    const folders: any[] = fdata?.folders ?? [];
+
+    // Lanzar en paralelo: todas las páginas de todas las lists, cada fetch
+    // con su metadata de ubicación (folder/list) pegada al costado.
+    const jobs: { fetch: Promise<any>; meta: { folderId: string; folderName: string; listId: string; listName: string } }[] = [];
+    for (const folder of folders) {
+      for (const list of folder.lists ?? []) {
+        if (list.archived) continue;
+        const m = {
+          folderId: folder.id,
+          folderName: folder.name ?? "?",
+          listId: list.id,
+          listName: list.name ?? "?",
+        };
+        // Hasta 10 páginas por list como cota de sanidad (100/page).
+        for (let page = 0; page < 10; page++) {
+          jobs.push({
+            fetch: clickupFetch(
+              `/list/${list.id}/task?archived=false&include_closed=false&subtasks=true&page=${page}`,
+            ).catch(() => null),
+            meta: m,
+          });
+        }
+      }
+    }
+    const results = await Promise.all(jobs.map((j) => j.fetch));
+
+    const entries: SearchEntry[] = [];
+    const seen = new Set<string>();
+    results.forEach((data, i) => {
+      const tasks: any[] = data?.tasks ?? [];
+      // Página vacía = fin de esa list (o error silencioso): nada que hacer.
+      for (const t of tasks) {
+        if (seen.has(t.id)) continue;
+        seen.add(t.id);
+        const m = jobs[i].meta;
+        entries.push({
+          id: t.id,
+          name: t.name,
+          status: t.status?.status ?? "to do",
+          parent: t.parent ?? null,
+          listId: m.listId,
+          listName: m.listName,
+          folderId: m.folderId,
+          folderName: m.folderName,
+        });
+      }
+    });
+    return { entries };
+  },
+});

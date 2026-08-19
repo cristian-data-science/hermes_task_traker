@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAction, useQuery } from "convex/react";
-import { ChevronRight, Loader2, RefreshCw } from "lucide-react";
+import { ChevronRight, Loader2, RefreshCw, Search, X } from "lucide-react";
 import { api } from "~/convex/_generated/api";
 import type { ClickupConfig } from "~/convex/clickupConfig";
 import { ClickUpTreeNavigator } from "./ClickUpTreeNavigator";
@@ -382,6 +382,31 @@ export function ClickUpDestinationPicker({
 
   if (!config) return null;
 
+  /**
+   * Al elegir un resultado del buscador: anclar la tarea bajo ese nodo y
+   * sincronizar TODO el estado de ubicación (folder del dropdown, list,
+   * breadcrumb y la rama del árbol a expandir). El nodo elegido pasa a ser
+   * tratado como el "destino guardado" (initialValueRef) para que el
+   * breadcrumb y la expansión le pertenezcan.
+   */
+  function handleSearchPick(hit: SearchHit) {
+    setMode("proyecto");
+    setSelectedFolderId(hit.folderId);
+    setResolvedListId(hit.listId);
+    setSavedPath({
+      listId: hit.listId,
+      listName: hit.listName,
+      folderId: hit.folderId,
+      folderName: hit.folderName,
+      path: hit.path,
+    });
+    // Que el nuevo destino cuente como "el guardado" para breadcrumb/expansión.
+    initialValueRef.current = hit.id;
+    initialListIdRef.current = hit.listId;
+    userPickedFolderRef.current = false;
+    onChange(hit.id, hit.listId);
+  }
+
   return (
     <div className="rounded-el border-el border-line bg-panel2 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -401,6 +426,9 @@ export function ClickUpDestinationPicker({
           </button>
         )}
       </div>
+
+      {/* Buscador: escribís y elegís dónde anclar; el resto se sincroniza. */}
+      <DestinationSearch token={token} onPick={handleSearchPick} />
 
       {/* Ubicación guardada: dónde vive HOY la tarea en ClickUp, con la
           jerarquía completa. Es lo primero que se ve al reabrir la tarea. */}
@@ -677,6 +705,229 @@ function FolderTreeSection({
           onChange(parentId ? parentId : undefined, selectedListId);
         }}
       />
+    </div>
+  );
+}
+
+// ============================================================
+//  BUSCADOR DE DESTINO
+// ============================================================
+
+/** Normaliza texto para buscar: minúsculas y sin diacríticos. */
+function norm(s: string): string {
+  return s
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+/** Un resultado del buscador: nodo + breadcrumb de su ubicación. */
+export interface SearchHit {
+  id: string;
+  name: string;
+  listId: string;
+  listName: string;
+  folderId: string;
+  folderName: string;
+  /** De la raíz al nodo incluido, para el breadcrumb y la expansión. */
+  path: { id: string; name: string }[];
+}
+
+/**
+ * Buscador de destino: escribís "ley de datos cor", te trae las coincidencias
+ * del workspace completo (tareas, secciones, raíces) y al elegir una, la tarea
+ * queda anclada bajo ese nodo — el picker sincroniza folder, list y árbol.
+ *
+ * El índice se trae UNA vez (lazy, al primer focus) y el filtrado es local:
+ * la búsqueda server-side de ClickUp se ignora en este workspace (probado).
+ */
+export function DestinationSearch({
+  token,
+  onPick,
+}: {
+  token: string | null;
+  /** Al elegir resultado: el picker sincroniza todo el estado de ubicación. */
+  onPick: (hit: SearchHit) => void;
+}) {
+  const getIndex = useAction(api.clickup.getSearchIndex);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [entries, setEntries] = useState<Awaited<
+    ReturnType<typeof getIndex>
+  >["entries"] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeIdx, setActiveIdx] = useState(0);
+  const indexAsked = useRef(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Cerrar al clic fuera.
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  async function ensureIndex() {
+    if (indexAsked.current || !token) return;
+    indexAsked.current = true;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await getIndex({ sessionToken: token });
+      setEntries(result.entries);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "No se pudo cargar el índice",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Resultados: filtrado local con score (nombre empieza > nombre contiene >
+  // ubicación contiene). Breadcrumb armado subiendo por `parent`.
+  const hits = (() => {
+    const q = norm(query.trim());
+    if (!entries || q.length < 2) return [];
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    const scored: { hit: SearchHit; score: number }[] = [];
+    for (const e of entries) {
+      const nName = norm(e.name);
+      let score = 0;
+      if (nName.startsWith(q)) score = 3;
+      else if (nName.includes(q)) score = 2;
+      else if (norm(`${e.folderName} ${e.listName}`).includes(q)) score = 1;
+      else continue;
+      // Breadcrumb: ancestros desde la raíz hasta el nodo (inclusive).
+      const path: { id: string; name: string }[] = [];
+      let cur: (typeof entries)[number] | undefined = e;
+      let guard = 0;
+      while (cur && guard++ < 12) {
+        path.unshift({ id: cur.id, name: cur.name });
+        cur = cur.parent ? byId.get(cur.parent) : undefined;
+      }
+      scored.push({
+        hit: {
+          id: e.id,
+          name: e.name,
+          listId: e.listId,
+          listName: e.listName,
+          folderId: e.folderId,
+          folderName: e.folderName,
+          path,
+        },
+        score,
+      });
+    }
+    scored.sort((a, b) => b.score - a.score || a.hit.name.length - b.hit.name.length);
+    return scored.slice(0, 12).map((s) => s.hit);
+  })();
+
+  function pick(hit: SearchHit) {
+    setQuery("");
+    setOpen(false);
+    onPick(hit);
+  }
+
+  return (
+    <div ref={rootRef} className="relative mb-2">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-faint" />
+        <input
+          value={query}
+          onFocus={() => {
+            setOpen(true);
+            void ensureIndex();
+          }}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+            setActiveIdx(0);
+            void ensureIndex();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setOpen(false);
+              return;
+            }
+            if (e.key === "ArrowDown" && hits.length > 0) {
+              e.preventDefault();
+              setActiveIdx((i) => Math.min(hits.length - 1, i + 1));
+            } else if (e.key === "ArrowUp" && hits.length > 0) {
+              e.preventDefault();
+              setActiveIdx((i) => Math.max(0, i - 1));
+            } else if (e.key === "Enter" && hits.length > 0) {
+              e.preventDefault();
+              pick(hits[Math.min(activeIdx, hits.length - 1)]);
+            }
+          }}
+          placeholder="Buscar dónde anclar (proyecto, sección, tarea)…"
+          className="input py-1.5 pl-9 pr-8 text-sm"
+        />
+        {query && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery("");
+              setOpen(false);
+            }}
+            className="absolute right-2 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded-full text-faint hover:bg-panel2 hover:text-ink"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-30 mt-1 max-h-72 overflow-y-auto rounded-el border-el border-line bg-panel shadow-el-lg">
+          {loading ? (
+            <div className="flex items-center gap-1.5 px-3 py-2.5 text-xs text-mute">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              Cargando índice de ClickUp…
+            </div>
+          ) : error ? (
+            <p className="px-3 py-2.5 text-xs text-danger">{error}</p>
+          ) : query.trim().length < 2 ? (
+            <p className="px-3 py-2.5 text-xs text-faint">
+              Escribí al menos 2 letras…
+            </p>
+          ) : hits.length === 0 ? (
+            <p className="px-3 py-2.5 text-xs text-faint">
+              Sin coincidencias en el workspace.
+            </p>
+          ) : (
+            hits.map((h, i) => {
+              const crumb = [h.folderName, h.listName, ...h.path.map((n) => n.name)]
+                .filter((s, j, arr) => j === 0 || s !== arr[j - 1])
+                .join(" › ");
+              return (
+                <button
+                  key={h.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    pick(h);
+                  }}
+                  onMouseEnter={() => setActiveIdx(i)}
+                  className={cn(
+                    "block w-full border-b border-line px-3 py-2 text-left last:border-0",
+                    i === activeIdx ? "bg-panel2" : "hover:bg-panel2",
+                  )}
+                >
+                  <p className="truncate text-sm font-medium text-ink">{h.name}</p>
+                  <p className="truncate text-[10px] text-faint">{crumb}</p>
+                </button>
+              );
+            })
+          )}
+        </div>
+      )}
     </div>
   );
 }
