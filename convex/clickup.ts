@@ -317,7 +317,9 @@ export const syncTask = internalAction({
     if (!task) return;
 
     // 3) Solo área patagonia. datacef/personal nunca tocan ClickUp.
-    if (task.area !== "patagonia") return;
+    // Las tareas "solo local" tampoco: guard de defensa por si un sync quedó
+    // agendado justo antes de activar el check.
+    if (task.area !== "patagonia" || task.clickupLocal) return;
 
     // 3.b) Desvinculada a mano: no se escribe NADA en ClickUp, ni siquiera el
     // borrado. Es la garantía de "esta tarea ya no le pertenece a ClickUp".

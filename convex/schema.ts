@@ -91,6 +91,11 @@ export default defineSchema({
     /** Último error de sync (vacío = ok). Se muestra en la UI como aviso. */
     clickupSyncError: v.optional(v.string()),
     /**
+     * Tarea SOLO LOCAL (área Patagonia): no se crea ni se sincroniza con
+     * ClickUp. Vive únicamente en Convex. El check del TaskModal la activa.
+     */
+    clickupLocal: v.optional(v.boolean()),
+    /**
      * Si el usuario descartó esta tarea del modal de sync reversa (inbound).
      * Evita que reaparezca como "nueva" en futuros escaneos.
      */

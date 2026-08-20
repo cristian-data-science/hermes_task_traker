@@ -119,6 +119,7 @@ export function TaskModal({
   const [clickupParentId, setClickupParentId] = useState<string | undefined>(
     undefined,
   );
+  const [clickupLocal, setClickupLocal] = useState<boolean>(false);
   const [clickupListId, setClickupListId] = useState<string | undefined>(
     undefined,
   );
@@ -158,6 +159,7 @@ export function TaskModal({
       setRequestedBy(task.requestedBy ?? "");
       setClickupParentId(task.clickupParentId);
       setClickupListId(task.clickupListId);
+      setClickupLocal(task.clickupLocal ?? false);
     } else {
       setTitle("");
       setArea(
@@ -177,6 +179,7 @@ export function TaskModal({
       setRequestedBy("");
       setClickupParentId(undefined);
       setClickupListId(undefined);
+      setClickupLocal(false);
     }
     setNewSub("");
     setHydratedKey(ctxKey);
@@ -218,18 +221,21 @@ export function TaskModal({
         // mandamos nada, para no pisar un destino válido cuando el picker no
         // llegó a resolverlo al abrir.
         ...(area === "patagonia"
-          ? isEdit
-            ? destinationChanged
-              ? {
-                  clickupParentId: clickupParentId ?? "",
-                  clickupListId: clickupListId ?? "",
-                }
-              : {}
-            : {
-                // Al CREAR: omitir vacíos para no persistir strings vacíos.
-                ...(clickupParentId ? { clickupParentId } : {}),
-                ...(clickupListId ? { clickupListId } : {}),
-              }
+          ? {
+              clickupLocal,
+              ...(isEdit
+                ? destinationChanged
+                  ? {
+                      clickupParentId: clickupParentId ?? "",
+                      clickupListId: clickupListId ?? "",
+                    }
+                  : {}
+                : {
+                    // Al CREAR: omitir vacíos para no persistir strings vacíos.
+                    ...(clickupParentId ? { clickupParentId } : {}),
+                    ...(clickupListId ? { clickupListId } : {}),
+                  }),
+            }
           : isEdit && task
             ? // Si salió de Patagonia, limpiar el destino ClickUp.
               { clickupParentId: "", clickupListId: "" }
@@ -461,7 +467,49 @@ export function TaskModal({
               {/* Destino ClickUp (solo Patagonia) */}
               {area === "patagonia" && (
                 <div className="mb-4">
-                  {hydratedKey === ctxKey && (
+                  {/* Check "solo local": la tarea vive únicamente en Hermes y
+                      nunca se crea en ClickUp. */}
+                  <button
+                    type="button"
+                    onClick={() => setClickupLocal((v) => !v)}
+                    className={cn(
+                      "mb-2 flex w-full items-center gap-2.5 rounded-el border-el px-2.5 py-2 text-left transition-colors",
+                      clickupLocal
+                        ? "border-accent/50 bg-accent/5"
+                        : "border-line hover:bg-panel2",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "grid h-4 w-4 shrink-0 place-items-center rounded border-el transition-colors",
+                        clickupLocal
+                          ? "border-accent bg-accent text-acfg"
+                          : "border-line bg-panel",
+                      )}
+                    >
+                      {clickupLocal && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-xs font-semibold text-ink">
+                        Solo local
+                      </span>
+                      <span className="block text-[10px] text-faint">
+                        Vive únicamente en Hermes: no se crea ni sincroniza con
+                        ClickUp
+                        {isEdit && task?.clickupId
+                          ? " (se desvinculará; la copia en ClickUp queda)"
+                          : ""}
+                      </span>
+                    </span>
+                  </button>
+
+                  {clickupLocal ? (
+                    <div className="rounded-el border-el border-line bg-panel px-3 py-2.5 text-xs text-mute">
+                      Esta tarea quedará solo en Convex con el badge{" "}
+                      <span className="font-medium text-mute">Local</span>.
+                    </div>
+                  ) : (
+                    hydratedKey === ctxKey && (
                     <ClickUpDestinationPicker
                       // Remount limpio al cambiar de tarea (o nueva↔edición).
                       // El picker fija su estado de navegación una sola vez al
@@ -477,6 +525,7 @@ export function TaskModal({
                         setClickupListId(lid);
                       }}
                     />
+                  )
                   )}
                   {/* Estado de sync / link si la tarea ya está sincronizada */}
                   {isEdit && task?.clickupUrl && (

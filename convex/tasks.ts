@@ -211,7 +211,7 @@ const taskFields = {
 
 /** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
 export const create = mutation({
-  args: taskFields,
+  args: { ...taskFields, clickupLocal: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     await requireAuth(ctx, args.sessionToken);
     const now = Date.now();
@@ -246,6 +246,7 @@ export const create = mutation({
       requestedBy: sanitized.requestedBy ?? args.requestedBy,
       clickupParentId: args.clickupParentId,
       clickupListId: args.clickupListId,
+      clickupLocal: args.clickupLocal,
       order: 0,
       completedAt: args.status === "completado" ? now : undefined,
       createdAt: now,
@@ -272,10 +273,11 @@ export const create = mutation({
       });
     }
 
-    // ===== Sync ClickUp outbound (solo patagonia) =====
+    // ===== Sync ClickUp outbound (solo patagonia, no local) =====
     // El handler del scheduler valida enabled/área internamente; agendamos
     // sin más para que corra en background sin bloquear el retorno.
-    if (args.area === "patagonia") {
+    // Las tareas "solo local" nunca se crean en ClickUp.
+    if (args.area === "patagonia" && !args.clickupLocal) {
       await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
         sessionToken: args.sessionToken,
         taskId,
@@ -307,6 +309,7 @@ export const update = mutation({
     requestedBy: v.optional(v.string()),
     clickupParentId: v.optional(v.string()),
     clickupListId: v.optional(v.string()),
+    clickupLocal: v.optional(v.boolean()),
   },
   handler: async (ctx, { sessionToken, id, ...patch }) => {
     await requireAuth(ctx, sessionToken);
@@ -366,11 +369,16 @@ export const update = mutation({
     //
     // Ojo: contemplamos también el cambio SOLO de list (tarea plana que se
     // mueve de proyecto sin parent) y el vaciado del parent → Mesa Técnica.
+    //
+    // Activar "solo local" en una tarea ya sincronizada también desvincula:
+    // la copia en ClickUp queda (no se borra), pero deja de sincronizarse.
+    const goingLocal = patch.clickupLocal === true;
     if (
       task.clickupId &&
-      destTouched &&
-      (nextParentId !== task.clickupParentId ||
-        nextListId !== task.clickupListId)
+      (goingLocal ||
+        (destTouched &&
+          (nextParentId !== task.clickupParentId ||
+            nextListId !== task.clickupListId)))
     ) {
       await ctx.db.patch(id, {
         clickupId: undefined,
@@ -446,17 +454,18 @@ export const update = mutation({
       });
     }
 
-    // ===== Sync ClickUp outbound (solo patagonia) =====
+    // ===== Sync ClickUp outbound (solo patagonia, no local) =====
     // El área final puede haber cambiado: releemos para decidir.
     const updated = await ctx.db.get(id);
-    if (updated && updated.area === "patagonia") {
+    if (updated && updated.area === "patagonia" && !updated.clickupLocal) {
       await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
         sessionToken,
         taskId: id,
         op: syncOp ?? "update",
       });
     } else if (updated && updated.clickupId) {
-      // Salió de patagonia pero estaba sincronizada: desvincular sin borrar.
+      // Salió de patagonia (o quedó "solo local") estando sincronizada:
+      // desvincular sin borrar en ClickUp.
       await ctx.db.patch(id, {
         clickupId: undefined,
         clickupUrl: undefined,
