@@ -119,6 +119,10 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
    */
   const ensureClosed = useMutation(api.catchups.ensurePreviousClosed);
   const ensuredFor = useRef<number | null>(null);
+  // La X de cada fila (exclusiones). TIENE que ir antes del early return de
+  // abajo: un hook después de un return condicional rompe la regla de hooks
+  // (React error #310 — crash en producción al llegar `data` en el 2º render).
+  const excludeTask = useMutation(api.catchups.setExcluded);
   useEffect(() => {
     if (!token || offset !== 0 || ensuredFor.current === from) return;
     ensuredFor.current = from;
@@ -159,9 +163,6 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
   /** ¿El body es el cálculo vivo (editable)? El snapshot congelado no se toca. */
   const editable = !(frozen && showFrozen);
 
-  // La X de cada fila: quita la tarea de ESTE resumen (solo la vista y sus
-  // contadores; la tarea sigue en el tablero y en ClickUp). Toast con Deshacer.
-  const excludeTask = useMutation(api.catchups.setExcluded);
   function handleExclude(taskId: string, title: string) {
     if (!token) return;
     void excludeTask({
