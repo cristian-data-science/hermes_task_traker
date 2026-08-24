@@ -54,6 +54,8 @@ import {
   DAY_LABELS,
 } from "~/convex/catchupConfig";
 import { useAuth } from "../hooks/useAuth";
+import { StatusBadge } from "./Badges";
+import { STATUS_META, type Status } from "../lib/constants";
 import {
   buildCatchupText,
   buildHeadline,
@@ -469,6 +471,7 @@ function Section({
 function TaskRow({
   title,
   taskId,
+  status,
   project,
   ancestors,
   clickupUrl,
@@ -482,6 +485,8 @@ function TaskRow({
   title: string;
   /** Para la X de exclusión (presente aunque la tarea ya no exista). */
   taskId?: string;
+  /** Estado de la tarea (chip sutil); se omite si no es un estado válido. */
+  status?: string;
   project: string | null;
   ancestors: string[];
   clickupUrl: string | null;
@@ -504,7 +509,16 @@ function TaskRow({
       onClick={() => task && onEditTask(task)}
     >
       <div className="min-w-0 flex-1">
-        <p className={cn("truncate text-sm text-ink", danger && "font-medium")}>{title}</p>
+        <p className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn("truncate text-sm text-ink", danger && "font-medium")}
+          >
+            {title}
+          </span>
+          {status && STATUS_META[status as Status] && (
+            <StatusBadge status={status as Status} size="xs" />
+          )}
+        </p>
         <p className="truncate text-[11px] text-faint">
           {place}
           {sub && ` · ${sub}`}
@@ -784,6 +798,7 @@ function ActiveSection({
         key={t.taskId}
         title={t.title}
         taskId={t.taskId}
+        status={t.status}
         project={t.project}
         ancestors={t.ancestors}
         clickupUrl={t.clickupUrl}
@@ -867,6 +882,7 @@ function TalkingSection({
             key={p.taskId}
             title={p.title}
             taskId={p.taskId}
+            status={p.status}
             project={p.project}
             ancestors={p.ancestors}
             clickupUrl={p.clickupUrl}
