@@ -527,14 +527,32 @@ export function TaskModal({
                     />
                   )
                   )}
-                  {/* Estado de sync / link si la tarea ya está sincronizada */}
-                  {isEdit && task?.clickupUrl && (
-                    <div className="mt-2 flex items-center gap-2 text-xs">
+                  {/* Estado de sync / link. Se muestra también SIN clickupUrl:
+                      una creación en ClickUp que falló no tiene URL, y antes
+                      el error quedaba invisible (la tarea parecía "Local"). */}
+                  {isEdit && (task?.clickupUrl || task?.clickupSyncError) && (
+                    <div className="mt-2 flex flex-col gap-0.5 text-xs">
                       {task.clickupSyncError ? (
-                        <span className="inline-flex items-center gap-1 text-danger">
-                          <AlertTriangle className="h-3.5 w-3.5" />
-                          Error de sync: {task.clickupSyncError}
-                        </span>
+                        <>
+                          <span
+                            className="inline-flex items-center gap-1 text-danger"
+                            title={task.clickupSyncError}
+                          >
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                            <span className="min-w-0 break-words">
+                              Error de sync:{" "}
+                              {task.clickupSyncError.length > 140
+                                ? `${task.clickupSyncError.slice(0, 140)}…`
+                                : task.clickupSyncError}
+                            </span>
+                          </span>
+                          {!task.clickupId && (
+                            <span className="pl-5 text-[10px] text-faint">
+                              No llegó a crearse en ClickUp. Se reintenta al
+                              volver a guardar la tarea.
+                            </span>
+                          )}
+                        </>
                       ) : (
                         <a
                           href={task.clickupUrl}

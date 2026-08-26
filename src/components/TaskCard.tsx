@@ -305,6 +305,16 @@ export function TaskCard({
             )}
             ClickUp
           </a>
+        ) : task.clickupSyncError ? (
+          // Creación en ClickUp que falló (sin URL todavía): sin esta rama
+          // el error era invisible y la tarea parecía "Local" sin más.
+          <span
+            className="inline-flex items-center gap-1 text-danger"
+            title={`No se pudo crear en ClickUp — ${task.clickupSyncError}`}
+          >
+            <AlertTriangle className="h-3 w-3" />
+            Sync fallida
+          </span>
         ) : (
           <span
             className="inline-flex items-center gap-1 text-faint"
