@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "app.vercel.agenttask_one",
+        "sha256_cert_fingerprints": ["98:0C:11:78:B1:60:52:BD:E7:9E:F1:02:9F:27:AA:A7:4C:62:74:5D:85:D9:5E:E8:9F:17:77:1C:E2:BF:46:4F"]
+      }
+    }]

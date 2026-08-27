@@ -58,3 +58,4 @@ playwright-report/
 tests-e2e/.auth/
 screenshots/desktop-current/
 screenshots/mobile/
+android-apk/
