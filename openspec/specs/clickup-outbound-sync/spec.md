@@ -91,6 +91,25 @@ sincronizada NO desvinculada; las desvinculadas se borran solo localmente.
 - **WHEN** se elimina una tarea con clickupId y sin clickupDetached
 - **THEN** se hace DELETE en ClickUp y se desvincula localmente
 
+### Requirement: Transporte vía MCP oficial (OAuth)
+El sistema SHALL realizar el sync outbound a través del **MCP oficial de
+ClickUp** (`mcp.clickup.com`, JSON-RPC tools/call) con un token OAuth Bearer,
+porque el workspace Patagonia negó el permiso `can_use_public_api_dev_key` al
+personal API token. La conexión se establece por OAuth con Dynamic Client
+Registration + PKCE público (`clickupOAuth*`), consentimiento del usuario,
+y el token queda persistido en settings (`clickup.mcpToken`, expira ~10 años).
+Formatos MCP verificados: priority/status string, assignees como STRING de id,
+due_date `YYYY-MM-DD`, time_estimate epoch-ms en string; create_task anida via
+argumento `parent` (sin PUT separado).
+
+#### Scenario: Conectar la app sin admin
+- **WHEN** se genera el link de autorización y el usuario consiente Patagonia
+- **THEN** el token queda guardado y el sync sale por MCP sin personal token
+
+#### Scenario: Crear tarea anidada por MCP
+- **WHEN** syncTask crea una tarea con destino anclado
+- **THEN** usa clickup_create_task con list_id+parent en un único call
+
 ### Requirement: Mantenimiento
 El sistema SHALL ofrecer acciones de mantenimiento: re-sincronizar
 responsables (`syncAssignees`), relee todas las ubicaciones

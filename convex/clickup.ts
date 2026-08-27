@@ -40,6 +40,165 @@ import {
 
 const API_BASE = "https://api.clickup.com/api/v2";
 
+// ============================================================
+//  Transporte MCP (OAuth) — canal vigente desde que el workspace
+//  Patagonia negó `can_use_public_api_dev_key` al personal token.
+//  El flujo de conexión vive en clickupOAuth.ts; el token queda en
+//  settings (`clickup.mcpToken`). La API REST clásica sigue usándose
+//  con CLICKUP_API_KEY donde todavía responda (inbound, pendiente).
+// ============================================================
+
+const MCP_URL = "https://mcp.clickup.com/mcp";
+
+/** Token OAuth del guardado por el callback (`clickupOAuth._saveToken`). */
+async function getMcpToken(ctx: unknown): Promise<string | null> {
+  const row = await (
+    ctx as { runQuery: (q: unknown, a?: unknown) => Promise<unknown> }
+  ).runQuery(internal.clickupOAuth._getTokenRow, {});
+  return (row as string | null) ?? null;
+}
+
+/** Igual que getMcpToken pero lanza con instrucción clara si falta. */
+async function requireMcpToken(ctx: unknown): Promise<string> {
+  const token = await getMcpToken(ctx);
+  if (!token)
+    throw new Error(
+      "ClickUp no conectado vía OAuth/MCP. Generá el enlace con clickupOAuthNode.requestOAuthLink e autorizá el workspace.",
+    );
+  return token;
+}
+
+/**
+ * Invoca una tool del servidor MCP de ClickUp.
+ *
+ * La respuesta puede llegar como JSON puro o envuelta en SSE
+ * (`event: message\ndata: {...}`); se parsea en modo dual. Lanza ante HTTP
+ * distinto de 2xx, error JSON-RPC o `result.isError`. Devuelve `result`.
+ */
+async function mcpCall(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  token: string,
+): Promise<any> {
+  const resp = await fetch(MCP_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: Math.floor(Math.random() * 1_000_000_000),
+      method: "tools/call",
+      params: { name: toolName, arguments: toolArgs },
+    }),
+  });
+  const raw = await resp.text();
+  if (!resp.ok) throw new Error(`MCP ${resp.status}: ${raw.slice(0, 300)}`);
+
+  // Parse dual: JSON directo o SSE con una o más líneas `data: {json}`.
+  let payload: any;
+  try {
+    const dataIdx = raw.indexOf("data:");
+    if (dataIdx >= 0) {
+      const brace = raw.indexOf("{", dataIdx);
+      payload = JSON.parse(raw.slice(brace));
+    } else {
+      payload = JSON.parse(raw);
+    }
+  } catch {
+    throw new Error(`MCP respuesta ilegible: ${raw.slice(0, 200)}`);
+  }
+  if (payload.error) {
+    throw new Error(
+      `MCP error ${payload.error.code}: ${JSON.stringify(payload.error.message ?? payload.error)}`,
+    );
+  }
+  const result = payload.result;
+  if (!result) throw new Error("MCP respuesta sin result");
+  if (result.isError) throw new Error(mcpContentText(result));
+  return result;
+}
+
+/** Concatena el texto útil de result.content (bloques type:"text"). */
+function mcpContentText(result: any): string {
+  const c = result?.content;
+  if (Array.isArray(c)) {
+    return c
+      .map((x: any) => (typeof x?.text === "string" ? x.text : ""))
+      .join("\n");
+  }
+  return typeof result === "string" ? result : JSON.stringify(result ?? {});
+}
+
+/** El resultado estructurado preferente; fallback al content parseado. */
+function mcpStructured(result: any): any {
+  if (result?.structuredContent) return result.structuredContent;
+  const text = mcpContentText(result);
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+/** ¿El mensaje corresponde a una tarea que ya no existe en ClickUp? */
+function mcpIsNotFound(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("404") ||
+    m.includes("not found") ||
+    m.includes("does not exist") ||
+    m.includes("no se encontró")
+  );
+}
+
+/**
+ * Argumentos para create_task/update_task derivados de la tarea Hermes.
+ * Replica las reglas del ex buildTaskBody (REST) en el formato de las tools
+ * MCP: claves indefinidas se OMITEN (update nunca limpia fecha/estimación:
+ * limpiarlas es una limitación menor por ahora).
+ */
+
+function mcpTaskArgs(task: Doc<"tasks">): Record<string, unknown> {
+  const metaLines: string[] = [];
+  if (task.notes) metaLines.push(task.notes);
+  if (task.requestedBy) metaLines.push(`Solicitado por: ${task.requestedBy}`);
+  if (typeof task.progress === "number")
+    metaLines.push(`Progreso: ${task.progress}%`);
+
+  const args: Record<string, unknown> = {
+    name: task.title,
+    // Descripción SIEMPRE (igual que el REST): vacía = " ".
+    markdown_description: metaLines.join("\n\n") || " ",
+    status: mapStatusToClickUp(task.status),
+    // urgente → urgent, en-curso → high, resto → normal (se manda siempre
+    // para que al salir de urgente/en-curso ClickUp la baje). La tool MCP
+    // espera STRINGS de prioridad, no el 1/2/3 numérico del REST.
+    priority:
+      task.status === "urgente"
+        ? "urgent"
+        : task.status === "en-curso"
+          ? "high"
+          : "normal",
+    // La tool MCP espera IDs como STRING (el REST los quería number).
+    assignees: [CLICKUP_USER_ID],
+  };
+
+  const dueMs = parseDateToMs(task.dueDate);
+  // La tool MCP quiere YYYY-MM-DD ('none'/fecha), no epoch. La app guarda
+  // fechas sin hora: toISOString en UTC conserva el día tal cual se cargó.
+  if (dueMs !== null) args.due_date = new Date(Number(dueMs)).toISOString().slice(0, 10);
+  const estimateMs = parseEstimateMs(task.estimate);
+  if (estimateMs !== null) args.time_estimate = String(estimateMs);
+
+  for (const k of Object.keys(args)) {
+    if (args[k] === undefined) delete args[k];
+  }
+  return args;
+}
+
 /** Lee el token de ClickUp del entorno. Lanza si no está configurado. */
 function getToken(): string {
   const token = process.env.CLICKUP_API_KEY;
@@ -203,73 +362,6 @@ function parseDateToMs(dateStr: string | undefined): number | null {
 
 // ===== Construcción del body de tarea ClickUp =====
 
-/**
- * Arma el body para POST/PUT de una tarea ClickUp desde una tarea de Hermes.
- *
- * @param isCreate  Si true (POST de creación), los campos vacíos se OMITEN
- *                  (ClickUp rechaza null en algunos campos al crear). Si false
- *                  (PUT de update), los campos vacíos se mandan como null para
- *                  LIMPIARLOS en ClickUp (ej. borrar una fecha).
- */
-function buildTaskBody(task: Doc<"tasks">, isCreate = false): Record<string, unknown> {
-  const body: Record<string, unknown> = {
-    name: task.title,
-    status: mapStatusToClickUp(task.status),
-  };
-
-  // Descripción: notes + metadata estructurada al final (requestedBy, progress).
-  const metaLines: string[] = [];
-  if (task.notes) metaLines.push(task.notes);
-  if (task.requestedBy) metaLines.push(`Solicitado por: ${task.requestedBy}`);
-  if (typeof task.progress === "number") {
-    metaLines.push(`Progreso: ${task.progress}%`);
-  }
-  body.description = metaLines.join("\n\n") || " ";
-
-  // Fecha de entrega (ms). En update, mandar null LIMPIA la fecha en ClickUp;
-  // en create, omitimos la key si no hay fecha (ClickUp la rechaza en POST).
-  const dueMs = parseDateToMs(task.dueDate);
-  if (dueMs !== null) {
-    body.due_date = dueMs;
-    body.due_date_time = false;
-  } else if (!isCreate) {
-    body.due_date = null;
-    body.due_date_time = false;
-  }
-
-  // Estimación (ms, campo nativo de ClickUp). Misma lógica que la fecha.
-  const estimateMs = parseEstimateMs(task.estimate);
-  if (estimateMs !== null) {
-    body.time_estimate = estimateMs;
-  } else if (!isCreate) {
-    body.time_estimate = null;
-  }
-
-  // Assignee: SIEMPRE Cristian Gutiérrez, independientemente del ejecutor en
-  // Hermes. Las tareas que mandamos a ClickUp deben quedar a nombre de Cris.
-  body.assignees = [Number(CLICKUP_USER_ID)];
-
-  // Prioridad según el estado de Hermes:
-  //   urgente   → 1 (Urgente)
-  //   en-curso  → 2 (Alta)
-  //   resto     → 3 (Normal) — pendiente, standby, programado, completado.
-  // La prioridad se manda SIEMPRE (incluso al actualizar) para que al mover de
-  // urgente/en-curso a otro estado, ClickUp la baje a Normal.
-  switch (task.status) {
-    case "urgente":
-      body.priority = 1;
-      break;
-    case "en-curso":
-      body.priority = 2;
-      break;
-    default:
-      body.priority = 3;
-      break;
-  }
-
-  return body;
-}
-
 // ===== Acción principal: syncTask (outbound) =====
 
 /**
@@ -343,7 +435,16 @@ export const syncTask = internalAction({
       if (op === "delete") {
         // Borrado explícito: eliminar en ClickUp si estaba sincronizada.
         if (task.clickupId) {
-          await clickupFetch(`/task/${task.clickupId}`, { method: "DELETE" });
+          const token = await requireMcpToken(ctx);
+          try {
+            await mcpCall(
+              "clickup_delete_task",
+              { task_id: task.clickupId },
+              token,
+            );
+          } catch {
+            // Ya no existe allá (borrada a mano): desvincular igualmente.
+          }
         }
         await ctx.runMutation(internal.clickupMutations._unlinkClickUp, { taskId });
         return;
@@ -364,55 +465,44 @@ export const syncTask = internalAction({
         // sin asociación — y el default de resolveOutboundDestination las
         // mandaba a Mesa Técnica sin que nadie lo pidiera.
         if (!task.clickupListId && !task.clickupParentId) return;
-        const body = buildTaskBody(task, true);
-        const created = await clickupFetch(`/list/${dest.listId}/task`, {
-          method: "POST",
-          body: JSON.stringify(body),
-        });
-        const newId: string = created.id;
-        const newUrl: string = `https://app.clickup.com/t/${newId}`;
-
-        // Anidar bajo el parent si corresponde (requiere PUT separado: el
-        // `parent` en el POST de creación se ignora — pitfall de ClickUp).
-        //
-        // OJO: al anidarla, ClickUp la MUEVE a la list del parent, que puede
-        // no ser `dest.listId`. Persistimos la list que devuelve la respuesta,
-        // no la que pedimos: guardar la supuesta dejaba el clickupListId
-        // apuntando a otra list (típicamente Mesa Técnica) y el selector
-        // reabría la tarea en el proyecto equivocado.
-        let finalListId = dest.listId;
-        if (dest.parentId) {
-          const nested = await clickupFetch(`/task/${newId}`, {
-            method: "PUT",
-            body: JSON.stringify({ parent: dest.parentId }),
-          });
-          if (nested?.list?.id) finalListId = nested.list.id;
-        }
+        const token = await requireMcpToken(ctx);
+        // create_task MCP anida en el MISMO call (`parent` es un argumento),
+        // a diferencia de la API REST donde el POST lo ignoraba. Con parent,
+        // ClickUp coloca la tarea en la list donde vive el padre; igual
+        // persistimos dest.listId como respaldo hasta resolver la ruta real.
+        const args = mcpTaskArgs(task);
+        args.list_id = dest.listId;
+        if (dest.parentId) args.parent = dest.parentId;
+        const created = await mcpCall("clickup_create_task", args, token);
+        const sc = mcpStructured(created) ?? {};
+        const newId = String(sc.task_id ?? "");
+        if (!newId) throw new Error("create_task no devolvió task_id");
+        const newUrl = String(sc.task_url ?? `https://app.clickup.com/t/${newId}`);
 
         await ctx.runMutation(internal.clickupMutations._markSynced, {
           taskId,
           clickupId: newId,
           clickupUrl: newUrl,
-          clickupListId: finalListId,
+          clickupListId: dest.listId,
         });
         // Resolver la ruta ya: sin esto, la tarea linkeada a un proyecto
         // seguía agrupada en «Sueltas» hasta el recálculo manual.
         await syncClickupPath(ctx, taskId, newId);
       } else {
         // ===== UPDATE (incluye status/complete) =====
-        const body = buildTaskBody(task, false);
+        const token = await requireMcpToken(ctx);
         try {
-          await clickupFetch(`/task/${task.clickupId}`, {
-            method: "PUT",
-            body: JSON.stringify(body),
-          });
+          await mcpCall(
+            "clickup_update_task",
+            { task_id: task.clickupId, ...mcpTaskArgs(task) },
+            token,
+          );
         } catch (updateErr) {
-          // Si la tarea fue borrada en ClickUp (404 / "not found"), la
-          // desvinculamos y la recreamos en el destino correcto en vez de
-          // dejarla con error rojo para siempre.
+          // Si la tarea fue borrada en ClickUp, la desvinculamos y la
+          // recreamos en el destino correcto en vez de dejarla con error rojo.
           const msg =
             updateErr instanceof Error ? updateErr.message : String(updateErr);
-          if (msg.includes("404") || msg.toLowerCase().includes("not found")) {
+          if (mcpIsNotFound(msg)) {
             await ctx.runMutation(internal.clickupMutations._unlinkClickUp, {
               taskId,
             });
@@ -421,19 +511,14 @@ export const syncTask = internalAction({
             // mano para sacarla de ahí), queda desvinculada y local:
             // recrearla en Mesa Técnica sería re-publicarla sin pedirlo.
             if (!task.clickupListId && !task.clickupParentId) return;
-            // Recrear en el destino correcto.
-            const created = await clickupFetch(`/list/${dest.listId}/task`, {
-              method: "POST",
-              body: JSON.stringify(buildTaskBody(task, true)),
-            });
-            const newId: string = created.id;
-            const newUrl: string = `https://app.clickup.com/t/${newId}`;
-            if (dest.parentId) {
-              await clickupFetch(`/task/${newId}`, {
-                method: "PUT",
-                body: JSON.stringify({ parent: dest.parentId }),
-              });
-            }
+            const args = mcpTaskArgs(task);
+            args.list_id = dest.listId;
+            if (dest.parentId) args.parent = dest.parentId;
+            const created = await mcpCall("clickup_create_task", args, token);
+            const sc2 = mcpStructured(created) ?? {};
+            const newId = String(sc2.task_id ?? "");
+            if (!newId) throw new Error("create_task no devolvió task_id");
+            const newUrl = String(sc2.task_url ?? `https://app.clickup.com/t/${newId}`);
             await ctx.runMutation(internal.clickupMutations._markSynced, {
               taskId,
               clickupId: newId,
@@ -1599,7 +1684,7 @@ export interface ClickupPathNode {
  * Nunca lanza por un nodo faltante: devuelve lo que haya podido resolver.
  * Tope de 12 saltos + set de vistos: un ciclo corrupto no cuelga la acción.
  */
-async function resolveTaskPathInternal(clickupId: string): Promise<{
+async function resolveTaskPathInternal(ctx: unknown, clickupId: string): Promise<{
   listId: string | null;
   listName: string | null;
   folderId: string | null;
@@ -1612,28 +1697,40 @@ async function resolveTaskPathInternal(clickupId: string): Promise<{
   let folderId: string | null = null;
   let folderName: string | null = null;
 
+  const token = await requireMcpToken(ctx);
   let currentId: string | null = clickupId;
   const seen = new Set<string>();
   for (let hop = 0; currentId && hop < 12; hop++) {
     if (seen.has(currentId)) break; // ciclo defensivo
     seen.add(currentId);
-    let t: any;
+    let result: any;
     try {
-      t = await clickupFetch(`/task/${currentId}`);
+      result = await mcpCall(
+        "clickup_get_task",
+        { task_id: currentId },
+        token,
+      );
     } catch {
       break; // el nodo ya no existe en ClickUp: devolvemos lo resuelto
     }
+    const t: any = mcpStructured(result);
     if (!t?.id) break;
     if (hop === 0) {
       listId = t.list?.id ?? null;
       listName = t.list?.name ?? null;
-      // ClickUp marca folder.hidden = true cuando la list cuelga directo del
-      // space (sin folder real). En ese caso no hay folder que mostrar.
-      folderId = t.folder?.hidden ? null : (t.folder?.id ?? null);
-      folderName = t.folder?.hidden ? null : (t.folder?.name ?? null);
+      // La tool MCP expone folder directo (sin flag hidden visible); si
+      // viene vacío asumimos list suelta del space.
+      folderId = t.folder?.id ?? null;
+      folderName = t.folder?.name ?? null;
     }
     path.unshift({ id: t.id, name: t.name ?? "(sin nombre)" });
-    currentId = t.parent ?? null;
+    const parent = t.parent;
+    currentId =
+      typeof parent === "string"
+        ? parent
+        : typeof parent === "object" && parent?.id
+          ? String(parent.id)
+          : null;
   }
 
   return { listId, listName, folderId, folderName, path };
@@ -1654,7 +1751,7 @@ async function resolveTaskPathInternal(clickupId: string): Promise<{
  */
 async function syncClickupPath(ctx: any, taskId: any, clickupId: string) {
   try {
-    const info = await resolveTaskPathInternal(clickupId);
+    const info = await resolveTaskPathInternal(ctx, clickupId);
     // El último nodo de la cadena es la tarea misma: no es un ancestro.
     const ancestors = info.path.slice(0, -1).map((n) => n.name);
     await ctx.runMutation(internal.clickupMutations._setClickupPath, {
@@ -1691,7 +1788,7 @@ export const resolveTaskPath = action({
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
 
-    return await resolveTaskPathInternal(clickupId);
+    return await resolveTaskPathInternal(ctx, clickupId);
   },
 });
 
@@ -1931,7 +2028,7 @@ export const backfillClickupPaths = action({
       try {
         let info = pathCache.get(clickupId);
         if (!info) {
-          info = await resolveTaskPathInternal(clickupId);
+          info = await resolveTaskPathInternal(ctx, clickupId);
           pathCache.set(clickupId, info);
         }
         // El último nodo de la cadena es la tarea misma: no es un ancestro.
