@@ -24,6 +24,8 @@ import {
   ExternalLink,
   AlertTriangle,
   Unlink,
+  Maximize2,
+  Minimize2,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -107,6 +109,14 @@ export function TaskModal({
   const [status, setStatus] = useState<Status>(defaultStatus);
   const [executor, setExecutor] = useState<Executor>("cris");
   const [notes, setNotes] = useState("");
+  // Cuadro de notas expandido: preferencia persistente entre sesiones.
+  const [notesExpanded, setNotesExpanded] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("hermes-notes-expanded") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [estimate, setEstimate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [progress, setProgress] = useState<number | "">("");
@@ -623,15 +633,48 @@ export function TaskModal({
                   necesita un id para persistir la marca. */}
               {task && <CatchupNoteField task={task} />}
 
-              {/* Notas */}
+              {/* Notas. El textarea se puede expandir (preferencia persistida
+                  en localStorage) para releer cómodamente textos largos sin
+                  depender del mini-scroll interno. */}
               <div className="mb-4">
-                <label className="label">Notas</label>
+                <div className="flex items-center justify-between">
+                  <label className="label">Notas</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !notesExpanded;
+                      setNotesExpanded(next);
+                      try {
+                        localStorage.setItem(
+                          "hermes-notes-expanded",
+                          next ? "1" : "0",
+                        );
+                      } catch {
+                        // localStorage lleno/bloqueado: la preferencia es
+                        // cosmética, no vale romper el modal por ella.
+                      }
+                    }}
+                    title={
+                      notesExpanded
+                        ? "Contraer el cuadro de notas"
+                        : "Expandir el cuadro de notas"
+                    }
+                    className="mb-1 inline-flex items-center gap-1 text-[10px] font-medium text-mute transition-colors hover:text-accent"
+                  >
+                    {notesExpanded ? (
+                      <Minimize2 className="h-3 w-3" />
+                    ) : (
+                      <Maximize2 className="h-3 w-3" />
+                    )}
+                    {notesExpanded ? "Contraer" : "Expandir"}
+                  </button>
+                </div>
                 <textarea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   placeholder="Detalles, criterios, contexto…"
-                  rows={3}
-                  className="input resize-none"
+                  rows={notesExpanded ? 16 : 3}
+                  className="input resize-y transition-[height] duration-150"
                 />
               </div>
 
