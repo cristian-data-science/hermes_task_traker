@@ -4,9 +4,30 @@
 
 Dirección ClickUp → Hermes: suscripciones persistentes a nodos del
 workspace, importación idempotente, bandeja de tareas asignadas sin
-trackear y mapeo bidireccional de estados.
+trackear y mapeo bidireccional de estados. Desde que el workspace Patagonia
+bloqueó el personal API token, TODAS las lecturas (árbol del workspace,
+tareas por list con padres explícitos, tareas asignadas, detalle) salen
+por el canal MCP/OAuth compartido con el outbound.
 
 ## Requirements
+
+### Requirement: Lecturas vía MCP
+El sistema SHALL realizar todas las lecturas de ClickUp por tools MCP:
+`clickup_get_workspace_hierarchy` (árbol paginado del space para picker y
+página de sync), `clickup_filter_tasks` (raíces por list; tareas asignadas
+a Cristian), `clickup_get_task` con `include:["subtasks"]` (expansión de
+hijos con parent estampado por construcción), normalizadas al shape legacy
+que consumen los flujos existentes.
+
+#### Scenario: Abrir el modal de tarea con el picker
+- **WHEN** se carga la jerarquía para anclar una tarea en un subproyecto
+- **THEN** los folders/lists provienen del árbol MCP y no hay 401 del
+  personal token
+
+#### Scenario: Bandeja con tareas asignadas
+- **WHEN** se consulta "asignadas a mí sin trackear"
+- **THEN** las candidatas provienen de filter_tasks(assignees=yo) y se
+  resuelven contenedor vs hoja con la expansión jerárquica por list
 
 ### Requirement: Mapeo de estados
 El sistema SHALL mapear estados Hermes↔ClickUp en ambos sentidos

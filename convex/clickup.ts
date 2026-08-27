@@ -6,7 +6,6 @@ import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
 import {
   CLICKUP_USER_ID,
-  CLICKUP_TEAM_ID,
   CLICKUP_SPACE_ID,
   SETTINGS_KEY_CONFIG,
   SETTINGS_KEY_ENABLED,
@@ -28,8 +27,10 @@ import {
  * ClickUp. Las mutaciones que persisten el resultado viven en clickupMutations.ts
  * (runtime V8) y se invocan vía `ctx.runMutation(internal.clickupMutations.X)`.
  *
- * Auth: token crudo en `process.env.CLICKUP_API_KEY` (secreto de Convex, sin
- * prefijo Bearer). Mismo patrón que `auth.ts`.
+ * Auth: OAuth/MCP con token Bearer persistido en settings
+ * (`clickup.mcpToken`, ver clickupOAuthConfig.ts). El personal token `pk_`
+ * quedó descartado: el workspace Patagonia le negó
+ * `can_use_public_api_dev_key` y toda la REST v2 devolvía 401.
  *
  * Reglas:
  *  - Solo tareas con `area === "patagonia"` se sincronizan.
@@ -37,8 +38,6 @@ import {
  *  - Eliminar en Hermes = desvincular (limpiar clickupId), no borrar en ClickUp,
  *    salvo que se pida borrado explícito (op="delete").
  */
-
-const API_BASE = "https://api.clickup.com/api/v2";
 
 // ============================================================
 //  Transporte MCP (OAuth) — canal vigente desde que el workspace
@@ -199,84 +198,223 @@ function mcpTaskArgs(task: Doc<"tasks">): Record<string, unknown> {
   return args;
 }
 
-/** Lee el token de ClickUp del entorno. Lanza si no está configurado. */
-function getToken(): string {
-  const token = process.env.CLICKUP_API_KEY;
-  if (!token) {
-    throw new Error("ClickUp no configurado: falta CLICKUP_API_KEY en el servidor");
-  }
-  return token;
+// ============================================================
+//  Lecturas MCP compartidas (fase picker/bandeja/inbound)
+//
+// Estrategia: las tools devuelven shapes propios; los helpers acá abajo los
+// NORMALIZAN al formato legacy de la REST v2 que consumen todas las funciones
+// de este módulo (status:{status}, fechas ms, orderindex, etc.). Así cada
+// migración toca únicamente la capa de transporte, no cada consumer.
+// ============================================================
+
+interface McpTreeNode {
+  id: string;
+  name: string;
+  type: string;
+  children?: McpTreeNode[];
 }
 
 /**
- * fetch con reintentos y backoff exponencial ante 429 (rate limit de ClickUp:
- * 100 req/min). Lanza tras agotar los reintentos.
+ * Convierte una fila de clickup_filter_tasks / clickup_get_task.subtasks al
+ * shape legacy de tarea REST. `extra` agrega campos que esas tools no traen
+ * (ej. parent conocido por construcción, folder de la iteración).
  */
-async function clickupFetch(
-  path: string,
-  options: RequestInit = {},
-  retries = 3,
-): Promise<any> {
-  const token = getToken();
-  const headers: Record<string, string> = {
-    Authorization: token,
-    ...((options.headers as Record<string, string>) ?? {}),
+function normalizeMcpTaskRow(
+  t: any,
+  extra: Record<string, unknown> = {},
+  orderindex?: number,
+): any {
+  return {
+    id: t.id,
+    name: t.name,
+    url: t.url,
+    // filter_tasks NO trae `parent`: quien lo necesita lo estampa por
+    // construcción (expansión jerárquica) o usa get_task.
+    parent:
+      extra.parent !== undefined
+        ? extra.parent
+        : typeof t.parent === "string"
+          ? t.parent
+          : undefined,
+    status: {
+      status: t.status ?? "to do",
+      date_closed: t.date_closed ?? null,
+    },
+    priority:
+      typeof t.priority === "string"
+        ? { priority: t.priority }
+        : (t.priority ?? undefined),
+    list: t.list ? { id: t.list.id, name: t.list.name } : undefined,
+    folder: t.folder
+      ? { id: t.folder.id, name: t.folder.name }
+      : extra.folder,
+    space: t.space?.id ? { id: t.space.id } : undefined,
+    assignees: (t.assignees ?? []).map((a: any) => ({
+      id: Number(a.id),
+      username: a.username,
+    })),
+    due_date: t.due_date ?? null,
+    start_date: t.start_date ?? null,
+    time_estimate: t.time_estimate ?? null,
+    description: t.description,
+    text_content: t.text_content,
+    orderindex: orderindex ?? Number.MAX_SAFE_INTEGER - Math.random(),
+    custom_id: t.custom_id ?? null,
   };
-  if (options.body && !headers["Content-Type"]) {
-    headers["Content-Type"] = "application/json";
-  }
+}
 
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
-      // 429 → esperar y reintentar con backoff exponencial.
-      if (res.status === 429) {
-        if (attempt === retries) {
-          throw new Error("ClickUp rate limit (429): reintentos agotados");
-        }
-        const waitMs = 800 * Math.pow(2, attempt);
-        await sleep(waitMs);
-        continue;
+/** Equivalente legacy de GET /task/{id}: tarea completa (opción subtareas). */
+async function mcpGetTaskLegacy(
+  ctx: unknown,
+  taskId: string,
+  include?: string[],
+): Promise<any> {
+  const token = await requireMcpToken(ctx);
+  const args: Record<string, unknown> = { task_id: taskId };
+  if (include?.length) args.include = include;
+  const t: any =
+    mcpStructured(await mcpCall("clickup_get_task", args, token)) ?? {};
+  return normalizeMcpTaskRow(t);
+}
+
+/**
+ * Árbol del workspace paginado: devuelve los CHILDREN del space CLICKUP_SPACE_ID
+ * (folders y lists sueltas mezclados, tipo "folder"/"list").
+ */
+async function mcpSpaceNodes(
+  ctx: unknown,
+): Promise<McpTreeNode[]> {
+  const token = await requireMcpToken(ctx);
+  const spaces: McpTreeNode[] = [];
+  let cursor: string | undefined;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const args: Record<string, unknown> = { max_depth: "2", limit: 50 };
+    if (cursor) args.cursor = cursor;
+    const sc: any =
+      mcpStructured(
+        await mcpCall("clickup_get_workspace_hierarchy", args, token),
+      ) ?? {};
+    const root = sc.hierarchy?.root;
+    for (const s of (root?.children ?? []) as any[]) {
+      const existing = spaces.find((x) => x.id === s.id);
+      if (!existing) {
+        spaces.push(s);
+      } else if (Array.isArray(s.children)) {
+        existing.children = [...(existing.children ?? []), ...s.children];
       }
-      // 5xx → reintento simple.
-      if (res.status >= 500) {
-        if (attempt === retries) {
-          throw new Error(`ClickUp error ${res.status}`);
-        }
-        await sleep(500 * Math.pow(2, attempt));
-        continue;
-      }
-      // Otros errores (4xx) → no reintentar, lanzar para que el caller decida.
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new ClickUpError(res.status, text || res.statusText);
-      }
-      // 204 o body vacío.
-      const text = await res.text();
-      return text ? JSON.parse(text) : null;
-    } catch (err) {
-      // Errores de red → reintentar. ClickUpError (4xx) → no reintentar.
-      if (err instanceof ClickUpError) throw err;
-      lastErr = err;
-      if (attempt === retries) throw err;
-      await sleep(500 * Math.pow(2, attempt));
     }
+    if (!sc.has_more || !sc.next_cursor) break;
+    cursor = String(sc.next_cursor);
   }
-  throw lastErr instanceof Error
-    ? lastErr
-    : new Error("ClickUp: error desconocido tras reintentos");
+  for (const s of spaces) if (s.id === CLICKUP_SPACE_ID) return s.children ?? [];
+  return [];
 }
 
-class ClickUpError extends Error {
-  constructor(public status: number, message: string) {
-    super(`ClickUp ${status}: ${message}`);
-    this.name = "ClickUpError";
+/**
+ * Folders del space con sus lists embebidas — shape equivalente al viejo
+ * `GET /space/{id}/folder`. Los contenedores sin lists se descartan igual.
+ */
+async function mcpSpaceFolders(
+  ctx: unknown,
+): Promise<{ id: string; name: string; lists: { id: string; name: string; archived: false }[] }[]> {
+  const nodes = await mcpSpaceNodes(ctx);
+  const out: { id: string; name: string; lists: { id: string; name: string; archived: false }[] }[] = [];
+  for (const node of nodes) {
+    if (node.type !== "folder") continue;
+    const lists = (node.children ?? [])
+      .filter((c) => c.type === "list")
+      .map((c) => ({ id: c.id, name: c.name, archived: false as const }));
+    if (lists.length === 0) continue; // contenedor sin lists: no es destino
+    out.push({
+      id: node.id,
+      name: node.name ?? "Sin nombre",
+      lists,
+    });
   }
+  return out;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+/**
+ * TODAS las tareas de una list con `parent` EXPLÍCITO y orderindex sintético
+ * estable. Estrategia: raíces vía filter_tasks(subtasks:false — ClickUp excluye
+ * a TODAS las descendientes) y expansión nivel-por-nivel con get_task(include
+ * subtasks), estampando el padre por construcción. Así el bandeja/backfill/
+ * buscan ancestros exactamente como antes.
+ *
+ * Si le pasan `folder`, estampa folder en cada fila (para las rutas inbound).
+ */
+async function fetchAllListTasksWithParents(
+  ctx: unknown,
+  listId: string,
+  folder?: { id?: string; name?: string },
+): Promise<any[]> {
+  const token = await requireMcpToken(ctx);
+  const all: any[] = [];
+
+  // 1) Raíces de la list (subtasks=false ⇒ ninguna descendiente).
+  let page = 0;
+  let idx = 0;
+  const queue: { id: string; parent: string | null }[] = [];
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const fa: Record<string, unknown> = {
+      list_ids: [listId],
+      include_closed: false,
+      subtasks: false,
+      page,
+    };
+    if (folder?.id) fa.folder_ids = [folder.id];
+    const sc: any =
+      mcpStructured(await mcpCall("clickup_filter_tasks", fa, token)) ?? {};
+    for (const row of sc.tasks ?? []) {
+      const norm = normalizeMcpTaskRow(row, { parent: null, folder }, idx++);
+      all.push(norm);
+      queue.push({ id: norm.id, parent: null });
+    }
+    const next = sc.next_page;
+    if (!sc.has_more || typeof next !== "number" || next <= page) break;
+    page = next;
+  }
+
+  // 2) Expansión en amplitud de los descendientes con su padre real.
+  let depth = 0;
+  let frontier = [...queue];
+  const seen = new Set<string>(frontier.map((f) => f.id));
+  while (frontier.length && depth < 8) {
+    depth++;
+    const kids: any[] = [];
+    const batch = await Promise.all(
+      frontier.map((f) =>
+        mcpCall(
+          "clickup_get_task",
+          { task_id: f.id, include: ["subtasks"] },
+          token,
+        ).catch(() => null),
+      ),
+    );
+    frontier = [];
+    for (const r of batch) {
+      if (!r) continue;
+      const t: any = mcpStructured(r) ?? {};
+      for (const subRaw of t.subtasks ?? []) {
+        if (seen.has(subRaw.id)) continue;
+        seen.add(subRaw.id);
+        const norm = normalizeMcpTaskRow(
+          subRaw,
+          { parent: t.id, folder },
+          idx++,
+        );
+        all.push(norm);
+        kids.push(norm);
+        if ((subRaw.subtasks_count ?? 0) > 0)
+          frontier.push({ id: norm.id, parent: t.id });
+      }
+    }
+    if (kids.length === 0) break;
+  }
+  void queue;
+  return all;
 }
 
 // ===== Mapeo de estados Hermes (6) ↔ ClickUp (3) =====
@@ -656,15 +794,12 @@ export const getInboundDiff = action({
       return true;
     });
     for (const target of uniqueTargets) {
-      let page = 0;
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const data = await clickupFetch(
-          `/list/${target.listId}/task?archived=false&subtasks=true&include_closed=false&page=${page}`,
+      {
+        const rows = await fetchAllListTasksWithParents(
+          ctx,
+          target.listId,
         );
-        const tasks: any[] = data?.tasks ?? [];
-        if (tasks.length === 0) break;
-        for (const t of tasks) {
+        for (const t of rows) {
           if (!allClickupTasks.has(t.id)) {
             allClickupTasks.set(t.id, {
               id: t.id,
@@ -676,8 +811,7 @@ export const getInboundDiff = action({
             });
           }
         }
-        if (tasks.length < 100) break; // última página
-        page++;
+        break; // WithParents ya trae TODO (paginado interno)
       }
     }
 
@@ -685,14 +819,9 @@ export const getInboundDiff = action({
     // Independientemente de la config trackeada. Si a Cris lo asignan a una
     // tarea en cualquier list/folder, debe aparecer en el modal.
     {
-      let page = 0;
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
-        const data = await clickupFetch(
-          `/team/${CLICKUP_TEAM_ID}/task?archived=false&include_closed=false&assignees[]=${CLICKUP_USER_ID}&page=${page}`,
-        );
-        const tasks: any[] = data?.tasks ?? [];
-        if (tasks.length === 0) break;
+      const assignedRows = await fetchMyAssignedTasks(ctx);
+      {
+        const tasks: any[] = assignedRows;
         for (const t of tasks) {
           if (!allClickupTasks.has(t.id)) {
             // Label descriptivo: folder/list de ClickUp para contexto.
@@ -711,8 +840,6 @@ export const getInboundDiff = action({
             });
           }
         }
-        if (tasks.length < 100) break; // última página
-        page++;
       }
     }
 
@@ -886,10 +1013,7 @@ export const discoverProjects = action({
     //    Esto lista la estructura completa del workspace, sin depender de si
     //    Cris tiene tareas asignadas o no. Así el usuario puede integrar
     //    cualquier proyecto/list para crear tareas ahí.
-    const fdata = await clickupFetch(
-      `/space/${CLICKUP_SPACE_ID}/folder?archived=false`,
-    );
-    const folders: any[] = fdata?.folders ?? [];
+    const folders: any[] = await mcpSpaceFolders(ctx);
 
     const discovered: DiscoveredProject[] = [];
     // Folders en el orden de ClickUp.
@@ -952,10 +1076,10 @@ export const listFolderLists = action({
       sessionToken,
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
-    const data = await clickupFetch(`/folder/${folderId}/list?archived=false`);
-    const lists: any[] = data?.lists ?? [];
+    const allFolders = await mcpSpaceFolders(ctx);
+    const folder = allFolders.find((f) => f.id === folderId);
     return {
-      lists: lists.map((l) => ({ id: l.id, name: l.name })),
+      lists: (folder?.lists ?? []).map((l) => ({ id: l.id, name: l.name })),
     };
   },
 });
@@ -982,18 +1106,26 @@ export const listProjectRoots = action({
       sessionToken,
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+    const token = await requireMcpToken(ctx);
     const rawRoots: any[] = [];
     let page = 0;
     // eslint-disable-next-line no-constant-condition
     while (true) {
-      const data = await clickupFetch(
-        `/list/${listId}/task?archived=false&subtasks=true&include_closed=false&page=${page}`,
-      );
-      const tasks: any[] = data?.tasks ?? [];
+      // MCP: subtasks=false ⇒ sólo raíces (ClickUp excluye a TODAS las
+      // descendientes de una list cuando el flag está en false).
+      const sc: any =
+        mcpStructured(
+          await mcpCall(
+            "clickup_filter_tasks",
+            { list_ids: [listId], include_closed: false, subtasks: false, page },
+            token,
+          ),
+        ) ?? {};
+      const tasks: any[] = sc.tasks ?? [];
       if (tasks.length === 0) break;
-      // Raíces = tareas sin parent.
-      for (const t of tasks) if (!t.parent) rawRoots.push(t);
-      if (tasks.length < 100) break;
+      for (const t of tasks) rawRoots.push(normalizeMcpTaskRow(t));
+      const next = sc.next_page;
+      if (!sc.has_more || typeof next !== "number" || next <= page) break;
       page++;
     }
     // Mismo orden que en ClickUp.
@@ -1040,19 +1172,12 @@ export const listTaskChildren = action({
       sessionToken,
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
+    void listId; // la herramienta MCP navega por parentId, la list sobra aquí
     const rawChildren: any[] = [];
-    let page = 0;
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
-      const data = await clickupFetch(
-        `/list/${listId}/task?archived=false&subtasks=true&include_closed=false&parent=${parentId}&page=${page}`,
-      );
-      const tasks: any[] = data?.tasks ?? [];
-      if (tasks.length === 0) break;
-      // Filtrar client-side: solo hijas directas reales de parentId.
-      for (const t of tasks) if (t.parent === parentId) rawChildren.push(t);
-      if (tasks.length < 100) break;
-      page++;
+    // get_task(include:["subtasks"]) devuelve DIRECTAMENTE las hijas del nodo.
+    const parent = await mcpGetTaskLegacy(ctx, parentId, ["subtasks"]);
+    for (const sub of parent.subtasks ?? []) {
+      rawChildren.push({ ...sub, parent: parentId });
     }
     // Mismo orden que en ClickUp.
     const children: ClickupTreeNode[] = sortByClickUpOrder(rawChildren).map(
@@ -1102,17 +1227,17 @@ export const createRootTask = action({
       }
     }
 
-    const body: Record<string, unknown> = {
-      name,
-      status: status ?? "to do",
-      assignees: [Number(CLICKUP_USER_ID)],
-    };
-    const created = await clickupFetch(`/list/${listId}/task`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
-    const id: string = created.id;
-    return { id, name: created.name, url: `https://app.clickup.com/t/${id}` };
+    const token = await requireMcpToken(ctx);
+    const created = await mcpCall(
+      "clickup_create_task",
+      { name, list_id: listId, status: status ?? "to do", assignees: [CLICKUP_USER_ID] },
+      token,
+    );
+    const sc: any = mcpStructured(created) ?? {};
+    const id = String(sc.task_id ?? "");
+    if (!id) throw new Error("create_task no devolvió task_id");
+    const url = String(sc.task_url ?? `https://app.clickup.com/t/${id}`);
+    return { id, name, url };
   },
 });
 
@@ -1162,9 +1287,6 @@ export interface WorkspaceTree {
  *
  * Pública (action) con auth.
  */
-/** Máximo de páginas por list (100 tareas c/u). Tope defensivo. */
-const MAX_LIST_PAGES = 20;
-
 // ============================================================
 //  Orden de ClickUp
 // ============================================================
@@ -1194,34 +1316,12 @@ function sortByClickUpOrder<T>(items: T[]): T[] {
 }
 
 /** Trae TODAS las tareas de una list (con subtareas), paginando. */
-async function fetchAllListTasks(listId: string): Promise<any[]> {
-  const all: any[] = [];
-  // Se piden PAGE_BATCH páginas a la vez. La paginación secuencial pagaba un
-  // round-trip completo por página aunque la mayoría viniera vacía; con lotes,
-  // una list de 300 tareas tarda 1 tanda en vez de 4 idas y vueltas.
-  const PAGE_BATCH = 4;
-  for (let base = 0; base < MAX_LIST_PAGES; base += PAGE_BATCH) {
-    const pages = Array.from(
-      { length: Math.min(PAGE_BATCH, MAX_LIST_PAGES - base) },
-      (_, k) => base + k,
-    );
-    const batch = await Promise.all(
-      pages.map((page) =>
-        clickupFetch(
-          `/list/${listId}/task?archived=false&subtasks=true&include_closed=false&page=${page}`,
-        ).catch(() => null),
-      ),
-    );
-    let lastFull = false;
-    for (const data of batch) {
-      const tasks: any[] = data?.tasks ?? [];
-      all.push(...tasks);
-      lastFull = tasks.length === 100;
-    }
-    // Si la última página del lote no vino llena, no hay más que traer.
-    if (!lastFull) break;
-  }
-  return all;
+async function fetchAllListTasks(
+  ctx: unknown,
+  listId: string,
+  folder?: { id?: string; name?: string },
+): Promise<any[]> {
+  return fetchAllListTasksWithParents(ctx, listId, folder);
 }
 
 /**
@@ -1229,18 +1329,32 @@ async function fetchAllListTasks(listId: string): Promise<any[]> {
  * ClickUp. Devuelve mucho menos que escanear el space entero y es la base de
  * la bandeja: se usa para saber QUÉ listas hay que mirar en detalle.
  */
-async function fetchMyAssignedTasks(): Promise<any[]> {
+async function fetchMyAssignedTasks(ctx: unknown): Promise<any[]> {
+  const token = await requireMcpToken(ctx);
   const all: any[] = [];
-  for (let page = 0; page < MAX_LIST_PAGES; page++) {
-    const data = await clickupFetch(
-      `/team/${CLICKUP_TEAM_ID}/task?page=${page}` +
-        `&assignees%5B%5D=${CLICKUP_USER_ID}` +
-        `&space_ids%5B%5D=${CLICKUP_SPACE_ID}` +
-        `&subtasks=true&include_closed=false&archived=false`,
-    );
-    const tasks: any[] = data?.tasks ?? [];
-    all.push(...tasks);
-    if (tasks.length < 100) break;
+  let page = 0;
+  let idx = 0;
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const sc: any =
+      mcpStructured(
+        await mcpCall(
+          "clickup_filter_tasks",
+          {
+            assignees: [Number(CLICKUP_USER_ID)],
+            space_ids: [Number(CLICKUP_SPACE_ID)],
+            subtasks: true,
+            include_closed: false,
+            page,
+          },
+          token,
+        ),
+      ) ?? {};
+    for (const t of sc.tasks ?? [])
+      all.push(normalizeMcpTaskRow(t, {}, idx++));
+    const next = sc.next_page;
+    if (!sc.has_more || typeof next !== "number" || next <= page) break;
+    page = next;
   }
   return all;
 }
@@ -1253,10 +1367,7 @@ export const getWorkspaceTree = action({
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
 
     // Folders del space (vienen con sus lists embebidas).
-    const fdata = await clickupFetch(
-      `/space/${CLICKUP_SPACE_ID}/folder?archived=false`,
-    );
-    const foldersRaw: any[] = fdata?.folders ?? [];
+    const foldersRaw: any[] = await mcpSpaceFolders(ctx);
 
     const folders: WorkspaceFolder[] = [];
     // Paralelizar: recolectar todas las lists de todos los folders, lanzar
@@ -1284,7 +1395,7 @@ export const getWorkspaceTree = action({
           folderIdx,
           listId: list.id,
           listName: list.name,
-          promise: fetchAllListTasks(list.id).catch(() => null),
+          promise: fetchAllListTasks(ctx, list.id).catch(() => null),
         });
       }
     });
@@ -1406,7 +1517,7 @@ export const applySubscriptions = action({
       if (node.nodeType === "task") {
         // Tarea individual: traer su detalle.
         try {
-          const t = await clickupFetch(`/task/${node.id}`);
+          const t = await mcpGetTaskLegacy(ctx, node.id);
           allClickupTaskIds.add(t.id);
           tasksToImport.push({
             id: t.id,
@@ -1440,24 +1551,23 @@ export const applySubscriptions = action({
         }
       } else {
         // folder o list: traer todas las tareas (con subtareas).
-        const listIds: string[] = [];
+        let listIds: { id: string }[] = [];
         if (node.nodeType === "folder") {
-          const fdata = await clickupFetch(
-            `/folder/${node.id}/list?archived=false`,
-          );
-          for (const l of fdata?.lists ?? []) listIds.push(l.id);
+          const allFolders = await mcpSpaceFolders(ctx);
+          const target = allFolders.find((f: any) => f.id === node.id);
+          for (const l of target?.lists ?? []) listIds.push({ id: l.id });
         } else {
-          listIds.push(node.id);
+          listIds.push({ id: node.id });
         }
-        for (const listId of listIds) {
-          let page = 0;
-          // eslint-disable-next-line no-constant-condition
-          while (true) {
-            const tdata = await clickupFetch(
-              `/list/${listId}/task?archived=false&subtasks=true&include_closed=false&page=${page}`,
+        for (const { id: listId } of listIds) {
+          {
+            const tasks: any[] = await fetchAllListTasksWithParents(
+              ctx,
+              listId,
+              node.nodeType === "folder"
+                ? { id: node.id, name: node.label }
+                : undefined,
             );
-            const tasks: any[] = tdata?.tasks ?? [];
-            if (tasks.length === 0) break;
             for (const t of tasks) {
               allClickupTaskIds.add(t.id);
               tasksToImport.push({
@@ -1481,8 +1591,6 @@ export const applySubscriptions = action({
                 listName: t.list?.name,
               });
             }
-            if (tasks.length < 100) break;
-            page++;
           }
         }
       }
@@ -1590,7 +1698,7 @@ export const syncAssignees = action({
     for (const entry of existing.allEntries) {
       if (entry.deleted) continue;
       try {
-        const t = await clickupFetch(`/task/${entry.clickupId}`);
+        const t = await mcpGetTaskLegacy(ctx, entry.clickupId);
         const assigneeName = t.assignees?.[0]?.username
           ? String(t.assignees[0].username).split(" ")[0]
           : undefined;
@@ -1643,10 +1751,10 @@ export const resolveTaskList = action({
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
     try {
-      const t = await clickupFetch(`/task/${clickupId}`);
+      const t = await mcpGetTaskLegacy(ctx, clickupId);
       return {
         listId: t.list?.id ?? null,
-        folderId: t.folder?.id ?? null,
+        folderId: t.folder && !t.folder.hidden ? (t.folder.id ?? null) : null,
       };
     } catch {
       return { listId: null, folderId: null };
@@ -1848,7 +1956,7 @@ export const listAssignedUntracked = action({
     //    y las tareas asignadas a mí. En paralelo: no dependen entre sí.
     const [existing, mine] = await Promise.all([
       ctx.runQuery(internal.clickupMutations._listMappedForInbound, {}),
-      fetchMyAssignedTasks(),
+      fetchMyAssignedTasks(ctx),
     ]);
     const known = new Set(existing.allEntries.map((e) => e.clickupId));
 
@@ -1865,18 +1973,13 @@ export const listAssignedUntracked = action({
     }
     if (relevantListIds.size === 0) return { tasks: [], scanned: mine.length };
 
-    // 3) Estructura del space, para los nombres de folder/list y su orden.
-    const fdata = await clickupFetch(
-      `/space/${CLICKUP_SPACE_ID}/folder?archived=false`,
-    );
-    const folderData = sortByClickUpOrder([...(fdata?.folders ?? [])])
+    // 3) Estructura del space (MCP), para nombres de folder/list y su orden.
+    const folderData = (await mcpSpaceFolders(ctx))
       .map((folder: any) => ({
         id: folder.id,
         name: folder.name ?? "Sin nombre",
-        lists: sortByClickUpOrder(
-          (folder.lists ?? []).filter(
-            (l: any) => !l.archived && relevantListIds.has(String(l.id)),
-          ),
+        lists: folder.lists.filter(
+          (l: any) => relevantListIds.has(String(l.id)),
         ),
       }))
       .filter((f: any) => f.lists.length > 0);
@@ -1898,7 +2001,7 @@ export const listAssignedUntracked = action({
           // Se necesitan TODAS las tareas de estas listas (no solo las mías):
           // sin ellas no se puede saber si una tarea tiene subtareas ajenas
           // (o sea, si es contenedor) ni resolver los nombres de sus ancestros.
-          promise: fetchAllListTasks(list.id).catch(() => null),
+          promise: fetchAllListTasks(ctx, list.id).catch(() => null),
         });
       }
     }
@@ -2142,10 +2245,7 @@ export const getSearchIndex = action({
     });
     if (!ok) throw new Error("No autorizado: sesión inválida o expirada");
 
-    const fdata = await clickupFetch(
-      `/space/${CLICKUP_SPACE_ID}/folder?archived=false`,
-    );
-    const folders: any[] = fdata?.folders ?? [];
+    const folders: any[] = await mcpSpaceFolders(ctx);
 
     // Lanzar en paralelo: todas las páginas de todas las lists, cada fetch
     // con su metadata de ubicación (folder/list) pegada al costado.
@@ -2184,15 +2284,11 @@ export const getSearchIndex = action({
           listId: list.id,
           listName: list.name ?? "?",
         };
-        // Hasta 10 páginas por list como cota de sanidad (100/page).
-        for (let page = 0; page < 10; page++) {
-          jobs.push({
-            fetch: clickupFetch(
-              `/list/${list.id}/task?archived=false&include_closed=false&subtasks=true&page=${page}`,
-            ).catch(() => null),
-            meta: m,
-          });
-        }
+        // WithParents trae TODO lo paginado interno + parent estampado.
+        jobs.push({
+          fetch: fetchAllListTasksWithParents(ctx, list.id).catch(() => null),
+          meta: m,
+        });
       }
     }
     const results = await Promise.all(jobs.map((j) => j.fetch));
