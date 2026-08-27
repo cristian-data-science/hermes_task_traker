@@ -274,7 +274,13 @@ async function mcpGetTaskLegacy(
   if (include?.length) args.include = include;
   const t: any =
     mcpStructured(await mcpCall("clickup_get_task", args, token)) ?? {};
-  return normalizeMcpTaskRow(t);
+  const row = normalizeMcpTaskRow(t);
+  // La normalización es plana por diseño; las subtareas crudas viajan aparte
+  // para los navegadores jerárquicos (listTaskChildren & co).
+  if (Array.isArray(t.subtasks)) row.subtasks = t.subtasks;
+  if (typeof t.subtasks_count === "number")
+    row.subtasks_count = t.subtasks_count;
+  return row;
 }
 
 /**
@@ -1341,8 +1347,8 @@ async function fetchMyAssignedTasks(ctx: unknown): Promise<any[]> {
         await mcpCall(
           "clickup_filter_tasks",
           {
-            assignees: [Number(CLICKUP_USER_ID)],
-            space_ids: [Number(CLICKUP_SPACE_ID)],
+            assignees: [CLICKUP_USER_ID],
+            space_ids: [CLICKUP_SPACE_ID],
             subtasks: true,
             include_closed: false,
             page,
@@ -2296,7 +2302,8 @@ export const getSearchIndex = action({
     const entries: SearchEntry[] = [];
     const seen = new Set<string>();
     results.forEach((data, i) => {
-      const tasks: any[] = data?.tasks ?? [];
+      // WithParents devuelve el array plano directamente (no {tasks}).
+      const tasks: any[] = Array.isArray(data) ? data : (data?.tasks ?? []);
       // Página vacía = fin de esa list (o error silencioso): nada que hacer.
       for (const t of tasks) {
         if (seen.has(t.id)) continue;
