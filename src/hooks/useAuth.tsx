@@ -74,6 +74,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signature,
     })) as { token: string };
     setSessionToken(result.token);
+    // PWA: pedir almacenamiento persistente tras login (invisible; refuerza
+    // que Chrome no evicte el caché del app-shell ni el token guardado).
+    try {
+      await navigator.storage?.persist?.();
+    } catch {
+      /* no soportado: no bloquea el login */
+    }
   }
 
   async function signOut() {

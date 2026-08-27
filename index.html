@@ -20,9 +20,17 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-E8/woXC1mYRzlXMBSV1OVriw9lWXXQpv5bgnuPq+LOo='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://*.convex.site; base-uri 'self';"
+      content="default-src 'self'; script-src 'self' 'sha256-E8/woXC1mYRzlXMBSV1OVriw9lWXXQpv5bgnuPq+LOo='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://*.convex.site; base-uri 'self'; manifest-src 'self'; worker-src 'self';"
     />
     <meta name="referrer" content="no-referrer" />
+    <!-- PWA (móvil/instalada): color de la barra de estado e icono iOS.
+         No afecta el render de la app en desktop. -->
+    <meta name="theme-color" content="#010603" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon-180x180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Hermes" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <title>Cris Agent Task</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

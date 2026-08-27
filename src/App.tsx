@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { AnimatePresence, motion } from "framer-motion";
+import { WifiOff } from "lucide-react";
 import { useAuth, AuthProvider } from "./hooks/useAuth";
 import { useTheme, type ThemeId } from "./hooks/useTheme";
+import { useOnlineStatus, useIsMobileLike } from "./hooks/useOnlineStatus";
 import { api } from "~/convex/_generated/api";
 import type { Doc } from "~/convex/_generated/dataModel";
 import type { Area, Status } from "./lib/constants";
@@ -119,8 +121,22 @@ function Dashboard({
     setModalOpen(true);
   }
 
+  // Banner offline: gate móvil — en desktop no se muestra nunca.
+  const online = useOnlineStatus();
+  const isMobileLike = useIsMobileLike();
+
   return (
     <div className={page === "clickup-sync" ? "flex h-screen flex-col overflow-hidden" : "min-h-screen"}>
+      {/* Banner offline — SOLO teléfono (la web de escritorio no cambia). */}
+      {!online && isMobileLike && (
+        <div
+          role="status"
+          className="sticky top-0 z-[45] flex items-center justify-center gap-2 bg-panel2 px-3 py-1.5 text-xs font-medium text-mute"
+        >
+          <WifiOff className="h-3.5 w-3.5" />
+          Sin conexión — reconectando…
+        </div>
+      )}
       <Toolbar
         view={view}
         onViewChange={setView}

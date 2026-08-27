@@ -51,3 +51,10 @@ $RECYCLE.BIN/
 .zcode/
 .vscode/
 *.tsbuildinfo
+
+# Playwright e2e
+test-results/
+playwright-report/
+tests-e2e/.auth/
+screenshots/desktop-current/
+screenshots/mobile/

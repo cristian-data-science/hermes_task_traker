@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Logo de marca para generar los iconos PWA (misma identidad que el
+       favicon: prompt terminal ámbar sobre carbón). Contenido dentro de la
+       zona segura (~80% central) para funcionar como maskable icon. -->
+  <rect width="512" height="512" rx="96" fill="#0c0a05"/>
+  <rect x="12" y="12" width="488" height="488" rx="88" fill="none" stroke="#ffb000" stroke-opacity="0.35" stroke-width="16"/>
+  <path d="M136 176l104 88-104 88" stroke="#ffb000" stroke-width="44" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="272" y="312" width="112" height="44" rx="12" fill="#ffb000"/>
+</svg>

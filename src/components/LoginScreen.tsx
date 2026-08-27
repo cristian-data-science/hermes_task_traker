@@ -1,8 +1,16 @@
 import { useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Loader2, ArrowRight, ShieldCheck, FileKey2, UploadCloud } from "lucide-react";
+import {
+  Loader2,
+  ArrowRight,
+  ShieldCheck,
+  FileKey2,
+  UploadCloud,
+  Download,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import { BrandMark } from "./Toolbar";
+import { usePwaInstall } from "../hooks/usePwaInstall";
 
 /**
  * Pantalla de login por archivo de clave RSA (rsa_key.p8).
@@ -133,6 +141,7 @@ export function LoginScreen({
             <ArrowRight className="h-3.5 w-3.5" />
             La clave se usa solo en este navegador para firmar el acceso
           </p>
+          <PwaInstallHint />
         </div>
 
         <p className="mt-6 flex items-center justify-center gap-1.5 text-center text-xs text-faint">
@@ -141,5 +150,24 @@ export function LoginScreen({
         </p>
       </motion.div>
     </div>
+  );
+}
+
+/**
+ * Botón de instalación PWA — solo móvil, solo cuando Chrome ofrece el
+ * prompt (beforeinstallprompt). En desktop no se renderiza: la web queda
+ * exactamente como estaba.
+ */
+function PwaInstallHint() {
+  const { canInstall, install } = usePwaInstall();
+  if (!canInstall) return null;
+  return (
+    <button
+      onClick={() => void install()}
+      className="mt-3 inline-flex items-center gap-1.5 rounded-full border border-line px-3 py-1.5 text-xs font-medium text-mute transition-colors hover:border-accent/60 hover:text-accent"
+    >
+      <Download className="h-3.5 w-3.5" />
+      Instalar app en este dispositivo
+    </button>
   );
 }

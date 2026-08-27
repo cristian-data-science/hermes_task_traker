@@ -223,6 +223,36 @@ producción de Convex (ej: `https://<deployment>.convex.cloud`).
 > (`Strict-Transport-Security`) y `X-Frame-Options: DENY` no se pueden forzar vía
 > `<meta>` en el HTML; configúralas en el panel del hosting (Vercel/Netlify/Convex).
 
+## 📱 App Android (PWA)
+
+La app es una **PWA instalable**: en el teléfono, abrí la URL en Chrome →
+menú ⋮ → **"Instalar aplicación"** (o el botón 📥 "Instalar app" que aparece
+in-app). Se crea un WebAPK con ícono propio que abre pantalla completa, sin
+barra URL. Las actualizaciones son automáticas (cada push a master).
+
+- **Login en el teléfono**: pasá tu `rsa_key.p8` al teléfono ( Drive/email a
+  ti mismo) y arrastrala o tocá la zona para seleccionarla — la clave se usa
+  solo ahí, firmándola localmente.
+- **Service worker solo en móvil**: la web de escritorio queda 100% intacta
+  (el SW cambia caché/offline, así que solo se registra con `pointer: coarse`
+  o standalone). Compuerta: pixel-diff e2e de desktop contra baseline.
+- **Offline**: app-shell instantáneo desde precache; los datos siguen siendo
+  realtime (Convex no es offline-first — con sesión y sin red verás el
+  spinner hasta reconectar).
+
+Fase opcional (APK / Play Store): la misma PWA se empaqueta como TWA con
+[PWABuilder](https://www.pwabuilder.com/) (sin tooling) o
+[Bubblewrap](https://developer.chrome.com/docs/android/trusted-web-activity/quick-start)
+(`npm i -g @bubblewrap/cli` → `bubblewrap init --manifest=<url>` → `build`).
+Requiere `public/.well-known/assetlinks.json` con la huella SHA-256 de la
+clave de firma. Play Store: US$25 + 12 testers/14 días para cuentas
+personales nuevas.
+
+Pruebas: `npx playwright test` (matrix móvil 360/390/412/768 + gate
+pixel-diff desktop). Baseline: `BASELINE=1 npx playwright test -g @baseline
+--project=desktop-base --project=desktop-xl`. Sesión e2e:
+`node scripts/gen-session.mjs`.
+
 ## 📐 Especificaciones (OpenSpec)
 
 El contexto del proyecto vive empaquetado en `openspec/` con

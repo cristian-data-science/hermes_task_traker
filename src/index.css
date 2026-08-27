@@ -620,3 +620,16 @@
     display: none;
   }
 }
+
+/* ============================================================
+   PWA móvil (standalone/teléfono): suprimir pull-to-refresh.
+   SCOPED a pointer coarse + pantallas chicas y a display-mode
+   standalone — la experiencia de escritorio queda intacta.
+   ============================================================ */
+@media (pointer: coarse) and (max-width: 640px),
+  (display-mode: standalone) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+}

@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { usePwaInstall } from "../hooks/usePwaInstall";
 import { motion } from "framer-motion";
 import {
   LayoutGrid,
@@ -11,6 +12,7 @@ import {
   Settings,
   Inbox,
   ClipboardCheck,
+  Download,
 } from "lucide-react";
 import {
   AREAS,
@@ -89,15 +91,20 @@ export function Toolbar({
   onOpenSettings,
   onOpenAssignedInbox,
 }: ToolbarProps) {
+  // PWA: prompt de instalación — el hook ya filtra desktop (pointer coarse),
+  // así que en escritorio este botón no existe y la web queda intacta.
+  const { canInstall, install } = usePwaInstall();
   return (
     <header
       className="sticky top-0 z-30 border-b border-line backdrop-blur-lg"
       style={{ background: "color-mix(in srgb, var(--surface) 86%, transparent)" }}
     >
       <div className="mx-auto max-w-[1600px] px-3 py-2.5 sm:px-6 sm:py-3 lg:px-8">
-        {/* Fila 1: branding + acciones */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          <div className="flex min-w-0 items-center gap-2">
+        {/* Fila 1: branding + acciones. En teléfonos angostos la fila scrollea
+            horizontal contenida (mismo patrón que los chips): el body nunca
+            desborda y desktop no cambia (≥sm hay espacio de sobra). */}
+        <div className="no-scrollbar flex items-center gap-2 overflow-x-auto sm:gap-3">
+          <div className="flex min-w-0 shrink-0 items-center gap-2">
             <BrandMark />
             <div className="hidden md:block">
               <h1 className="font-display text-sm font-bold uppercase leading-tight tracking-wide text-ink">
@@ -130,7 +137,17 @@ export function Toolbar({
             )}
           </div>
 
-          <div className="ml-auto flex items-center gap-1 sm:gap-1.5">
+          <div className="ml-auto flex shrink-0 items-center gap-1 sm:gap-1.5">
+            {canInstall && (
+              <button
+                onClick={() => void install()}
+                title="Instalar app en este dispositivo"
+                aria-label="Instalar app"
+                className="btn-ghost p-2 text-mute hover:text-accent"
+              >
+                <Download className="h-4 w-4" />
+              </button>
+            )}
             {/* Conmutador vista */}
             <div className="flex rounded-el border-el border-line bg-panel2 p-0.5">
               <ViewButton
@@ -180,7 +197,11 @@ export function Toolbar({
               <Settings className="h-4 w-4" />
             </button>
 
-            <button onClick={onNewTask} className="btn-primary px-2.5 sm:px-3.5">
+            <button
+              onClick={onNewTask}
+              className="btn-primary px-2.5 py-2 sm:px-3.5 sm:py-0"
+              title="Nueva tarea"
+            >
               <Plus className="h-4 w-4" />
               <span className="hidden sm:inline">Nueva</span>
             </button>
@@ -330,8 +351,10 @@ function ViewButton({
   return (
     <button
       onClick={onClick}
+      aria-label={label}
+      aria-pressed={active}
       className={cn(
-        "relative flex items-center gap-1.5 rounded-el px-2.5 py-1.5 text-xs font-semibold transition-colors",
+        "relative flex items-center gap-1.5 rounded-el px-2.5 py-2 text-xs font-semibold transition-colors sm:py-1.5",
         active ? "text-ink" : "text-mute hover:text-ink",
       )}
     >
