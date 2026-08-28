@@ -59,8 +59,11 @@ const options = {
     // Si ya existe el keystore de la primera generación, firma con ÉL
     // (signingMode "mine"): así la nueva versión se instala ENCIMA de la
     // instalada sin desinstalar. file = keystore en base64.
+    // El servicio exige data-URI: data:<mime>;base64,<payload>
     file: fs.existsSync(path.resolve("keys/hermes-android.keystore"))
-      ? fs.readFileSync(path.resolve("keys/hermes-android.keystore")).toString("base64")
+      ? `data:application/octet-stream;base64,${fs
+          .readFileSync(path.resolve("keys/hermes-android.keystore"))
+          .toString("base64")}`
       : null,
     alias: signingInfo.alias,
     fullName: "Cristian Gutierrez",
