@@ -56,7 +56,12 @@ const options = {
   packageId: "app.vercel.agenttask_one", // segmento Android válido (sin guiones)
   shortcuts: [],
   signing: {
-    file: null,
+    // Si ya existe el keystore de la primera generación, firma con ÉL
+    // (signingMode "mine"): así la nueva versión se instala ENCIMA de la
+    // instalada sin desinstalar. file = keystore en base64.
+    file: fs.existsSync(path.resolve("keys/hermes-android.keystore"))
+      ? fs.readFileSync(path.resolve("keys/hermes-android.keystore")).toString("base64")
+      : null,
     alias: signingInfo.alias,
     fullName: "Cristian Gutierrez",
     organization: "Hermes Personal",
@@ -65,7 +70,7 @@ const options = {
     keyPassword: signingInfo.keyPassword,
     storePassword: signingInfo.storePassword,
   },
-  signingMode: "new",
+  signingMode: "mine",
   splashScreenFadeOutDuration: 300,
   startUrl: "/",
   themeColor: "#010603",

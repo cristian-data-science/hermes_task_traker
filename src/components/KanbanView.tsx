@@ -27,6 +27,7 @@ import {
   sortableKeyboardCoordinates,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { useSnapToStatus } from "../hooks/useSnapToStatus";
 import {
   Plus,
   Inbox,
@@ -35,6 +36,9 @@ import {
   EyeOff,
   FolderTree,
   Loader2,
+  ChevronLeft,
+  ChevronRight,
+  LocateFixed,
 } from "lucide-react";
 import { useMutation, useQuery, useAction } from "convex/react";
 import toast from "react-hot-toast";
@@ -191,6 +195,22 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
   const cols: Cols = optimisticCols ?? serverCols;
   const latestServer = useRef(serverCols);
   const pending = useRef(false);
+  // Encuadre por estado (solo móvil): scroll-snap por columna + botones de
+  // salto. OFF = el scroll libre de siempre. Preferencia persistida.
+  const { enabled: snapEnabled, toggle: toggleSnap } = useSnapToStatus();
+  const boardScrollRef = useRef<HTMLDivElement>(null);
+
+  /** Salta al estado anterior/siguiente, alineado al inicio de su columna. */
+  function navigateStatus(dir: -1 | 1) {
+    const el = boardScrollRef.current;
+    if (!el) return;
+    const cols = Array.from(el.children) as HTMLElement[];
+    if (cols.length === 0) return;
+    const step = cols[0].getBoundingClientRect().width + 12; // ancho + gap
+    const idx = Math.round(el.scrollLeft / step);
+    const target = Math.min(Math.max(idx + dir, 0), cols.length - 1);
+    cols[target].scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
+  }
   latestServer.current = serverCols;
 
   function findContainer(id: string): Status | null {
@@ -365,6 +385,48 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
           )}
         </button>
 
+        {/* Encuadre por estado (solo móvil): snap por columna + flechas de
+            salto. En desktop no se muestran: la web de escritorio no cambia. */}
+        <div className="hidden items-center gap-1 sm:flex">
+          <button
+            onClick={toggleSnap}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-el border-el border-line px-2.5 py-1.5 text-xs font-medium transition-colors",
+              snapEnabled
+                ? "bg-accent text-acfg"
+                : "bg-panel2 text-mute hover:text-ink",
+            )}
+            title={
+              snapEnabled
+                ? "Encuadre por estado activo: cada swipe deja un estado completo. Clic para scroll libre."
+                : "Scroll libre. Clic para encuadrar por estado al deslizar."
+            }
+          >
+            <LocateFixed className="h-3.5 w-3.5" />
+            Encuadre
+          </button>
+          {snapEnabled && (
+            <>
+              <button
+                onClick={() => navigateStatus(-1)}
+                title="Estado anterior"
+                aria-label="Estado anterior"
+                className="inline-flex items-center rounded-el border-el border-line bg-panel2 px-1.5 py-1.5 text-mute transition-colors hover:text-ink"
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => navigateStatus(1)}
+                title="Estado siguiente"
+                aria-label="Estado siguiente"
+                className="inline-flex items-center rounded-el border-el border-line bg-panel2 px-1.5 py-1.5 text-mute transition-colors hover:text-ink"
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </button>
+            </>
+          )}
+        </div>
+
         {menuOpen && (
           <>
             {/* Cerrar al clicar fuera */}
@@ -473,11 +535,18 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
         </div>
       )}
 
-      {/* Scroll horizontal; el snap móvil se desactiva durante el drag */}
+      {/* Scroll horizontal; el snap móvil se desactiva durante el drag.
+          Con "Encuadre por estado" activo, cada swipe queda alineado a un
+          estado completo; con la preferencia OFF, scroll libre como siempre. */}
       <div
+        ref={boardScrollRef}
         className={cn(
           "flex h-full gap-3 overflow-x-auto px-1 pb-2",
-          activeId ? "snap-none" : "snap-x snap-mandatory sm:snap-none",
+          activeId
+            ? "snap-none"
+            : snapEnabled
+              ? "snap-x snap-mandatory sm:snap-none"
+              : "sm:snap-none",
         )}
       >
         {KANBAN_COLUMNS.filter((s) => !isHidden(s)).map((status) => (
@@ -553,7 +622,7 @@ function Column({
   }, [ids, taskMap, groupByProject, groupOpts]);
 
   return (
-    <div className="flex w-[82vw] shrink-0 snap-start flex-col sm:w-72">
+    <div className="flex w-[82vw] shrink-0 snap-start snap-always flex-col sm:w-72">
       {/* Header */}
       <div className="mb-2 flex items-center justify-between px-1">
         <div className="flex items-center gap-2">

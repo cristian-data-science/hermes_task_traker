@@ -47,6 +47,7 @@ import { SubtaskItem } from "./SubtaskItem";
 import { DatePicker } from "./DatePicker";
 import { ClickUpDestinationPicker } from "./ClickUpDestinationPicker";
 import { useAuth } from "../hooks/useAuth";
+import { isMobileLike } from "../hooks/usePwaInstall";
 
 interface TaskModalProps {
   task?: Doc<"tasks"> | null; // si viene, es edición; si no, crear
@@ -382,8 +383,10 @@ export function TaskModal({
               {/* Título */}
               <div className="mb-4">
                 <label className="label">Título *</label>
+                {/* En teléfono el teclado NO se abre solo: solo al tocar una
+                    caja de texto. Desktop conserva el autofocus. */}
                 <input
-                  autoFocus
+                  autoFocus={!isMobileLike()}
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="¿Qué hay que hacer?"
