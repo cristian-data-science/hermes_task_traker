@@ -512,23 +512,24 @@
   /* ---------- SÚPER URGENTE: borde holográfico RGB ----------
      Capa de visualización estilo teclado gamer. TaskCard/TaskRow insertan
      un span .su-ring cuando la tarea está marcada; el aro es un gradiente
-     arcoíris enmascarado a los bordes que cicla colores con hue-rotate
-     (compatibilidad total: no depende de @property ni de conic-gradient).
-     El ::before es una copia desenfocada a modo de halo interior. */
+     arcoíris enmascarado a los bordes (SOLO borde: nada pinta por dentro
+     de la tarjeta) cuya tira de color DESPLAZA su posición en loop — las
+     luces recorren el perímetro, tipo tira LED. Animación via
+     background-position: con background-size 300% el salto 0%→150%
+     equivale exactamente a un período del gradiente (loop sin costura).
+     Compatibilidad total: no depende de @property ni de conic-gradient. */
   .su-ring {
     position: absolute;
     inset: 0;
     border-radius: inherit;
     pointer-events: none;
-    will-change: filter;
-    animation: su-hue 4s linear infinite;
   }
-  .su-ring::before,
   .su-ring::after {
     content: "";
     position: absolute;
     inset: 0;
     border-radius: inherit;
+    padding: 3px;
     background: linear-gradient(
       90deg,
       #ff2d55,
@@ -540,10 +541,7 @@
       #bf5af2,
       #ff2d55
     );
-  }
-  /* Aro nítido: el gradiente con máscara que deja visible solo el borde. */
-  .su-ring::after {
-    padding: 2px;
+    background-size: 300% 100%;
     -webkit-mask:
       linear-gradient(#fff 0 0) content-box,
       linear-gradient(#fff 0 0);
@@ -552,21 +550,51 @@
       linear-gradient(#fff 0 0) content-box,
       linear-gradient(#fff 0 0);
     mask-composite: exclude;
+    animation: su-wave 3s linear infinite;
   }
-  /* Halo: misma tira, desenfocada y tenue. Queda dentro del contenedor
-     (overflow hidden del card): resplandor interior, sin sangrar afuera. */
-  .su-ring::before {
-    filter: blur(10px);
-    opacity: 0.45;
+
+  /* Tag "SÚPER URGENTE" dentro de la tarjeta: el mismo arcoíris como
+     relleno del chip, en movimiento sincronizado con el borde. Texto
+     oscuro para contrastar sobre cualquier color de la tira. */
+  .su-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 1px 7px;
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    line-height: 1.6;
+    color: #0c0c12;
+    border-radius: calc(var(--radius) + 99px);
+    background: linear-gradient(
+      90deg,
+      #ff2d55,
+      #ff9f0a,
+      #ffd60a,
+      #32d74b,
+      #64d2ff,
+      #0a84ff,
+      #bf5af2,
+      #ff2d55
+    );
+    background-size: 300% 100%;
+    animation: su-wave 3s linear infinite;
+    white-space: nowrap;
+  }
+  [data-theme="brutal"] .su-tag {
+    border-radius: 0;
+    border: 1px solid #0c0c12;
   }
 }
 
-@keyframes su-hue {
+@keyframes su-wave {
   from {
-    filter: hue-rotate(0deg);
+    background-position: 0% 50%;
   }
   to {
-    filter: hue-rotate(360deg);
+    background-position: 150% 50%;
   }
 }
 
@@ -669,8 +697,9 @@
   .themed-bg {
     display: none;
   }
-  /* El borde RGB de las súper urgentes queda estático (arcoíris fijo). */
-  .su-ring {
+  /* El borde RGB y el tag quedan estáticos (arcoíris fijo, sin recorrido). */
+  .su-ring::after,
+  .su-tag {
     animation: none;
   }
 }

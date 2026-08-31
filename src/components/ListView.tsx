@@ -7,6 +7,7 @@ import {
   Clock,
   ListChecks,
   User,
+  Zap,
 } from "lucide-react";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { AREAS, AREA_META, STATUS_META, type Area } from "../lib/constants";
@@ -223,6 +224,12 @@ function TaskRow({
           {task.title}
         </p>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-mute">
+          {superUrgent && (
+            <span className="su-tag" title="Súper urgente: ignora los filtros, siempre primera">
+              <Zap className="h-2.5 w-2.5" />
+              Súper urgente
+            </span>
+          )}
           {count && count.total > 0 && (
             <span className="inline-flex items-center gap-1">
               <ListChecks className="h-3 w-3" />
