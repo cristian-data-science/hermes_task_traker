@@ -11,6 +11,7 @@ import {
   ExternalLink,
   Circle,
   Unlink,
+  Zap,
 } from "lucide-react";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -163,8 +164,14 @@ export function TaskCard({
         className="absolute right-9 top-2 z-[1]"
       />
 
-      {/* Header: área + estado */}
+      {/* Header: súper urgente + área + estado */}
       <div className="mb-1.5 flex flex-wrap items-center gap-1.5 pl-1.5">
+        {superUrgent && (
+          <span className="su-tag" title="Súper urgente: ignora los filtros, siempre primera">
+            <Zap className="h-2.5 w-2.5" />
+            Súper urgente
+          </span>
+        )}
         <AreaBadge area={task.area} />
         {variant === "kanban" && <StatusBadge status={task.status} size="xs" />}
       </div>
