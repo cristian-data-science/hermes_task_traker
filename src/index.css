@@ -508,6 +508,66 @@
   [data-theme="brutal"] .task-accent::before {
     width: 6px;
   }
+
+  /* ---------- SÚPER URGENTE: borde holográfico RGB ----------
+     Capa de visualización estilo teclado gamer. TaskCard/TaskRow insertan
+     un span .su-ring cuando la tarea está marcada; el aro es un gradiente
+     arcoíris enmascarado a los bordes que cicla colores con hue-rotate
+     (compatibilidad total: no depende de @property ni de conic-gradient).
+     El ::before es una copia desenfocada a modo de halo interior. */
+  .su-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    will-change: filter;
+    animation: su-hue 4s linear infinite;
+  }
+  .su-ring::before,
+  .su-ring::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(
+      90deg,
+      #ff2d55,
+      #ff9f0a,
+      #ffd60a,
+      #32d74b,
+      #64d2ff,
+      #0a84ff,
+      #bf5af2,
+      #ff2d55
+    );
+  }
+  /* Aro nítido: el gradiente con máscara que deja visible solo el borde. */
+  .su-ring::after {
+    padding: 2px;
+    -webkit-mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#fff 0 0) content-box,
+      linear-gradient(#fff 0 0);
+    mask-composite: exclude;
+  }
+  /* Halo: misma tira, desenfocada y tenue. Queda dentro del contenedor
+     (overflow hidden del card): resplandor interior, sin sangrar afuera. */
+  .su-ring::before {
+    filter: blur(10px);
+    opacity: 0.45;
+  }
+}
+
+@keyframes su-hue {
+  from {
+    filter: hue-rotate(0deg);
+  }
+  to {
+    filter: hue-rotate(360deg);
+  }
 }
 
 @layer components {
@@ -608,6 +668,10 @@
 @media (prefers-reduced-motion: reduce) {
   .themed-bg {
     display: none;
+  }
+  /* El borde RGB de las súper urgentes queda estático (arcoíris fijo). */
+  .su-ring {
+    animation: none;
   }
 }
 

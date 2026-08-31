@@ -20,6 +20,7 @@ import { ClickUpSettings } from "./components/ClickUpSettings";
 import { ClickUpSyncPage } from "./components/ClickUpSyncPage";
 import { ThemedBackground } from "./components/ThemedBackground";
 import { Loader2, ClipboardList } from "lucide-react";
+import { isSuperUrgent } from "./lib/utils";
 
 export default function App() {
   return (
@@ -95,6 +96,10 @@ function Dashboard({
     const q = search.trim().toLowerCase();
     const hiddenSet = new Set(hiddenAreas);
     return tasks.filter((t) => {
+      // Capa "súper urgente": no conversa con los filtros. Da lo mismo la
+      // búsqueda, el área, el estado o que su área esté oculta: siempre se
+      // muestra (y cada vista la ancla primera — ver KanbanView/ListView).
+      if (isSuperUrgent(t)) return true;
       if (hiddenSet.has(t.area)) return false;
       if (areaFilter !== "all" && t.area !== areaFilter) return false;
       if (statusFilter !== "all" && t.status !== statusFilter) return false;

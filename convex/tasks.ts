@@ -201,6 +201,11 @@ const taskFields = {
   scheduledDates: v.optional(v.string()),
   requestedBy: v.optional(v.string()),
   /**
+   * Súper urgente: siempre visible (ignora filtros) y anclada primera.
+   * Marca local de visualización; no viaja a ClickUp.
+   */
+  superUrgent: v.optional(v.boolean()),
+  /**
    * Destino ClickUp (solo área patagonia). Vacío → Mesa Técnica (tarea suelta).
    * Seteado → id del nodo padre bajo el que anidar la tarea en ClickUp.
    */
@@ -244,6 +249,7 @@ export const create = mutation({
       standbyUntil: args.standbyUntil,
       scheduledDates: args.scheduledDates,
       requestedBy: sanitized.requestedBy ?? args.requestedBy,
+      superUrgent: args.superUrgent,
       clickupParentId: args.clickupParentId,
       clickupListId: args.clickupListId,
       clickupLocal: args.clickupLocal,
@@ -307,6 +313,7 @@ export const update = mutation({
     standbyUntil: v.optional(v.string()),
     scheduledDates: v.optional(v.string()),
     requestedBy: v.optional(v.string()),
+    superUrgent: v.optional(v.boolean()),
     clickupParentId: v.optional(v.string()),
     clickupListId: v.optional(v.string()),
     clickupLocal: v.optional(v.boolean()),

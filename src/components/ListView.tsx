@@ -14,7 +14,7 @@ import { ProgressSlider } from "./TaskCard";
 import { CompleteButton } from "./CompleteButton";
 import { StatusBadge } from "./Badges";
 import { useSubtaskCounts } from "../hooks/useSubtaskCounts";
-import { cn } from "../lib/utils";
+import { cn, isSuperUrgent } from "../lib/utils";
 
 interface ListViewProps {
   tasks: Doc<"tasks">[];
@@ -36,9 +36,13 @@ export function ListView({ tasks, onEditTask, onNewTask }: ListViewProps) {
     for (const t of tasks) {
       if (map[t.area]) map[t.area].push(t);
     }
-    // Ordenar: no completadas primero, luego por orden
+    // Ordenar: súper urgentes ancladas arriba, luego no completadas, luego
+    // por orden (sort estable: entre súper urgentes manda su order).
     for (const a of AREAS) {
       map[a].sort((x, y) => {
+        const ux = Number(isSuperUrgent(x));
+        const uy = Number(isSuperUrgent(y));
+        if (ux !== uy) return uy - ux;
         if ((x.status === "completado") !== (y.status === "completado")) {
           return x.status === "completado" ? 1 : -1;
         }
@@ -169,6 +173,7 @@ function TaskRow({
 }) {
   const meta = STATUS_META[task.status];
   const isCompleted = task.status === "completado";
+  const superUrgent = isSuperUrgent(task);
 
   return (
     <motion.div
@@ -177,11 +182,16 @@ function TaskRow({
       animate={{ opacity: 1 }}
       onClick={onClick}
       style={{ "--tone": meta.tone } as CSSProperties}
+      title={superUrgent ? "Súper urgente: ignora los filtros, siempre primera" : undefined}
       className={cn(
         "task-accent group relative grid cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5 border-b border-line px-3 py-2.5 transition-colors hover:bg-panel2 sm:grid-cols-[auto_minmax(0,1fr)_180px_auto] sm:px-4",
+        superUrgent && "super-urgent",
         isCompleted && "opacity-60",
       )}
     >
+      {/* Borde holográfico RGB (mismo aro que las tarjetas del kanban). */}
+      {superUrgent && <span aria-hidden className="su-ring z-[1]" />}
+
       {/* Botón rápido de completar */}
       <CompleteButton
         task={task}

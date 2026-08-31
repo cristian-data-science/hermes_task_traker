@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
+import { ANDROID_TWA } from "./platform";
 
 /** Combina clases de Tailwind resolviendo conflictos. */
 export function cn(...inputs: ClassValue[]) {
@@ -35,4 +36,23 @@ export function formatRelative(ms?: number | null): string {
 /** CSS variable con el color tonal de un estado (depende del tema activo). */
 export function statusTone(status: string): string {
   return `var(--status-${status}, var(--muted))`;
+}
+
+/**
+ * ¿Es una súper urgente VIVA? La capa de visualización (siempre visible +
+ * anclada primera + borde RGB) solo aplica mientras la tarea está activa:
+ * al completarla descansa como cualquier otra.
+ *
+ * Es EXCLUSIVA de la versión web: dentro del APK Android (TWA) la tarea se
+ * comporta como una más — sin bypass de filtros, sin anclado y sin borde.
+ * El dato `superUrgent` igualmente viaja en el modelo, así que una tarea
+ * marcada en la web conserva su marca al editarse desde el APK.
+ */
+export const SUPER_URGENT_ENABLED = !ANDROID_TWA;
+
+export function isSuperUrgent(t: {
+  superUrgent?: boolean;
+  status: string;
+}): boolean {
+  return SUPER_URGENT_ENABLED && t.superUrgent === true && t.status !== "completado";
 }
