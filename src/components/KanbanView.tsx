@@ -59,7 +59,7 @@ import {
 } from "../lib/projectGroup";
 import { useAuth } from "../hooks/useAuth";
 import { MouseSensor, TouchSensor } from "../lib/dndSensors";
-import { cn } from "../lib/utils";
+import { cn, isSuperUrgent } from "../lib/utils";
 
 interface KanbanViewProps {
   tasks: Doc<"tasks">[];
@@ -184,6 +184,17 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
         if (ra !== rb) return ra - rb;
         return taskMap[a].order - taskMap[b].order;
       });
+    }
+    // Capa "súper urgente": pase final que las ancla PRIMERAS de su columna,
+    // por encima del orden del usuario y del agrupamiento por proyecto. El
+    // sort es estable, así que entre súper urgentes se conserva su order. Si
+    // el usuario arrastra una hacia abajo, al re-derivarse las columnas del
+    // servidor vuelve sola a la punta: es su naturaleza.
+    for (const s of KANBAN_COLUMNS) {
+      map[s].sort(
+        (a, b) =>
+          Number(isSuperUrgent(taskMap[b])) - Number(isSuperUrgent(taskMap[a])),
+      );
     }
     return map;
   }, [tasks, taskMap, groupByProject, groupOpts]);

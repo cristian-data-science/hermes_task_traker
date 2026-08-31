@@ -26,6 +26,7 @@ import {
   Unlink,
   Maximize2,
   Minimize2,
+  Zap,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -43,6 +44,7 @@ import {
   type Executor,
 } from "../lib/constants";
 import { cn } from "../lib/utils";
+import { SUPER_URGENT_ENABLED } from "../lib/utils";
 import { SubtaskItem } from "./SubtaskItem";
 import { DatePicker } from "./DatePicker";
 import { ClickUpDestinationPicker } from "./ClickUpDestinationPicker";
@@ -125,6 +127,7 @@ export function TaskModal({
   const [standbyUntil, setStandbyUntil] = useState("");
   const [scheduledDates, setScheduledDates] = useState("");
   const [requestedBy, setRequestedBy] = useState("");
+  const [superUrgent, setSuperUrgent] = useState(false);
   const [saving, setSaving] = useState(false);
   const [newSub, setNewSub] = useState("");
   const [clickupParentId, setClickupParentId] = useState<string | undefined>(
@@ -168,6 +171,7 @@ export function TaskModal({
       setStandbyUntil(task.standbyUntil ?? "");
       setScheduledDates(task.scheduledDates ?? "");
       setRequestedBy(task.requestedBy ?? "");
+      setSuperUrgent(task.superUrgent ?? false);
       setClickupParentId(task.clickupParentId);
       setClickupListId(task.clickupListId);
       setClickupLocal(task.clickupLocal ?? false);
@@ -188,6 +192,7 @@ export function TaskModal({
       setStandbyUntil("");
       setScheduledDates("");
       setRequestedBy("");
+      setSuperUrgent(false);
       setClickupParentId(undefined);
       setClickupListId(undefined);
       setClickupLocal(false);
@@ -224,6 +229,9 @@ export function TaskModal({
         standbyUntil: standbyUntil.trim() || blank,
         scheduledDates: scheduledDates.trim() || blank,
         requestedBy: requestedBy.trim() || blank,
+        // Súper urgente: se manda siempre (true/false) para que al editar
+        // quede explicito desmarcarla (update persiste el false).
+        superUrgent,
         // Destino ClickUp: solo aplica a Patagonia.
         // Al EDITAR mandamos los dos campos SOLO si el destino cambió, y usamos
         // "" (no undefined) para decir "sin destino": Convex descarta los
@@ -393,6 +401,67 @@ export function TaskModal({
                   className="input text-base"
                 />
               </div>
+
+              {/* Check "súper urgente": capa de visualización por encima de
+                  todo. Activa un preview del borde RGB que tendrá la tarjeta.
+                  Solo versión web: en el APK el control no se muestra (y el
+                  valor hidratado igual se reenvía al guardar, para no borrar
+                  una marca puesta desde la web). */}
+              {SUPER_URGENT_ENABLED && (
+              <button
+                type="button"
+                onClick={() => setSuperUrgent((v) => !v)}
+                style={
+                  {
+                    "--tone": "var(--status-urgente)",
+                    ...(superUrgent
+                      ? {
+                          borderColor:
+                            "color-mix(in srgb, var(--status-urgente) 55%, transparent)",
+                        }
+                      : {}),
+                  } as CSSProperties
+                }
+                className={cn(
+                  "relative mb-4 flex w-full items-center gap-2.5 overflow-hidden rounded-el border-el px-2.5 py-2 text-left transition-colors",
+                  superUrgent
+                    ? "bg-panel2"
+                    : "border-line hover:bg-panel2",
+                )}
+              >
+                {/* Preview del aro holográfico que llevará la tarjeta. */}
+                {superUrgent && (
+                  <span aria-hidden className="su-ring z-[1]" />
+                )}
+                <span
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded border-el transition-colors"
+                  style={
+                    superUrgent
+                      ? {
+                          borderColor: "var(--tone)",
+                          background: "var(--tone)",
+                          color: "var(--accent-fg)",
+                        }
+                      : { borderColor: "var(--border)", background: "var(--surface)" }
+                  }
+                >
+                  {superUrgent && <Check className="h-3 w-3" />}
+                </span>
+                <span className="relative z-[1] min-w-0 flex-1">
+                  <span
+                    className="flex items-center gap-1 text-xs font-semibold"
+                    style={superUrgent ? { color: "var(--tone)" } : undefined}
+                  >
+                    <Zap className="h-3 w-3" />
+                    Súper urgente
+                  </span>
+                  <span className="block text-[10px] text-faint">
+                    Ignora los filtros del tablero: siempre visible y primera,
+                    con borde holográfico RGB
+                  </span>
+                </span>
+              </button>
+              )}
 
               {/* Área + Estado + Ejecutor */}
               <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">

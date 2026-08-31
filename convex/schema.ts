@@ -65,6 +65,14 @@ export default defineSchema({
     requestedBy: v.optional(v.string()),
     order: v.number(),
     completedAt: v.optional(v.number()),
+    /**
+     * Súper urgente: capa de visualización por encima de todo lo demás.
+     * Una tarea con este check ignora los filtros del tablero (búsqueda,
+     * área, estado y áreas ocultas) y se ancla SIEMPRE primera en su
+     * columna/grupo, con borde holográfico RGB. No toca ClickUp: es solo
+     * una marca local de Hermes.
+     */
+    superUrgent: v.optional(v.boolean()),
     /** Borrado lógico: timestamp cuando se eliminó, o undefined si está activa. */
     deletedAt: v.optional(v.number()),
     createdAt: v.number(),

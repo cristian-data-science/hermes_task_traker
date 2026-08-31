@@ -18,7 +18,7 @@ import { AreaBadge, StatusBadge } from "./Badges";
 import { CompleteButton } from "./CompleteButton";
 import { CatchupPinButton } from "./CatchupPinButton";
 import { EXECUTOR_META } from "../lib/constants";
-import { cn, statusTone, formatRelative } from "../lib/utils";
+import { cn, statusTone, formatRelative, isSuperUrgent } from "../lib/utils";
 import { useAuth } from "../hooks/useAuth";
 
 /** Slider rápido de progreso 0-100 (commit al soltar). */
@@ -123,6 +123,7 @@ export function TaskCard({
   layoutAnim = true,
 }: TaskCardProps) {
   const isCompleted = task.status === "completado";
+  const superUrgent = isSuperUrgent(task);
 
   return (
     <motion.div
@@ -136,11 +137,18 @@ export function TaskCard({
       transition={{ type: "spring", stiffness: 350, damping: 28 }}
       whileHover={layoutAnim ? { y: -2 } : undefined}
       onClick={onClick}
+      title={superUrgent ? "Súper urgente: ignora los filtros, siempre primera" : undefined}
       className={cn(
         "card task-accent group relative cursor-pointer overflow-hidden p-3 transition-shadow hover:shadow-el-lg",
+        superUrgent && "super-urgent",
         isCompleted && "opacity-70",
       )}
     >
+      {/* Borde holográfico RGB (estilo teclado gamer). Span dedicado para no
+          pisar el ::before de task-accent; el aro se dibuja con máscara y
+          cicla colores por hue-rotate. Ver .su-ring en index.css. */}
+      {superUrgent && <span aria-hidden className="su-ring" />}
+
       {/* Botón rápido de completar (esquina superior derecha) */}
       <CompleteButton
         task={task}
