@@ -166,44 +166,47 @@ export function AgentDelegationSection({
         </p>
       )}
 
-      {/* Carpeta destino (obligatoria para reporte/desarrollo) */}
-      {typeMeta?.vcs && (
-        <>
-          <label className="label">
-            Carpeta destino {typeMeta.vcs === "git" ? "(repo Git)" : "(reporte)"} *
-          </label>
-          <select
-            value={value.workspaceId}
-            onChange={(e) => onChange({ ...value, workspaceId: e.target.value })}
-            className="input mb-1"
-          >
-            <option value="">Elegí carpeta…</option>
-            {inArea.length > 0 && (
-              <optgroup label={area === "patagonia" ? "Patagonia" : area === "datacef" ? "Datacef" : "Personal"}>
-                {inArea.map((w) => (
-                  <option key={w._id} value={w._id}>
-                    {w.label}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {rest.length > 0 && (
-              <optgroup label="Otras áreas">
-                {rest.map((w) => (
-                  <option key={w._id} value={w._id}>
-                    {w.label}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-          {chosen && (
-            <p className="mb-3 truncate font-mono text-[10px] text-faint" title={chosen.path}>
-              {workspaceLabel(chosen)}
-            </p>
-          )}
-        </>
+      {/* Carpeta destino: obligatoria para reporte/desarrollo (mundos Git vs
+          archivos); recomendada para el resto (el despachador la exige para
+          saber dónde trabajar). */}
+      <label className="label">
+        Carpeta destino
+        {typeMeta?.vcs === "git" && " (repo Git) *"}
+        {typeMeta?.vcs === "ninguno" && " (reporte) *"}
+      </label>
+      <select
+        value={value.workspaceId}
+        onChange={(e) => onChange({ ...value, workspaceId: e.target.value })}
+        className="input mb-1"
+      >
+        <option value="">
+          {typeMeta?.vcs ? "Elegí carpeta…" : "Elegí carpeta (el agente trabaja ahí)…"}
+        </option>
+        {inArea.length > 0 && (
+          <optgroup label={area === "patagonia" ? "Patagonia" : area === "datacef" ? "Datacef" : "Personal"}>
+            {inArea.map((w) => (
+              <option key={w._id} value={w._id}>
+                {w.label}
+              </option>
+            ))}
+          </optgroup>
+        )}
+        {rest.length > 0 && (
+          <optgroup label="Otras áreas">
+            {rest.map((w) => (
+              <option key={w._id} value={w._id}>
+                {w.label}
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+      {chosen && (
+        <p className="mb-3 truncate font-mono text-[10px] text-faint" title={chosen.path}>
+          {workspaceLabel(chosen)}
+        </p>
       )}
+      {!chosen && <div className="mb-3" />}
 
       {/* Autonomía */}
       <label className="label">Autonomía</label>

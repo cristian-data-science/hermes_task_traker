@@ -116,7 +116,7 @@ const DEFAULT_WORKSPACES: Array<{
     path: `C:\\mcp_servers\\${r}`,
     area: "patagonia" as const,
     vcs: "ninguno" as const,
-    types: ["reporte" as const],
+    types: ["reporte" as const, "analisis" as const, "otro" as const],
   })),
   // ===== Repos de desarrollo (git_provisorio — flujo Git) =====
   ...[
@@ -137,7 +137,7 @@ const DEFAULT_WORKSPACES: Array<{
     path: `C:\\Users\\patag\\git_provisorio\\${repo}`,
     area: area as "patagonia" | "datacef",
     vcs: "git" as const,
-    types: ["desarrollo" as const, "analisis" as const],
+    types: ["desarrollo" as const, "analisis" as const, "ops" as const, "otro" as const],
   })),
 ];
 
@@ -733,30 +733,44 @@ export const cancelAgent = mutation({
  * =====================
  */
 
-/** Siembra el registro con las carpetas curadas por defecto (idempotente). */
+/** Siembra/actualiza el registro con las carpetas curadas (upsert idempotente). */
 export const seedWorkspaces = mutation({
   args: sessionArg,
   handler: async (ctx, { sessionToken }) => {
     await requireAuth(ctx, sessionToken);
     const existing = await ctx.db.query("agentWorkspaces").collect();
-    const byPath = new Set(existing.map((w) => w.path.toLowerCase()));
+    const byPath = new Map(existing.map((w) => [w.path.toLowerCase(), w]));
     const now = Date.now();
     let added = 0;
+    let updated = 0;
     for (const w of DEFAULT_WORKSPACES) {
-      if (byPath.has(w.path.toLowerCase())) continue;
-      await ctx.db.insert("agentWorkspaces", {
-        label: w.label,
-        path: w.path,
-        area: w.area,
-        vcs: w.vcs,
-        types: w.types,
-        enabled: true,
-        createdAt: now,
-        updatedAt: now,
-      });
-      added++;
+      const prev = byPath.get(w.path.toLowerCase());
+      if (!prev) {
+        await ctx.db.insert("agentWorkspaces", {
+          label: w.label,
+          path: w.path,
+          area: w.area,
+          vcs: w.vcs,
+          types: w.types,
+          enabled: true,
+          createdAt: now,
+          updatedAt: now,
+        });
+        added++;
+        continue;
+      }
+      // Upsert suave: refresca clasificación (vcs/types) sin pisar el label
+      // o el enabled que Cris haya editado a mano.
+      if (prev.vcs !== w.vcs || JSON.stringify(prev.types ?? []) !== JSON.stringify(w.types)) {
+        await ctx.db.patch(prev._id, {
+          vcs: w.vcs,
+          types: w.types,
+          updatedAt: now,
+        });
+        updated++;
+      }
     }
-    return { added, total: existing.length + added };
+    return { added, updated, total: existing.length + added };
   },
 });
 

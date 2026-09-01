@@ -90,18 +90,24 @@ export const TOKEN_CACHE = path.join(BRIDGE_DIR, ".token-cache.json");
 /** Backup del config de ZCode durante el swap de modelo (gitignored). */
 export const MODEL_BACKUP = path.join(BRIDGE_DIR, ".model-backup.json");
 
-/** Autonomía → modo de permisos de zcode (NUNCA yolo: siempre explícito). */
+/**
+ * Autonomía → modo de zcode.
+ *
+ * Empírico en 0.16.5 (headless -p): los modos con permisos (plan/build/edit)
+ * NO dejan ejecutar Bash — no hay nadie que apruebe — y el agente no podría
+ * llamar a report.mjs ni trabajar. El único modo operativo es `yolo`
+ * (bypass). Los límites reales son: el contrato del prompt (conductual,
+ * reforzado por tipo y por autonomía en prompts.mjs) y el timeout de corrida.
+ *
+ * OJO: --disallowed-tools con specs "Bash(...)" elimina la herramienta Bash
+ * ENTERA en 0.16.5 (no solo el patrón), así que NO se usa hasta que el CLI
+ * arregle el matcher. Las reglas de git push / cero-git-en-reportes viven en
+ * el prompt del contrato.
+ */
 export const AUTONOMY_MODE = {
-  escenario: "plan",
-  supervisado: "build",
-  autonomo: "edit",
-};
-
-/** Cinturón de seguridad de turnos por autonomía. */
-export const AUTONOMY_MAX_TURNS = {
-  escenario: 40,
-  supervisado: 120,
-  autonomo: 200,
+  escenario: "yolo",
+  supervisado: "yolo",
+  autonomo: "yolo",
 };
 
 /** Nudge de WhatsApp (modo periodica) si la corrida pasa esto sin novedades. */

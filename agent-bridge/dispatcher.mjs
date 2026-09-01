@@ -21,7 +21,6 @@ import {
   CONVEX_URL,
   ZCODE_CLI,
   AUTONOMY_MODE,
-  AUTONOMY_MAX_TURNS,
   MAX_CONCURRENT,
   NUDGE_MS,
   assertConfig,
@@ -35,9 +34,37 @@ const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000
 
 let busy = 0;
 let running = null; // { taskId, nudge, kill }
+/** Tareas con corrida activa EN ESTE proceso (para detectar huérfanas). */
+const active = new Set();
 
 function log(...a) {
   console.log(`[${new Date().toLocaleTimeString()}]`, ...a);
+}
+
+/**
+ * Corridas huérfanas: tareas en despachada/trabajando que NO están activas
+ * acá (p.ej. el puente se reinició a mitad de corrida). Se marcan error para
+ * que Cris las re-despache con un clic — nunca se relanzan solas.
+ */
+async function recoverStuck() {
+  try {
+    const overview = await q("agent:agentOverview");
+    const stuck = [...(overview?.working ?? [])].filter((t) => !active.has(t._id));
+    for (const t of stuck) {
+      // Gracia para corridas recientes de otra instancia que pueda estar viva.
+      if (Date.now() - t.updatedAt < 5 * 60 * 1000) continue;
+      await m("agent:agentReport", {
+        taskId: t._id,
+        state: "error",
+        error:
+          "Corrida interrumpida: el puente se reinició a mitad de la ejecución. Respondé acá para que reintente.",
+        watchdog: true,
+      });
+      log(`♻ corrida huérfana marcada error: ${t.title}`);
+    }
+  } catch (e) {
+    log("recoverStuck:", e.message);
+  }
 }
 
 /** Sincroniza el catálogo de modelos de la instalación → picker de la app. */
@@ -48,19 +75,32 @@ async function syncModels() {
   log(`modelos sincronizados: ${models.length} (default ${def})`);
 }
 
-/** Corrida de una tarea. Devuelve true si despachó (o falló intentando). */
-async function dispatchTask({ task, workspace }) {
+/** Corrida de una tarea (envuelta para el registro de activas). */
+async function dispatchTask(entry) {
+  active.add(entry.task._id);
+  try {
+    await dispatchTaskInner(entry);
+  } finally {
+    active.delete(entry.task._id);
+  }
+}
+
+async function dispatchTaskInner({ task, workspace }) {
   const taskId = task._id;
   const folder = task.workspacePath || workspace?.path || "";
   const notifyMode = task.notifyWhatsapp ?? "off";
 
-  // 1) Carpeta válida en disco (validación tipo↔vcs ya la hizo el backend).
+  // 1) Carpeta en disco: sin carpeta el agente no sabe dónde trabajar →
+  //    pregunta (no error): Cris elige la carpeta en la app y re-encola.
   if (!folder || !existsSync(folder)) {
     await m("agent:agentReport", {
       taskId,
-      state: "error",
-      error: `La carpeta destino no existe en este PC: ${folder || "(sin carpeta)"}`,
-    }).catch((e) => log("report error falló:", e.message));
+      state: "pregunta",
+      question: folder
+        ? `La carpeta destino no existe en este PC: ${folder}. Corregila en la app y respondé acá para reintentar.`
+        : "La tarea no tiene carpeta destino. Elegila al editar la tarea y respondé acá para que reintente.",
+      error: folder ? `carpeta inexistente: ${folder}` : "sin carpeta destino",
+    }).catch((e) => log("report pregunta falló:", e.message));
     return;
   }
 
@@ -81,8 +121,10 @@ async function dispatchTask({ task, workspace }) {
   }
 
   const prompt = buildPrompt({ task, workspacePath: folder, runId, followUp, resumed: !!task.agentSessionId });
-  const mode = AUTONOMY_MODE[task.autonomy] ?? "build";
-  const maxTurns = AUTONOMY_MAX_TURNS[task.autonomy] ?? 120;
+  const mode = AUTONOMY_MODE[task.autonomy] ?? "yolo";
+  // Sin --disallowed-tools: en 0.16.5 un spec "Bash(...)" tumba la
+  // herramienta Bash entera (ver config.mjs). Los límites de git son
+  // contractuales (prompt).
 
   log(`▶ despachando "${task.title}" [${task.taskType}/${task.autonomy}/${task.model ?? "default"}] → ${folder}`);
 
@@ -96,6 +138,8 @@ async function dispatchTask({ task, workspace }) {
   }).catch(() => {});
 
   // 4) Swap de modelo + spawn headless.
+  // Nota 0.16.5: --max-turns aparece en el help pero NO está implementado
+  // (igual que --settings); el cinturón de vueltas es el timeout de corrida.
   const restore = swapModel(task.model);
   const args = [
     ZCODE_CLI,
@@ -105,13 +149,8 @@ async function dispatchTask({ task, workspace }) {
     folder,
     "--mode",
     mode,
-    "--max-turns",
-    String(maxTurns),
     "--json",
   ];
-  if (task.autonomy !== "autonomo") {
-    args.push("--disallowed-tools", "Bash(git push *)");
-  }
 
   try {
     await new Promise((resolve) => {
@@ -196,7 +235,7 @@ async function dispatchTask({ task, workspace }) {
             summary: response,
             exitCode: res.code,
             watchdog: true,
-          }).catch(() => {});
+          }).catch((e) => log("watchdog report falló:", e.message));
         }
       }
       log(`✔ corrida ${runId} terminada (exit ${res.code})`);
@@ -268,16 +307,20 @@ async function main() {
   await m("agent:seedWorkspaces").catch((e) => log("seedWorkspaces:", e.message));
   await syncModels().catch((e) => log("syncModels:", e.message));
 
-  // Heartbeat: indicador "puente activo" en la app.
-  const beat = () => m("agent:bridgeHeartbeat").catch(() => {});
+  // Heartbeat: indicador "puente activo" en la app + barrido de huérfanas.
+  const beat = async () => {
+    await m("agent:bridgeHeartbeat").catch(() => {});
+    await recoverStuck();
+  };
   await beat();
-  setInterval(beat, 60_000);
+  setInterval(() => void beat(), 60_000);
 
   // Suscripción reactiva: cada cambio de la cola dispara un pump.
+  // (convex 1.42: ConvexClient.onUpdate; devuelve el unsubscribe.)
   const client = new ConvexClient(CONVEX_URL);
-  client.subscribe(
+  client.onUpdate(
     "agent:agentQueue",
-    () => ({ sessionToken: _tokenForChild }),
+    { sessionToken: _tokenForChild },
     () => {
       pump().catch((e) => log("pump:", e.message));
     },
@@ -299,7 +342,7 @@ async function main() {
     log("deteniendo puente…");
     if (running?.nudge) clearInterval(running.nudge);
     if (running?.kill) running.kill();
-    client.close().catch?.(() => {});
+    client.close();
     process.exit(0);
   };
   process.on("SIGINT", stop);

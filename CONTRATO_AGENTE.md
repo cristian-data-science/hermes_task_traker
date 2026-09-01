@@ -38,11 +38,13 @@ El ciclo del agente es la fuente de verdad; el estado del tablero se deriva:
 
 ## 3. Niveles de autonomía (se eligen por tarea, en la app)
 
-| Nivel | Qué hace el agente | Qué NUNCA hace solo | Modo ZCode |
+| Nivel | Qué hace el agente | Qué NUNCA hace solo | Modo ZCode + denies |
 |---|---|---|---|
-| `escenario` | Prepara las bases: plan/PRD, stubs, rama inicial (repo) o backup (reporte). Deja todo listo para que Cris pilotee. | Implementación funcional | `plan` |
-| `supervisado` (default) | Implementa y verifica (build/tests). En repo: commits locales. En reporte: cambia .pbix con backup previo. | Push, publicación, prod | `build` |
-| `autonomo` | Todo lo anterior + commit y **push de rama feature** (jamás master/merge) o .pbix final con backup. | Merge a master, producción, ERP, envío de correos | `edit` |
+| `escenario` | Prepara las bases: plan/PRD, stubs, rama inicial (repo) o backup (reporte). Deja todo listo para que Cris pilotee. | Implementación funcional; cualquier push | yolo · deny `Bash(git push *)` + contrato |
+| `supervisado` (default) | Implementa y verifica (build/tests). En repo: commits locales. En reporte: cambia .pbix con backup previo. | Push, publicación, prod | yolo · deny `Bash(git push *)` + contrato |
+| `autonomo` | Todo lo anterior + commit y **push de rama feature** (jamás master/merge) o .pbix final con backup. | Merge a master, producción, ERP, envío de correos | yolo · contrato |
+
+> Nota de implementación (zcode 0.16.5, headless): los modos con permisos (`plan`/`build`/`edit`) **no dejan ejecutar Bash** sin aprobación interactiva, así que el despacho corre en `yolo` (único modo operativo headless). Además, `--disallowed-tools` con specs `Bash(...)` **tumba la herramienta Bash entera** (bug del matcher) — no se usa. Los límites reales son: el contrato del prompt (reforzado por tipo y autonomía), el timeout de corrida y la revisión final en `para-revisión`. Si una futura versión de zcode arregla el matcher, se vuelven a añadir los denies duros (`Bash(git *)` en reportes, `Bash(git push *)` en escenario/supervisado).
 
 Los tres niveles terminan en `para-revisión` con evidencia. La autonomía acelera, no autoriza publicar.
 

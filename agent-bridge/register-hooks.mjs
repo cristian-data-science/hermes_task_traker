@@ -18,7 +18,20 @@ import { ZCODE_CONFIG } from "./config.mjs";
 const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const STOP_HOOK = path.join(BRIDGE_DIR, "hooks", "stop-hook.mjs");
 const SESSION_HOOK = path.join(BRIDGE_DIR, "hooks", "session-hook.mjs");
-const MARK = "hermes-agent-bridge";
+
+/**
+ * OJO: el config de ZCode se parsea con schema ESTRICTO — una clave custom
+ * (tipo un tag __bridge) invalida TODO el archivo y zcode lo trata como
+ * inexistente ("Model config is missing"). Por eso las entradas se marcan
+ * por la ruta del comando (contiene agent-bridge), nunca con claves extra.
+ */
+function isBridgeEntry(group) {
+  try {
+    return JSON.stringify(group).includes(BRIDGE_DIR);
+  } catch {
+    return false;
+  }
+}
 
 function commandFor(script) {
   // Comillas dobles: la ruta del repo puede tener espacios.
@@ -32,9 +45,7 @@ function hookEntry(script, timeoutSec) {
 function cleanBridgeHooks(events) {
   const out = {};
   for (const [event, groups] of Object.entries(events ?? {})) {
-    const kept = (groups || []).filter(
-      (g) => !(g && g.__bridge === MARK || JSON.stringify(g).includes(MARK)),
-    );
+    const kept = (groups || []).filter((g) => g && !isBridgeEntry(g));
     if (kept.length) out[event] = kept;
   }
   return out;
@@ -60,7 +71,7 @@ function main() {
   const backup = `${ZCODE_CONFIG}.backup-bridge-${new Date().toISOString().slice(0, 10)}`;
   if (!fs.existsSync(backup)) fs.writeFileSync(backup, raw);
 
-  const tagged = (entry) => ({ __bridge: MARK, ...entry });
+  const tagged = (entry) => entry;
   events.Stop = [...(events.Stop ?? []), tagged(hookEntry(STOP_HOOK, 120))];
   events.SessionStart = [...(events.SessionStart ?? []), tagged(hookEntry(SESSION_HOOK, 30))];
 
