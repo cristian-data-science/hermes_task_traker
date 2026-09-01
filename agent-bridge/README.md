@@ -49,12 +49,17 @@ Variables opcionales (env; defaults ya apuntan a las rutas de esta máquina):
 5. El daemon vincula el `sessionId` (los seguimientos retoman esa sesión con `--resume`: misma conversación) y notifica por WhatsApp si la tarea lo pide.
 6. Cris responde preguntas o aprueba desde la app; la respuesta re-encola con contexto.
 
-## Verificaciones empíricas (31-ago-2026, zcode 0.16.5)
+## Verificaciones empíricas (31-ago/01-sep-2026, zcode 0.16.5)
 
-- `-p` + `--json` devuelve `sessionId`/`response`; `--cwd`, `--mode`, `--resume`, `--max-turns`, `--disallowed-tools` funcionan. El modo default de `-p` es **yolo**: el puente SIEMPRE pasa `--mode` explícito.
-- Modelo por corrida: escribir `model` en `~/.zcode/cli/config.json` con id `<providerKey>/<modelo>` SÍ cambia el modelo (probado GLM-5.3 mayúscula y minúscula). La config de **proyecto** (`zcode.json`/`.zcode/config.json`) NO sirve (no hereda providers → "missing baseURL"). Por eso el swap temporal + concurrencia 1 + backup/restauración (incluso ante crash, al arrancar).
+- **Modo operativo: `yolo`**. Los modos con permisos (`plan`/`build`/`edit`) no dejan ejecutar Bash en headless (no hay quién apruebe) y el agente no puede llamar a `report.mjs`. Los límites son contractuales (prompt) + timeout de corrida.
+- **`--disallowed-tools` con specs `Bash(...)` tumba la herramienta Bash ENTERA** (no solo el patrón) — no se usa hasta que el CLI arregle el matcher. Cuando se arregle: `Bash(git *)` para reportes, `Bash(git push *)` para escenario/supervisado.
+- `--max-turns` y `--settings` aparecen en el help pero **no están implementados** (arg unknown).
+- **Modelo por corrida**: escribir `model` en `~/.zcode/cli/config.json` con id `<providerKey>/<modelo>` SÍ cambia el modelo de la corrida (probado GLM-5.3). La config de **proyecto** (`zcode.json`/`.zcode/config.json`) NO sirve (no hereda providers → "missing baseURL"). El swap es temporal con backup/restauración (incluso ante crash: al arrancar se restaura desde `.model-backup.json`).
+- **Hooks**: el config de ZCode se parsea con schema ESTRICTO — una clave custom en la entrada de hooks invalida TODO el archivo ("Model config is missing"). Formato válido: `hooks: { enabled, events: { Stop: [...], SessionStart: [...] } }` sin claves extra (ver `register-hooks.mjs`).
+- Suscripción reactiva con `ConvexClient.onUpdate` (convex 1.42; no existe `.subscribe` en el wrapper).
 - `hermes send --to whatsapp:Criss` entrega sin gateway corriendo ni LLM.
 - CLI y desktop comparten `~/.zcode/cli/db/db.sqlite`: una corrida despachada se puede abrir después en el desktop.
+- **E2E validado** (deployment dev): crear tarea en web → despacho reactivo en segundos → corrida GLM-5.3 con informe real del agente vía `report.mjs` → para-revisión → aprobación → completado, con sesión vinculada para seguimientos.
 
 ## Desarrollo vs producción
 
