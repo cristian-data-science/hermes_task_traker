@@ -71,6 +71,14 @@ export type AgentState = (typeof agentStates)[number];
 export const notifyModes = ["off", "final", "periodica"] as const;
 export type NotifyMode = (typeof notifyModes)[number];
 
+/**
+ * Estados del pipeline de correos (ingesta Outlook → Power Automate):
+ * `nuevo` espera transformación en tarea; `procesado` ya generó su tarea
+ * (queda `tareaId`); `descartado` se decide que no era tarea.
+ */
+export const correosEstados = ["nuevo", "procesado", "descartado"] as const;
+export type CorreoEstado = (typeof correosEstados)[number];
+
 export default defineSchema({
   tasks: defineTable({
     title: v.string(),
@@ -543,4 +551,52 @@ export default defineSchema({
     used: v.boolean(),
     createdAt: v.number(),
   }).index("by_challenge", ["challenge"]),
+
+  // ===== Correos (ingesta Outlook → Power Automate) =====
+  /**
+   * Bandeja de entrada selectiva: Power Automate reenvía por webhook los
+   * correos que Cris marca como importantes. `messageId` (internetMessageId
+   * de Outlook) es la clave de idempotencia: el webhook se redispara al
+   * editar el correo y NO debe duplicar la fila ni resetear su avance
+   * (estado/tareaId/procesadoEn son intocables en el update).
+   * Única puerta de escritura: HTTP action `/correos/ingesta` con token
+   * (la mutation es interna, ningún cliente puede escribir directo).
+   */
+  correos: defineTable({
+    /** internetMessageId de Outlook: clave de idempotencia del webhook. */
+    messageId: v.string(),
+    /** Id del mensaje en Graph, para volver a consultarlo. */
+    graphId: v.string(),
+    conversationId: v.optional(v.string()),
+    /** Timestamp de recepción del correo (epoch ms; filtrable por rango). */
+    recibidoEn: v.number(),
+    remitenteEmail: v.optional(v.string()),
+    remitenteNombre: v.optional(v.string()),
+    asunto: v.optional(v.string()),
+    /** Texto plano (ya convertido desde HTML), truncado a 100k chars. */
+    cuerpo: v.string(),
+    tieneAdjuntos: v.boolean(),
+    adjuntos: v.optional(
+      v.array(
+        v.object({
+          nombre: v.string(),
+          tipo: v.optional(v.string()),
+          tamano: v.optional(v.number()),
+        }),
+      ),
+    ),
+    webLink: v.optional(v.string()),
+    categorias: v.optional(v.array(v.string())),
+    estado: v.union(
+      v.literal("nuevo"),
+      v.literal("procesado"),
+      v.literal("descartado"),
+    ),
+    /** Tarea generada a partir de este correo (al pasar a "procesado"). */
+    tareaId: v.optional(v.id("tasks")),
+    procesadoEn: v.optional(v.number()),
+    actualizadoEn: v.number(),
+  })
+    .index("by_messageId", ["messageId"])
+    .index("by_estado", ["estado", "recibidoEn"]),
 });
