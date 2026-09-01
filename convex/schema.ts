@@ -29,6 +29,48 @@ export const statuses = [
 ] as const;
 export type Status = (typeof statuses)[number];
 
+/**
+ * ===== Capa agente (delegación Cris ⇄ ZCode) =====
+ * Ver CONTRATO_AGENTE.md (raíz del repo): ciclo de vida, autonomía y la
+ * separación dura Git (desarrollo → git_provisorio) vs archivos
+ * (reporte → C:\mcp_servers, jamás git).
+ */
+
+/** Tipos de tarea delegable; determinan el mundo de trabajo (Git vs archivos). */
+export const taskTypes = [
+  "reporte",
+  "desarrollo",
+  "analisis",
+  "ops",
+  "otro",
+] as const;
+export type TaskType = (typeof taskTypes)[number];
+
+/** Niveles de autonomía del agente (ver matriz en CONTRATO_AGENTE.md §3). */
+export const autonomies = ["escenario", "supervisado", "autonomo"] as const;
+export type Autonomy = (typeof autonomies)[number];
+
+/**
+ * Ciclo de vida de la delegación. Es la fuente de verdad mientras la tarea
+ * tenga executor=zcode; el estado del tablero (status) se deriva de acá
+ * (mapeo en CONTRATO_AGENTE.md §2).
+ */
+export const agentStates = [
+  "encolada",
+  "despachada",
+  "trabajando",
+  "pregunta",
+  "para-revision",
+  "hecho",
+  "error",
+  "cancelada",
+] as const;
+export type AgentState = (typeof agentStates)[number];
+
+/** Notificaciones WhatsApp vía Hermes (`hermes send`): off | final | periódica. */
+export const notifyModes = ["off", "final", "periodica"] as const;
+export type NotifyMode = (typeof notifyModes)[number];
+
 export default defineSchema({
   tasks: defineTable({
     title: v.string(),
@@ -46,9 +88,12 @@ export default defineSchema({
       v.literal("completado"),
     ),
     notes: v.optional(v.string()),
-    /** Ejecutor responsable: Cris (tú) o Claw (agente Hermes). */
+    /**
+     * Ejecutor responsable: Cris (tú), Claw (agente Hermes) o ZCode
+     * (agente de código despachado por el puente agent-bridge).
+     */
     executor: v.optional(
-      v.union(v.literal("cris"), v.literal("claw")),
+      v.union(v.literal("cris"), v.literal("claw"), v.literal("zcode")),
     ),
     /**
      * Responsable original en ClickUp (primer nombre del assignee). Se preserva
@@ -153,11 +198,75 @@ export default defineSchema({
     catchupNote: v.optional(v.string()),
     /** Cuándo se marcó, para ubicarla en la semana correcta. */
     catchupFlaggedAt: v.optional(v.number()),
+    // ===== Capa agente (executor=zcode, despachado por agent-bridge) =====
+    /**
+     * Tipo de tarea delegada. Determina el mundo de trabajo:
+     * `desarrollo` → solo carpetas con vcs=git (git_provisorio);
+     * `reporte` → solo carpetas vcs=ninguno (C:\mcp_servers), jamás git.
+     */
+    taskType: v.optional(
+      v.union(
+        v.literal("reporte"),
+        v.literal("desarrollo"),
+        v.literal("analisis"),
+        v.literal("ops"),
+        v.literal("otro"),
+      ),
+    ),
+    /**
+     * Carpeta destino (registro agentWorkspaces). Se guarda el id para el
+     * picker y un snapshot de la ruta igual que clickupPath: si la carpeta se
+     * renombra/borra del registro, la corrida sigue mostrando dónde corrió.
+     */
+    workspaceId: v.optional(v.id("agentWorkspaces")),
+    workspacePath: v.optional(v.string()),
+    /** Nivel de autonomía de la corrida (CONTRATO_AGENTE.md §3). */
+    autonomy: v.optional(
+      v.union(
+        v.literal("escenario"),
+        v.literal("supervisado"),
+        v.literal("autonomo"),
+      ),
+    ),
+    /** Estado del ciclo de delegación (fuente de verdad del lado agente). */
+    agentState: v.optional(
+      v.union(
+        v.literal("encolada"),
+        v.literal("despachada"),
+        v.literal("trabajando"),
+        v.literal("pregunta"),
+        v.literal("para-revision"),
+        v.literal("hecho"),
+        v.literal("error"),
+        v.literal("cancelada"),
+      ),
+    ),
+    /**
+     * Sesión de ZCode de la última corrida (sess_...). Los seguimientos
+     * (respuesta a pregunta, re-despacho) retoman esta sesión con --resume
+     * para no perder contexto. Compartida con el desktop de ZCode.
+     */
+    agentSessionId: v.optional(v.string()),
+    /** Pregunta abierta del agente a Cris (estado pregunta). */
+    agentQuestion: v.optional(v.string()),
+    /**
+     * Contexto pendiente para el PRÓXIMO despacho: la respuesta de Cris a una
+     * pregunta, o el feedback al rechazar una revisión. El puente lo empaqueta
+     * en el prompt de seguimiento (run.followUp) y lo limpia al despachar.
+     */
+    agentFollowUp: v.optional(v.string()),
+    /** Modelo ZCode elegido para la corrida (id, p.ej. builtin:zai-coding-plan/GLM-5.3). */
+    model: v.optional(v.string()),
+    /** Notificaciones WhatsApp vía Hermes para esta tarea. */
+    notifyWhatsapp: v.optional(
+      v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
+    ),
   })
     .index("by_status", ["status", "order"])
     .index("by_area", ["area", "order"])
     .index("by_area_status", ["area", "status", "order"])
-    .index("by_clickup_id", ["clickupId"]),
+    .index("by_clickup_id", ["clickupId"])
+    .index("by_agent_state", ["agentState", "createdAt"]),
 
   subtasks: defineTable({
     taskId: v.id("tasks"),
@@ -198,6 +307,12 @@ export default defineSchema({
       v.literal("subtask_undone"),
       v.literal("deleted"),
       v.literal("flagged"),
+      // Capa agente (CONTRATO_AGENTE.md §1)
+      v.literal("agent_dispatched"),
+      v.literal("agent_update"),
+      v.literal("agent_question"),
+      v.literal("agent_answer"),
+      v.literal("agent_review"),
     ),
     /** Timestamp del evento (ms). Índice principal de consulta por rango. */
     at: v.number(),
@@ -333,6 +448,81 @@ export default defineSchema({
     expiresAt: v.number(),
     createdAt: v.number(),
   }).index("by_token", ["token"]),
+
+  // ===== Capa agente: corridas de ZCode =====
+  /**
+   * Una fila por corrida del agente sobre una tarea (incluye re-despachos y
+   * seguimientos con --resume). Es la evidencia cronológica: qué modelo, en
+   * qué carpeta, con qué autonomía, qué resumen dejó y cómo terminó.
+   */
+  agentRuns: defineTable({
+    taskId: v.id("tasks"),
+    /** Sesión ZCode de esta corrida (sess_...); vacía si el spawn falló. */
+    sessionId: v.optional(v.string()),
+    /** true si esta corrida retomó la sesión anterior (--resume). */
+    resumed: v.optional(v.boolean()),
+    state: v.union(
+      v.literal("despachada"),
+      v.literal("trabajando"),
+      v.literal("pregunta"),
+      v.literal("para-revision"),
+      v.literal("hecho"),
+      v.literal("error"),
+      v.literal("cancelada"),
+    ),
+    autonomy: v.optional(v.string()),
+    workspacePath: v.optional(v.string()),
+    model: v.optional(v.string()),
+    /** Resumen de lo hecho que el agente reporta (o el watchdog extrae). */
+    summary: v.optional(v.string()),
+    /** Digest corto del prompt despachado (para auditar qué se le pidió). */
+    promptDigest: v.optional(v.string()),
+    /** Contexto extra del seguimiento (respuesta de Cris, feedback). */
+    followUp: v.optional(v.string()),
+    exitCode: v.optional(v.number()),
+    error: v.optional(v.string()),
+    startedAt: v.number(),
+    endedAt: v.optional(v.number()),
+    updatedAt: v.number(),
+  })
+    .index("by_task", ["taskId", "startedAt"])
+    .index("by_state", ["state", "startedAt"]),
+
+  // ===== Capa agente: registro de carpetas de trabajo =====
+  /**
+   * Carpetas donde el agente puede trabajar, con la clase explícita:
+   * `vcs: git` → repos de git_provisorio (flujo Git completo);
+   * `vcs: ninguno` → carpetas locales de reportes Power BI (C:\mcp_servers;
+   *   prohibido git: ni .md ni .pbix se versionan).
+   * La UI solo ofrece carpetas compatibles con el taskType, y el backend
+   * valida la combinación (CONTRATO_AGENTE.md §4).
+   */
+  agentWorkspaces: defineTable({
+    label: v.string(),
+    /** Ruta absoluta en el PC de Cris (donde corre el puente). */
+    path: v.string(),
+    area: v.union(
+      v.literal("patagonia"),
+      v.literal("datacef"),
+      v.literal("personal"),
+    ),
+    vcs: v.union(v.literal("git"), v.literal("ninguno")),
+    /** Tipos de tarea que pueden despacharse acá (vacío = cualquier tipo sin carpeta exigida). */
+    types: v.optional(
+      v.array(
+        v.union(
+          v.literal("reporte"),
+          v.literal("desarrollo"),
+          v.literal("analisis"),
+          v.literal("ops"),
+          v.literal("otro"),
+        ),
+      ),
+    ),
+    enabled: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_area", ["area", "label"]),
 
   // ===== Settings (clave-valor) =====
   // No guarda contraseñas. Reservado para configuración futura.
