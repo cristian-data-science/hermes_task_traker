@@ -54,6 +54,14 @@ export const ZCODE_CLI =
 /** Config de usuario del CLI (acá vive el modelo default y el swap por tarea). */
 export const ZCODE_CONFIG = path.join(os.homedir(), ".zcode", "cli", "config.json");
 
+/**
+ * Config del DESKTOP (v2): su sección provider[<providerKey>].models es la
+ * lista VIVA de modelos del plan (GLM-5.3, GLM-5.3-Flash, GLM-5-Turbo) — más
+ * fresca que el catálogo estático de resources/model-providers (que puede
+ * quedar añejo y sin los modelos nuevos).
+ */
+export const ZCODE_DESKTOP_CONFIG = path.join(os.homedir(), ".zcode", "v2", "config.json");
+
 /** Catálogo de modelos por provider (resources/model-providers/*.json). */
 export const ZCODE_MODEL_PROVIDERS_DIR = path.join(
   path.dirname(ZCODE_CLI),

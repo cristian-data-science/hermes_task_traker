@@ -12,7 +12,12 @@
  */
 import fs from "node:fs";
 import { existsSync, readdirSync } from "node:fs";
-import { ZCODE_CONFIG, ZCODE_MODEL_PROVIDERS_DIR, MODEL_BACKUP } from "./config.mjs";
+import {
+  ZCODE_CONFIG,
+  ZCODE_DESKTOP_CONFIG,
+  ZCODE_MODEL_PROVIDERS_DIR,
+  MODEL_BACKUP,
+} from "./config.mjs";
 
 /** Lee el config de usuario del CLI (model default + provider activo). */
 export function readZcodeConfig() {
@@ -20,8 +25,14 @@ export function readZcodeConfig() {
 }
 
 /**
- * Lista [{id, label}] del provider activo. id = "<providerKey>/<modelId>"
- * (formato del config, p.ej. builtin:zai-coding-plan/glm-5.3).
+ * Lista [{id, label}] de modelos del provider activo.
+ *
+ * Fuente primaria: el config del DESKTOP (~/.zcode/v2/config.json) — su
+ * provider[<providerKey>].models es la lista viva y con entitlements del plan
+ * (GLM-5.3, GLM-5.3-Flash, GLM-5-Turbo). Fallback: el catálogo estático de
+ * resources/model-providers (puede quedar añejo: fue el caso de 5.3-Flash).
+ * id = "<providerKey>/<modelId>" (formato del config; el CLI lo acepta
+ * verbatim — probado con GLM-5.3, glm-5.3 y GLM-5.3-Flash).
  */
 export function readModelCatalog() {
   const cfg = readZcodeConfig();
@@ -32,9 +43,21 @@ export function readModelCatalog() {
     : "";
   if (!providerKey) return { models: [], default: defaultModel, providerKey };
 
-  // En el catálogo el provider se llama sin el prefijo "builtin:".
-  const catalogId = providerKey.replace(/^builtin:/, "");
+  // 1) Config del desktop: fuente fresca y con entitlements.
   const models = [];
+  try {
+    const v2 = JSON.parse(fs.readFileSync(ZCODE_DESKTOP_CONFIG, "utf8"));
+    const provModels = v2?.provider?.[providerKey]?.models;
+    for (const id of Object.keys(provModels ?? {})) {
+      models.push({ id: `${providerKey}/${id}`, label: provModels[id]?.name || id });
+    }
+  } catch {
+    // sin desktop config → catálogo estático
+  }
+  if (models.length) return { models, default: defaultModel, providerKey };
+
+  // 2) Fallback: catálogo estático (el provider se llama sin el prefijo "builtin:").
+  const catalogId = providerKey.replace(/^builtin:/, "");
   if (existsSync(ZCODE_MODEL_PROVIDERS_DIR)) {
     for (const f of readdirSync(ZCODE_MODEL_PROVIDERS_DIR)) {
       if (!f.endsWith(".json")) continue;
