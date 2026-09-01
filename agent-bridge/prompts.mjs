@@ -59,6 +59,9 @@ export function buildPrompt(input) {
   } = input;
 
   const lines = [];
+  // La PRIMERA línea se convierte en el título de la sesión en ZCode
+  // (desktop incluido): que sea la tarea, no un rótulo interno.
+  lines.push(`${task.title} [${task.taskType ?? "otro"}/${task.autonomy ?? "supervisado"}]`);
   lines.push("=== HERMES TASK TRACKER — TAREA DELEGADA A ZCODE ===");
   lines.push(`Tarea: ${task.title} (id: ${task._id})`);
   lines.push(`Área: ${task.area} · Tipo: ${task.taskType ?? "otro"} · Autonomía: ${task.autonomy ?? "supervisado"}`);
