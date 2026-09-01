@@ -198,6 +198,24 @@ export const marcarProcesado = mutation({
   },
 });
 
+/**
+ * Borra físicamente un correo (limpieza de pruebas/triage). Idempotente:
+ * si ya no existe devuelve borrado:false en vez de lanzar.
+ */
+export const eliminar = mutation({
+  args: { sessionToken: v.string(), messageId: v.string() },
+  handler: async (ctx, args) => {
+    await requireAuth(ctx, args.sessionToken);
+    const existente = await ctx.db
+      .query("correos")
+      .withIndex("by_messageId", (q) => q.eq("messageId", args.messageId))
+      .first();
+    if (!existente) return { borrado: false };
+    await ctx.db.delete(existente._id);
+    return { borrado: true, id: existente._id };
+  },
+});
+
 // ============================================================
 //  Helpers de validación/coerción del payload
 // ============================================================
