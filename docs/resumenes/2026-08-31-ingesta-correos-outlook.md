@@ -11,7 +11,7 @@
 ## Qué se implementó
 
 - Bandeja de entrada selectiva en Convex: tabla `correos` que recibe por webhook
-  los correos de Outlook que Cris marca con importancia alta.
+  los correos de Outlook que Cris marca (flag, trigger V4).
 - Webhook `POST /correos/ingesta` en la site URL, protegido con token
   (`x-webhook-token` vs `POWER_AUTOMATE_TOKEN`), con validación fail-closed.
 - Ingesta idempotente por `messageId` (internetMessageId): redisparos del
@@ -44,9 +44,9 @@
   webhook cuando el correo se edita en Outlook es el caso normal, no el
   excepcional; el patch toca solo asunto/cuerpo/categorias/actualizadoEn para no
   reprocesar correos ya transformados en tarea.
-- **Filtro en el trigger (importancia alta) vs ingesta total + filtro en backend**:
-  menos ruido en la tabla y menos consumo del flujo; ampliable en el trigger sin
-  tocar código.
+- **Marca manual en el trigger (flag V4) vs ingesta total + filtro en backend**:
+  Cris elige el correo al marcarlo; menos ruido en la tabla y menos consumo del
+  flujo; ampliable en el trigger sin tocar código.
 - **Token embebido en el header del flujo vs variable de entorno de Power
   Automate**: las variables requieren Solutions/premium; para un flujo personal
   el header embebido es suficiente (rotar si se comparte).
@@ -60,7 +60,7 @@
   - Cuerpo de 3 MB → ingesta OK, doc queda en ~100 KB (verificado).
 - Filas: <https://dashboard.convex.dev/d/effervescent-crab-895/data/correos>
   (hay una fila `TEST del webhook - borrar esta fila` de la verificación).
-- Prueba final del flujo real: correo de importancia alta → fila `nuevo`;
+- Prueba final del flujo real: marcar (flag) un correo → fila `nuevo`;
   redisparo del flujo → misma fila, sigue `nuevo`.
 
 ## Efectos secundarios y deudas

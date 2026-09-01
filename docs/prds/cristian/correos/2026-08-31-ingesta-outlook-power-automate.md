@@ -26,7 +26,8 @@ la base Convex.
 
 ## 3. User journey (paso a paso)
 
-1. Llega un correo de **importancia alta** a la bandeja de Outlook de Cris.
+1. Cris **marca (flag)** un correo en Outlook (trigger "Cuando se marca un
+   correo electrónico (V4)").
 2. Power Automate lo captura y hace POST al webhook con su token.
 3. Convex lo guarda en `correos` con estado `nuevo` (idempotente por
    `messageId`: si el correo se edita y el webhook se redispara, NO se duplica
@@ -42,13 +43,13 @@ la base Convex.
   `POST /correos/ingesta` con header `x-webhook-token` validado timing-safe
   contra `POWER_AUTOMATE_TOKEN`.
 - Query `pendientes` y mutation `marcarProcesado` (con sesión, como todo el repo).
-- Flujo de Power Automate (trigger importancia alta) + token seteado en dev y prod.
+- Flujo de Power Automate (trigger: correo marcado/flag) + token seteado en dev y prod.
 
 **No incluye (qué NO hacemos y por qué):**
 - UI en la app para ver correos (fase siguiente: panel de triage).
 - Descarga de adjuntos (solo metadata: nombre/tipo/tamaño).
-- Otras carpetas besides Inbox o filtros por remitente (el filtro es
-  importancia alta; ampliable en el trigger sin tocar código).
+- Otras carpetas besides Inbox o filtros por remitente (el filtro es manual:
+  Cris marca el correo; ampliable en el trigger sin tocar código).
 - Búsqueda de texto completo sobre `cuerpo`.
 
 ## 5. Diseño técnico (diagrama)
@@ -129,9 +130,9 @@ Outlook (importancia alta)
 Crear en <https://make.powerautomate.com> → Mis flujos → Nuevo → Automatizado
 en blanco. Nombre sugerido: **Outlook importante → Hermes Convex**.
 
-1. **Trigger: "Cuando llega un correo nuevo (V2)"** (Office 365 Outlook)
-   - Carpeta: `Bandeja de entrada` (Inbox)
-   - Importancia: `Alto`
+1. **Trigger: "Cuando se marca un correo electrónico (V4)"** (Office 365
+   Outlook; dispara al marcar/flaggear un correo, `OnFlaggedEmailV4`, con
+   `splitOn` sobre `body/value`).
 2. **Acción: "Obtener correo electrónico (V2)"** (Get email (V2))
    - Id: `id` del trigger (contenido dinámico del disparador).
 3. **Acción: "Html a texto"** (Html to text)
