@@ -88,10 +88,11 @@ Otros tipos (`analisis`, `ops`, `otro`) no exigen carpeta: corren donde indique 
 
 ## 7. Protocolo de reporte
 
-- **Vía principal**: el agente llama a `node agent-bridge/report.mjs --task <id> --state <estado> --summary "..." [--question "..."] [--progress N]` como último paso (está en el prompt).
-- **Vía watchdog**: hook `Stop` de ZCode. Si la sesión terminó sin reporte, el hook reporta con lo que haya (último mensaje del transcript) y marca `para-revisión` o `error`.
+- **Pasos en vivo (protocolo --step)**: el agente trabaja en pasos numerados y después de CADA paso ejecuta `report.mjs --step "<paso, ≤12 palabras>"`. Cada llamada se AGREGA a la checklist de la corrida en la app (y notifica por WhatsApp en modo `periodica`). El resumen final NO repite los pasos.
+- **Estado final inmediato**: apenas el objetivo esté verificado (incluye guardar .pbix / CAMBIOS.md, que son pasos previos visibles), ejecuta `--state para-revision` con un resumen de máximo 3 líneas. Nada de embellecimiento post-verificación antes del reporte.
+- **Vía watchdog**: hook `Stop` de ZCode. Si la sesión terminó sin reporte, el hook reporta con lo que haya. Además, el puente observa el transcript en vivo (última acción del agente) y marca "posible atasco" si pasa ~10 min sin actividad.
 - Cada reporte actualiza la tarea (agentState + resumen + progreso), escribe en la bitácora `events` y cierra/actualiza la corrida.
-- Las sesiones despachadas se pueden abrir después en el desktop de ZCode (comparten base de sesiones).
+- Las sesiones despachadas se pueden abrir después en el desktop de ZCode (comparten base de sesiones): `/resume <sessionId>` — el id se copia con un botón desde la app. La lista del desktop se refresca al reiniciarlo o cambiar de workspace, no en vivo.
 
 ## 8. Notificaciones WhatsApp (vía Hermes)
 

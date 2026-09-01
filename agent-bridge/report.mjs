@@ -1,16 +1,24 @@
 #!/usr/bin/env node
 /**
- * CLI de reporte del agente: el ÚLTIMO paso de toda corrida despachada.
+ * CLI de reporte del agente: el canal de comunicación de toda corrida.
  *
- *   node report.mjs --task <taskId> --run <runId> --state <estado>
- *                   --summary "..." [--question "..."] [--progress N]
- *                   [--session-id sess_...] [--force] [--watchdog]
+ * Dos usos (protocolo del contrato, ver prompts.mjs):
  *
- * Estados: trabajando | pregunta | para-revision | hecho | error | cancelada
- *  - pregunta exige --question.
- *  - Si la corrida ya fue cerrada (el agente ya reportó), no-op salvo --force:
- *    así el hook Stop (watchdog) no pisa el informe real.
- * Tras reportar, dispara la notificación WhatsApp si la tarea lo pide.
+ *   1. PASO (después de cada paso, texto corto):
+ *      node report.mjs --task <id> [--run <runId>] --step "backup creado"
+ *      → se AGREGA a la checklist de la corrida en la app; no cambia el estado.
+ *      Opcional: --progress <0-100>.
+ *
+ *   2. ESTADO (cambios de ciclo):
+ *      node report.mjs --task <id> [--run <runId>] --state <estado>
+ *          [--summary "máx 3 líneas"] [--question "..."]
+ *      → mueve el ciclo (trabajando|pregunta|para-revision|hecho|error|cancelada);
+ *        "pregunta" exige --question; "para-revision" apenas el objetivo esté
+ *        verificado (la enumeración de pasos ya vive en la checklist).
+ *
+ * Si la corrida ya fue cerrada, los pasos son no-op y los estados exigen
+ * --force (así el hook Stop watchdog no pisa informes reales).
+ * Tras un estado terminal, dispara la notificación WhatsApp si la tarea lo pide.
  *
  * Auth: token del env ZCODE_SESSION_TOKEN (heredado del despacho) o cache.
  */
@@ -45,14 +53,17 @@ const VALID_STATES = [
 
 async function main() {
   const args = parseArgs(process.argv);
-  const { task, run, state } = args;
+  const { task, run, state, step } = args;
 
-  if (!task || !state || !VALID_STATES.includes(state)) {
+  if (!task) {
     console.error(
-      "uso: report.mjs --task <id> [--run <runId>] --state <" +
-        VALID_STATES.join("|") +
-        '> --summary "..." [--question "..." --progress N --session-id ... --force --watchdog]',
+      "uso: report.mjs --task <id> [--run <runId>] --step \"paso corto\" | " +
+        '--state <' + VALID_STATES.join("|") + '> [--summary "…" --question "…" --progress N] [--force --watchdog]',
     );
+    process.exit(2);
+  }
+  if (!step && (!state || !VALID_STATES.includes(state))) {
+    console.error("necesitás --step <texto> o --state <" + VALID_STATES.join("|") + ">");
     process.exit(2);
   }
   if (state === "pregunta" && !args.question) {
@@ -60,8 +71,12 @@ async function main() {
     process.exit(2);
   }
 
-  // Watchdog/sobre-reporteo: si no hay corrida abierta, no pisar el informe.
-  if (!args.force) {
+  const isStepOnly = !!step && !state;
+  const isFinalState = !isStepOnly && state !== "trabajando";
+
+  // Protección anti-pisado: pasos siempre pasan; estados terminales solo si la
+  // corrida está abierta (o --force).
+  if (!isStepOnly && !args.force) {
     const runs = await q("agent:runsByTask", { taskId: task });
     const open = (runs || []).some(
       (r) =>
@@ -76,7 +91,8 @@ async function main() {
   await m("agent:agentReport", {
     taskId: task,
     runId: run && /^[a-z0-9]+$/i.test(run) ? run : undefined,
-    state,
+    state: isStepOnly ? "trabajando" : state,
+    step,
     summary: args.summary,
     question: args.question,
     progress: args.progress !== undefined ? Number(args.progress) : undefined,
@@ -85,19 +101,29 @@ async function main() {
     error: args.error,
     watchdog: !!args.watchdog,
   });
-  console.log(`reportado: ${state}`);
+  console.log(isStepOnly ? `paso: ${step}` : `reportado: ${state}`);
 
-  // Notificación WhatsApp según el modo de la tarea.
+  // Notificación WhatsApp: pasos solo en modo periodica; estados terminales
+  // según el modo de la tarea (final → solo terminal).
   try {
     const info = await q("agent:taskForNotify", { taskId: task });
     if (info) {
-      await notifyAgent(info.notifyWhatsapp, "final", {
-        title: info.title,
-        state,
-        summary: args.summary,
-        question: args.question,
-        taskId: task,
-      });
+      if (isStepOnly) {
+        await notifyAgent(info.notifyWhatsapp, "paso", {
+          title: info.title,
+          state: "paso",
+          summary: step,
+          taskId: task,
+        });
+      } else if (isFinalState) {
+        await notifyAgent(info.notifyWhatsapp, "final", {
+          title: info.title,
+          state,
+          summary: args.summary,
+          question: args.question,
+          taskId: task,
+        });
+      }
     }
   } catch (err) {
     // la notificación nunca rompe el reporte

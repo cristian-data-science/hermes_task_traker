@@ -398,16 +398,32 @@ export const listModels = query({
   },
 });
 
-/** Estado del puente: heartbeat reciente = activo. */
+/** Estado del puente: heartbeat reciente = activo; + qué está corriendo. */
 export const bridgeStatus = query({
   args: sessionArg,
   handler: async (ctx, { sessionToken }) => {
     await requireAuth(ctx, sessionToken);
     const raw = await getSetting(ctx, "agent.bridgeHeartbeat");
     const ts = raw ? Number(raw) : undefined;
+    let state: {
+      activeRuns: Array<{ title: string; elapsedMin: number; model?: string }>;
+      queueDepth: number;
+      pid: number;
+    } | undefined;
+    const rawState = await getSetting(ctx, "agent.bridgeState");
+    if (rawState) {
+      try {
+        const parsed = JSON.parse(rawState);
+        if (Array.isArray(parsed.activeRuns)) state = parsed;
+      } catch {
+        // estado viejo/corrupto → sin detalle
+      }
+    }
     return {
       lastHeartbeat: ts && !Number.isNaN(ts) ? ts : undefined,
       active: !!ts && Date.now() - ts < 3 * 60 * 1000,
+      activeRuns: state?.activeRuns ?? [],
+      queueDepth: state?.queueDepth ?? 0,
     };
   },
 });
@@ -418,12 +434,65 @@ export const bridgeStatus = query({
  * =====================
  */
 
-/** Heartbeat del puente (cada 60 s): alimenta el indicador "puente activo". */
+/** Heartbeat del puente (cada 60 s) + estado vivo (qué está corriendo). */
 export const bridgeHeartbeat = mutation({
-  args: sessionArg,
-  handler: async (ctx, { sessionToken }) => {
+  args: {
+    ...sessionArg,
+    /** Estado en vivo: corridas activas y profundidad de cola (JSON en settings). */
+    state: v.optional(
+      v.object({
+        activeRuns: v.array(
+          v.object({
+            title: v.string(),
+            elapsedMin: v.number(),
+            model: v.optional(v.string()),
+          }),
+        ),
+        queueDepth: v.number(),
+        pid: v.number(),
+      }),
+    ),
+  },
+  handler: async (ctx, { sessionToken, state }) => {
     await requireAuth(ctx, sessionToken);
     await setSetting(ctx, "agent.bridgeHeartbeat", String(Date.now()));
+    if (state !== undefined) {
+      await setSetting(ctx, "agent.bridgeState", JSON.stringify(state));
+    }
+  },
+});
+
+/**
+ * Actividad en vivo de una corrida: el puente la reporta leyendo el transcript
+ * de la sesión (última acción del agente entre pasos explícitos --step) y
+ * promueve despachada→trabajando con la primera señal de vida.
+ */
+export const runActivity = mutation({
+  args: {
+    ...sessionArg,
+    taskId: v.id("tasks"),
+    runId: v.id("agentRuns"),
+    activity: v.string(),
+    stalled: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { sessionToken, taskId, runId, activity, stalled }) => {
+    await requireAuth(ctx, sessionToken);
+    const run = await ctx.db.get(runId);
+    if (!run || run.taskId !== taskId) throw new Error("Corrida no encontrada");
+    const now = Date.now();
+    await ctx.db.patch(runId, {
+      lastActivity: activity.slice(0, 200),
+      lastActivityAt: now,
+      activityCount: (run.activityCount ?? 0) + 1,
+      ...(stalled !== undefined ? { stalled } : {}),
+      updatedAt: now,
+    });
+    const task = await ctx.db.get(taskId);
+    if (task && task.agentState === "despachada") {
+      // Primera señal de vida: despachada → trabajando (mismo status Kanban).
+      await ctx.db.patch(taskId, { agentState: "trabajando", updatedAt: now });
+    }
+    return { ok: true };
   },
 });
 
@@ -488,6 +557,8 @@ export const claimTask = mutation({
 
     await applyAgentState(ctx, task, "despachada", sessionToken, {
       agentFollowUp: undefined,
+      agentLastStep: undefined,
+      agentLastStepAt: undefined,
       workspacePath: workspacePath ?? task.workspacePath,
     });
     await logEvent(ctx, {
@@ -512,6 +583,8 @@ export const agentReport = mutation({
     runId: v.optional(v.id("agentRuns")),
     state: reportableStateUnion,
     summary: v.optional(v.string()),
+    /** Paso del protocolo --step: texto corto que se AGREGA al progressLog. */
+    step: v.optional(v.string()),
     question: v.optional(v.string()),
     progress: v.optional(v.number()),
     sessionId: v.optional(v.string()),
@@ -555,9 +628,27 @@ export const agentReport = mutation({
           .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     }
     if (run) {
+      // Protocolo --step: cada paso se AGREGA (tope 20) y espeja en la tarea.
+      const stepText = args.step?.slice(0, 120);
+      let progressLog = run.progressLog;
+      if (stepText) {
+        progressLog = [
+          ...(progressLog ?? []),
+          { at: now, text: stepText },
+        ].slice(-20);
+      } else if (args.state === "trabajando" && summary) {
+        // Reporte intermedio sin paso explícito: su primera línea entra igual
+        // a la lista, para que la evolución se vea (protocolo viejo/hibrido).
+        const firstLine = summary.split("\n")[0].slice(0, 120);
+        if (firstLine && progressLog?.[progressLog.length - 1]?.text !== firstLine) {
+          progressLog = [...(progressLog ?? []), { at: now, text: firstLine }].slice(-20);
+        }
+      }
       await ctx.db.patch(run._id, {
         state: args.state as Doc<"agentRuns">["state"],
         summary,
+        progressLog,
+        stalled: args.state === "trabajando" ? run.stalled : undefined,
         endedAt: terminal ? now : undefined,
         exitCode: args.exitCode,
         error: args.error?.slice(0, 1000),
@@ -565,13 +656,18 @@ export const agentReport = mutation({
       });
     }
 
-    // Tarea: estado + snapshot de sesión + pregunta/progreso.
+    // Tarea: estado + snapshot de sesión + pregunta/progreso + paso espejo.
+    const stepText = args.step?.slice(0, 120);
     await applyAgentState(ctx, task, args.state, args.sessionToken, {
       agentSessionId: args.sessionId ?? task.agentSessionId,
       agentQuestion:
         args.state === "pregunta"
           ? args.question!.slice(0, QUESTION_MAX)
           : undefined,
+      // El último paso se limpia al re-despachar (claimTask) y se actualiza acá.
+      ...(stepText
+        ? { agentLastStep: stepText, agentLastStepAt: now }
+        : {}),
       ...(args.progress !== undefined
         ? { progress: Math.max(0, Math.min(100, Math.round(args.progress))) }
         : {}),

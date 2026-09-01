@@ -1,7 +1,7 @@
 /**
  * Composición del prompt de despacho. Todo el contexto de la tarea viaja
  * empaquetado: datos, reglas del contrato (resumen ejecutivo de
- * CONTRATO_AGENTE.md), la receta por tipo y la instrucción de reporte.
+ * CONTRATO_AGENTE.md), la receta por tipo y el protocolo de reporte por pasos.
  */
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -15,15 +15,15 @@ const AUTONOMY_RULES = {
   escenario: `NIVEL: ESCENARIO — solo prepara las bases para que Cris pilotee después.
 - Produce un plan claro (qué harás, qué necesitas, riesgos) y deja PRINCIPIOS de trabajo: stubs, esqueletos, rama inicial o backup.
 - NO implementes funcionalidad completa. NO apliques cambios definitivos sobre datos o modelos.
-- Termina con --state para-revision y en el resumen indica exactamente "qué queda listo" y "cómo continuar".`,
+- Termina con --state para-revision y en el resumen indica "qué queda listo" y "cómo continuar" (máx 3 líneas).`,
   supervisado: `NIVEL: SUPERVISADO — implementa y verifica, pero NADA se publica.
 - Implementa la tarea y verifícala (build/tests/lectura de resultados).
 - NO hagas push de nada. NO toques producción, ERP ni envíes correos.
-- Termina con --state para-revision y resume lo hecho + evidencia (números, archivos, tests).`,
+- Termina con --state para-revision y resumen de máximo 3 líneas con la evidencia clave.`,
   autonomo: `NIVEL: AUTÓNOMO — ejecuta completo, con límites duros.
 - Puedes commitear y pushear RAMAS (jamás master/main, jamás merge).
 - Producción, ERP y correos SIEMPRE requieren OK de Cris (correos: solo borrador).
-- Termina con --state para-revision con evidencia (rama, commits, números).`,
+- Termina con --state para-revision con evidencia (rama, commits, números) en máx 3 líneas.`,
 };
 
 const TYPE_RECIPES = {
@@ -31,7 +31,8 @@ const TYPE_RECIPES = {
 - PROHIBIDO cualquier comando git (init/add/commit/push): ni .md ni .pbix se versionan.
 - Antes de un cambio riesgoso: copia el .pbix a backups\\ con fecha en el nombre (formato AAAA-MM-DD).
 - Conéctate al modelo con el MCP powerbi-modeling-mcp si necesitas editar el semántico.
-- Al terminar: actualiza CAMBIOS.md del reporte con la entrada completa (cambio, problema, pasos, validación con números antes/después, rollback).
+- REFRESHES LARGOS (patrón obligatorio): si el refresh tarda más que el timeout del transport (~60s), NUNCA hagas sleeps ciegos largos ni esperes colgado: lanza el refresh, y cada 2-3 min hacé UNA consulta DAX liviana (ej. COUNTROWS o MAX de fecha) para sondear. Si el DAX queda encola >90s, el motor sigue ocupado: esperá y volvé a sondear. Si a los ~15 min no ves progreso, reportá --state pregunta con lo que sabés.
+- Al final: guardá el .pbix y actualizá CAMBIOS.md con la entrada completa (cambio, problema, pasos, validación con números antes/después, rollback) — como PASOS reportables, no al final del todo.
 - Nada se borra: las versiones viejas van a backups\\.`,
   desarrollo: `TIPO: DESARROLLO — trabajas en un REPO GIT de git_provisorio.
 - Trabaja en una rama propia agent/<slug-corto> (crea si no existe; jamás commitees a master).
@@ -95,18 +96,27 @@ export function buildPrompt(input) {
     lines.push(`\nFeedback de Cris para esta corrida:\n>>> ${followUp}`);
   }
 
-  lines.push("\n=== AL TERMINAR (OBLIGATORIO — tu ÚLTIMA acción) ===");
+  lines.push("\n=== PROTOCOLO DE REPORTE (OBLIGATORIO — así ve Cris tu progreso en vivo) ===");
   lines.push(
-    'Ejecuta este comando exacto (reemplaza <estado> y el resumen; usa comillas):',
+    "Trabajá en PASOS numerados y después de CADA paso ejecutá (texto corto, ≤12 palabras):",
   );
   lines.push(
-    `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --state <para-revision|pregunta|hecho> --summary "<qué hiciste, evidencia, números, archivos/rama>"`,
+    `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --step "<paso hecho>"`,
+  );
+  lines.push(
+    'Ejemplos de pasos: "backup creado en backups/", "reporte abierto y conectado", "línea base medida: X", "cambio aplicado", "verificado: antes 12-01 → hoy", "pbix guardado", "CAMBIOS.md actualizado".',
+  );
+  lines.push(
+    'AL TERMINAR — apenas el objetivo esté VERIFICADO, ejecutá INMEDIATAMENTE el reporte final (no lo dejes para después de tareas de embellecimiento):',
+  );
+  lines.push(
+    `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --state <para-revision|pregunta|hecho> --summary "<máx 3 líneas, evidencia; SIN enumerar pasos adentro>"`,
   );
   lines.push(
     'Si necesitas contexto o una decisión de Cris: --state pregunta --question "<pregunta concreta y breve>".',
   );
   lines.push(
-    "Puedes reportar progreso intermedio con --progress <0-100> y volver a reportar al final.",
+    "El --summary NO repite los pasos (ya quedaron en la checklist): solo resultado y evidencia.",
   );
 
   return lines.join("\n");

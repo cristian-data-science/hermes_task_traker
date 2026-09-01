@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "seed": "npx tsx scripts/seed.ts",
     "agent-bridge": "node agent-bridge/dispatcher.mjs",
-    "agent-bridge:hooks": "node agent-bridge/register-hooks.mjs"
+    "agent-bridge:hooks": "node agent-bridge/register-hooks.mjs",
+    "agent-bridge:daemon": "node agent-bridge/daemon.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

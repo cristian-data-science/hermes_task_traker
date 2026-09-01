@@ -28,7 +28,7 @@ import {
   type TaskType,
   type Area,
 } from "../lib/constants";
-import { cn, formatRelative } from "../lib/utils";
+import { cn, formatRelative, formatAgo } from "../lib/utils";
 import { AgentRunsPanel } from "./AgentRunsPanel";
 
 type OverviewTask = Doc<"tasks">;
@@ -36,6 +36,7 @@ type OverviewTask = Doc<"tasks">;
 function TaskRow({ task, onOpen }: { task: OverviewTask; onOpen: () => void }) {
   const meta = AGENT_STATE_META[(task.agentState ?? "encolada") as AgentState];
   const typeMeta = task.taskType ? TASK_TYPE_META[task.taskType as TaskType] : null;
+  const working = ["despachada", "trabajando"].includes(task.agentState ?? "");
   return (
     <button
       onClick={onOpen}
@@ -56,7 +57,15 @@ function TaskRow({ task, onOpen }: { task: OverviewTask; onOpen: () => void }) {
           {task.workspacePath && (
             <span className="truncate font-mono">{task.workspacePath}</span>
           )}
-          {task.updatedAt && <span>· {formatRelative(task.updatedAt)}</span>}
+          {working && task.agentLastStep ? (
+            <span className="w-full truncate" title={task.agentLastStep}>
+              <span className="mr-1 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-current align-middle" />
+              {task.agentLastStep}
+              {task.agentLastStepAt && ` · ${formatAgo(task.agentLastStepAt)}`}
+            </span>
+          ) : (
+            task.updatedAt && <span>· {formatRelative(task.updatedAt)}</span>
+          )}
         </span>
       </span>
       <ExternalLink className="h-3.5 w-3.5 shrink-0 text-faint" />
@@ -141,18 +150,29 @@ export function AgentView() {
 
   return (
     <div className="space-y-5">
-      {/* Banner del puente */}
-      <div className="flex items-center gap-2 rounded-el border-el border-line bg-panel2/40 px-3 py-2.5 text-xs">
+      {/* Banner del puente: activo/apagado + qué está corriendo + cola */}
+      <div className="flex flex-wrap items-center gap-2 rounded-el border-el border-line bg-panel2/40 px-3 py-2.5 text-xs">
         {bridge?.active ? (
           <>
-            <CircleDot className="h-4 w-4 text-emerald-500" />
+            <CircleDot className="h-4 w-4 shrink-0 text-emerald-500" />
             <span className="font-medium text-ink">Puente activo</span>
-            <span className="text-faint">
-              — las tareas se despachan en segundos
-              {bridge.lastHeartbeat
-                ? ` (último latido ${formatRelative(bridge.lastHeartbeat)})`
-                : ""}
-            </span>
+            {(bridge.activeRuns ?? []).length > 0 ? (
+              <span className="text-mute">
+                — ocupado con{" "}
+                {bridge.activeRuns.map((r, i) => (
+                  <span key={i} className="font-medium text-ink">
+                    {i > 0 && ", "}"{r.title}" ({r.elapsedMin} min)
+                  </span>
+                ))}
+                {(bridge.queueDepth ?? 0) > 0 && (
+                  <span className="text-faint">
+                    {" "}· {bridge.queueDepth} en cola (salen al liberar)
+                  </span>
+                )}
+              </span>
+            ) : (
+              <span className="text-faint">— libre; las tareas salen en segundos</span>
+            )}
           </>
         ) : (
           <>

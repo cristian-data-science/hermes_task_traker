@@ -19,7 +19,7 @@ import { AreaBadge, StatusBadge } from "./Badges";
 import { CompleteButton } from "./CompleteButton";
 import { CatchupPinButton } from "./CatchupPinButton";
 import { EXECUTOR_META, AGENT_STATE_META, type AgentState } from "../lib/constants";
-import { cn, statusTone, formatRelative, isSuperUrgent, AGENT_UI_ENABLED } from "../lib/utils";
+import { cn, statusTone, formatRelative, formatAgo, isSuperUrgent, AGENT_UI_ENABLED } from "../lib/utils";
 import { useAuth } from "../hooks/useAuth";
 
 /** Slider rápido de progreso 0-100 (commit al soltar). */
@@ -231,6 +231,25 @@ export function TaskCard({
               </span>
             );
           })()}
+        {/* Última acción del agente en vivo (solo web): el paso reportado o
+            la actividad detectada del transcript, una línea, con antigüedad. */}
+        {AGENT_UI_ENABLED &&
+          task.executor === "zcode" &&
+          task.agentLastStep &&
+          ["despachada", "trabajando", "pregunta"].includes(
+            task.agentState ?? "",
+          ) && (
+            <span
+              className="inline-flex w-full min-w-0 items-center gap-1 text-[10px] text-faint"
+              title={task.agentLastStep}
+            >
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />
+              <span className="truncate">{task.agentLastStep}</span>
+              {task.agentLastStepAt && (
+                <span className="shrink-0">· {formatAgo(task.agentLastStepAt)}</span>
+              )}
+            </span>
+          )}
         {(() => {
           // Priorizar clickupAssignee (responsable real de ClickUp) sobre executor.
           if (task.clickupAssignee) {

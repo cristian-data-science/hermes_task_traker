@@ -12,8 +12,16 @@ El contrato completo (ciclo de vida, autonomía, Git vs archivos) vive en
 ## Arranque
 
 ```bash
-npm run agent-bridge          # daemon (dejar corriendo en el PC de Cris)
-npm run agent-bridge:hooks    # una sola vez: registra hooks Stop/SessionStart
+npm run agent-bridge:daemon    # daemon con auto-restart (recomendado)
+npm run agent-bridge           # dispatcher a pelo
+npm run agent-bridge:hooks     # una sola vez: registra hooks Stop/SessionStart
+```
+
+Instancia única por lockfile (`agent-bridge/.bridge.lock`): un segundo dispatcher
+no arranca mientras el primero viva. Para auto-arranque al login de Windows:
+
+```
+schtasks /create /tn "agent-bridge" /tr "cmd /c cd /d C:\Users\patag\git_provisorio\hermes_task_traker && npm run agent-bridge:daemon" /sc onlogon
 ```
 
 Variables opcionales (env; defaults ya apuntan a las rutas de esta máquina):
@@ -31,10 +39,11 @@ Variables opcionales (env; defaults ya apuntan a las rutas de esta máquina):
 
 | Archivo | Rol |
 |---|---|
-| `dispatcher.mjs` | daemon: suscripción reactiva a la cola (`agent:agentQueue`), claim, spawn `zcode -p` con `--cwd` carpeta y `--mode` por autonomía, watchdog post-exit, heartbeat 60 s, sync de modelos |
-| `report.mjs` | CLI que el agente invoca al terminar (`--state para-revision\|pregunta\|hecho …`); dispara WhatsApp según el modo de la tarea |
-| `prompts.mjs` | prompt empaquetado: datos + reglas del contrato + receta por tipo + instrucción de reporte |
-| `models.mjs` | catálogo desde `resources/model-providers` + **swap temporal** del `model` del config de ZCode (backup → set → run → restore) |
+| `dispatcher.mjs` | daemon: suscripción reactiva a la cola (`agent:agentQueue`), spawn `zcode -p` con `--cwd` carpeta, **paralelismo seguro** (corridas al modelo default corren hasta `MAX_PARALLEL_DEFAULT=2` en paralelo; modelo distinto al default es exclusivo por el swap), **tailer en vivo** del transcript (actividad visible en la app cada 5 s), watchdog de atascos (`AGENT_STALL_MS`, default 10 min) y post-exit, heartbeat con estado (qué corre + cola), lockfile de instancia única |
+| `daemon.mjs` | wrapper con auto-restart (backoff 2s→30s) |
+| `report.mjs` | canal del agente: **`--step "paso"`** (checklist en vivo) y `--state <estado> --summary "≤3 líneas"` (final inmediato tras verificar); dispara WhatsApp según el modo de la tarea |
+| `prompts.mjs` | prompt empaquetado: datos + reglas del contrato + receta por tipo (incluye patrón de polling para refreshes largos de Power BI) + protocolo de pasos |
+| `models.mjs` | catálogo desde `~/.zcode/v2/config.json` (lista viva del plan; GLM-5.3/5.3-Flash/5-Turbo) con fallback al estático + **swap temporal** del `model` del config de ZCode (backup → set → run → restore) |
 | `notify.mjs` | WhatsApp vía `hermes send` |
 | `hooks/stop-hook.mjs` | watchdog (hook `Stop`): reporta si el agente no lo hizo |
 | `hooks/session-hook.mjs` | re-inyecta contexto si abrís la sesión en el desktop |

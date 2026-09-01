@@ -19,7 +19,7 @@ import {
   type Autonomy,
   type TaskType,
 } from "../lib/constants";
-import { cn, formatRelative } from "../lib/utils";
+import { cn, formatRelative, formatAgo } from "../lib/utils";
 
 function RunStateChip({ state }: { state: string }) {
   const meta = AGENT_STATE_META[state as AgentState];
@@ -39,6 +39,79 @@ function RunStateChip({ state }: { state: string }) {
       <meta.Icon className="h-3 w-3" />
       {meta.label}
     </span>
+  );
+}
+
+/** Checklist numerada de pasos (--step) + actividad en vivo del transcript. */
+function StepList({ run }: { run: Doc<"agentRuns"> }) {
+  const steps = run.progressLog ?? [];
+  const open = !run.endedAt;
+  const lastLive =
+    open && run.lastActivity && run.lastActivityAt
+      ? { text: run.lastActivity, at: run.lastActivityAt }
+      : null;
+  // La actividad en vivo se muestra aparte solo si no duplica al último paso.
+  const live =
+    lastLive && steps[steps.length - 1]?.text !== lastLive.text ? lastLive : null;
+  return (
+    <div>
+      {steps.length > 0 && (
+        <ol className="space-y-1">
+          {steps.map((s, i) => {
+            const isLast = i === steps.length - 1 && !live;
+            return (
+              <li key={`${s.at}-${i}`} className="flex items-baseline gap-1.5 text-xs">
+                <span
+                  className={cn(
+                    "shrink-0 font-mono text-[10px]",
+                    isLast ? "text-fuchsia-600 dark:text-fuchsia-400" : "text-faint",
+                  )}
+                >
+                  {i + 1}.
+                </span>
+                <span className={cn("min-w-0", isLast ? "font-medium text-ink" : "text-mute")}>
+                  {s.text}
+                </span>
+                <span className="ml-auto shrink-0 text-[10px] text-faint">
+                  {formatAgo(s.at)}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+      {live && (
+        <p
+          className={cn(
+            "mt-1.5 flex items-center gap-1.5 text-xs",
+            run.stalled ? "text-amber-600 dark:text-amber-400" : "text-mute",
+          )}
+          title={run.stalled ? "Sin actividad nueva por un rato — posible atasco" : "Actividad detectada en el transcript de la sesión"}
+        >
+          <span
+            className={cn(
+              "h-1.5 w-1.5 shrink-0 rounded-full",
+              run.stalled ? "bg-amber-500" : "animate-pulse bg-fuchsia-500",
+            )}
+          />
+          <span className="min-w-0 truncate">{live.text}</span>
+          <span className="ml-auto shrink-0 text-[10px] text-faint">
+            {formatAgo(live.at)}
+          </span>
+        </p>
+      )}
+      {run.stalled && !live && (
+        <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+          ⚠ Posible atasco: sin actividad registrada por un rato. Podés cancelar
+          la delegación o esperar.
+        </p>
+      )}
+      {open && run.startedAt && (
+        <p className="mt-1 text-[10px] text-faint">
+          Corrida en curso · {Math.max(1, Math.round((Date.now() - run.startedAt) / 60000))} min
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -311,13 +384,17 @@ export function AgentRunsPanel({
                         {run.workspacePath}
                       </p>
                     )}
+                    {/* Checklist de pasos + actividad en vivo */}
+                    <div className="mt-1.5">
+                      <StepList run={run} />
+                    </div>
                     {run.followUp && (
                       <p className="mt-1 text-[11px] text-mute">
                         <span className="font-semibold">Contexto de Cris:</span>{" "}
                         {run.followUp}
                       </p>
                     )}
-                    {run.summary && (
+                    {run.summary && run.endedAt && (
                       <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-ink">
                         {run.summary}
                       </p>

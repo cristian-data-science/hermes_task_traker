@@ -288,13 +288,22 @@ export function AgentDelegationSection({
         </div>
       </div>
 
-      {/* Estado del puente: si está apagado la tarea queda encolada igual. */}
+      {/* Estado del puente: activo/libre/ocupado/apagado, con motivo. */}
       <p className="mt-2.5 flex items-center gap-1.5 text-[10px] text-faint">
         {bridge?.active ? (
-          <>
-            <CircleDot className="h-3 w-3 text-emerald-500" />
-            Puente activo — se despacha en segundos al guardar
-          </>
+          (bridge.activeRuns ?? []).length > 0 ? (
+            <>
+              <CircleDot className="h-3 w-3 text-emerald-500" />
+              Puente activo pero ocupado con "{bridge.activeRuns[0].title}" (
+              {bridge.activeRuns[0].elapsedMin} min) — tu tarea sale al liberar
+              {(bridge.queueDepth ?? 0) > 0 && ` (${bridge.queueDepth} en cola)`}
+            </>
+          ) : (
+            <>
+              <CircleDot className="h-3 w-3 text-emerald-500" />
+              Puente activo — se despacha en segundos al guardar
+            </>
+          )
         ) : (
           <>
             <Circle className="h-3 w-3" />

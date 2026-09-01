@@ -263,6 +263,13 @@ export default defineSchema({
      * en el prompt de seguimiento (run.followUp) y lo limpia al despachar.
      */
     agentFollowUp: v.optional(v.string()),
+    /**
+     * Último paso reportado por el agente (protocolo --step): texto corto de
+     * lo que acaba de hacer. Espejo de la corrida para que la tarjeta lo
+     * muestre sin query extra.
+     */
+    agentLastStep: v.optional(v.string()),
+    agentLastStepAt: v.optional(v.number()),
     /** Modelo ZCode elegido para la corrida (id, p.ej. builtin:zai-coding-plan/GLM-5.3). */
     model: v.optional(v.string()),
     /** Notificaciones WhatsApp vía Hermes para esta tarea. */
@@ -483,6 +490,23 @@ export default defineSchema({
     model: v.optional(v.string()),
     /** Resumen de lo hecho que el agente reporta (o el watchdog extrae). */
     summary: v.optional(v.string()),
+    /**
+     * Pasos reportados por el agente (protocolo --step): se van AGREGANDO
+     * mientras la corrida avanza y se muestran como checklist en la app.
+     * Tope 20 entradas (las viejas se descartan).
+     */
+    progressLog: v.optional(
+      v.array(v.object({ at: v.number(), text: v.string() })),
+    ),
+    /**
+     * Actividad en vivo detectada por el puente leyendo el transcript de la
+     * sesión (última acción del agente entre pasos explícitos).
+     */
+    lastActivity: v.optional(v.string()),
+    lastActivityAt: v.optional(v.number()),
+    activityCount: v.optional(v.number()),
+    /** Marcada por el watchdog: la corrida lleva demasiado sin actividad. */
+    stalled: v.optional(v.boolean()),
     /** Digest corto del prompt despachado (para auditar qué se le pidió). */
     promptDigest: v.optional(v.string()),
     /** Contexto extra del seguimiento (respuesta de Cris, feedback). */

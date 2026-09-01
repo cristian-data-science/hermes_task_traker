@@ -33,6 +33,22 @@ export function formatRelative(ms?: number | null): string {
   return formatDate(ms);
 }
 
+/**
+ * Tiempo transcurrido con granularidad fina (para actividad en vivo):
+ * "ahora" · "hace 20 s" · "hace 5 min" · "hace 2 h" · formatRelative.
+ */
+export function formatAgo(ms?: number | null): string {
+  if (!ms) return "";
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 15) return "ahora";
+  if (s < 90) return `hace ${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `hace ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `hace ${h} h`;
+  return formatRelative(ms);
+}
+
 /** CSS variable con el color tonal de un estado (depende del tema activo). */
 export function statusTone(status: string): string {
   return `var(--status-${status}, var(--muted))`;
