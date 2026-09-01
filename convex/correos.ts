@@ -137,13 +137,15 @@ export const ingestaCorreos = httpAction(async (ctx, request) => {
   const fechaParseada = fechaRaw ? Date.parse(fechaRaw) : NaN;
   const recibidoEn = Number.isFinite(fechaParseada) ? fechaParseada : Date.now();
 
+  const remitente = remitenteDe(body.remitenteEmail);
+
   const resultado = await ctx.runMutation(internal.correos.ingestar, {
     messageId,
     graphId,
     conversationId: str(body.conversationId),
     recibidoEn,
-    remitenteEmail: str(body.remitenteEmail),
-    remitenteNombre: str(body.remitenteNombre),
+    remitenteEmail: remitente.email,
+    remitenteNombre: remitente.nombre ?? str(body.remitenteNombre),
     asunto: str(body.asunto),
     cuerpo: str(body.cuerpo) ?? "",
     tieneAdjuntos: bool(body.tieneAdjuntos),
@@ -250,6 +252,21 @@ function stringsDe(x: unknown): string[] | undefined {
   if (!Array.isArray(x)) return undefined;
   const out = x.filter((s): s is string => typeof s === "string" && s.length > 0);
   return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Normaliza el remitente. El conector de Outlook devuelve `from` como string:
+ * a veces "correo@x", a veces "Nombre <correo@x>". Extrae ambas partes.
+ */
+function remitenteDe(from: unknown): { email?: string; nombre?: string } {
+  const raw = str(from);
+  if (!raw) return {};
+  const m = raw.match(/^(.*?)<([^>]+)>\s*$/);
+  if (m) {
+    const nombre = m[1].trim().replace(/^"|"$/g, "");
+    return { email: m[2].trim(), nombre: nombre || undefined };
+  }
+  return /^[^@\s]+@[^@\s]+$/.test(raw) ? { email: raw } : { nombre: raw };
 }
 
 function adjuntosDe(x: unknown):
