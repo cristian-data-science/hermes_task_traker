@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, CornerDownRight, Check, Ban, Send, Loader2 } from "lucide-react";
+import { X, CornerDownRight, Check, Ban, Send, Loader2, Copy } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -281,12 +281,29 @@ export function AgentRunsPanel({
                       )}
                       {run.resumed && <span>· seguimiento</span>}
                       {run.sessionId && (
-                        <span
-                          className="truncate font-mono text-[10px] text-faint"
-                          title={`Sesión ZCode: ${run.sessionId} (se retoma en seguimientos)`}
-                        >
+                      <span
+                        className="inline-flex items-center gap-1"
+                        title="La lista de sesiones del desktop se refresca al reiniciarlo o cambiar de workspace; para abrirla ya mismo, /resume con este id"
+                      >
+                        <span className="truncate font-mono text-[10px] text-faint">
                           {run.sessionId.slice(0, 18)}…
                         </span>
+                        <button
+                          onClick={() => {
+                            void navigator.clipboard
+                              .writeText(run.sessionId!)
+                              .then(() =>
+                                toast.success(
+                                  "sessionId copiado — en ZCode: /resume <id>",
+                                ),
+                              );
+                          }}
+                          className="rounded p-0.5 text-faint transition-colors hover:bg-panel hover:text-ink"
+                          title="Copiar sessionId (para /resume en ZCode)"
+                        >
+                          <Copy className="h-3 w-3" />
+                        </button>
+                      </span>
                       )}
                     </div>
                     {run.workspacePath && (
