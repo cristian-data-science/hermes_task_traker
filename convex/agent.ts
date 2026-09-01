@@ -41,12 +41,6 @@ const taskTypeUnion = v.union(
   v.literal("otro"),
 );
 
-const autonomyUnion = v.union(
-  v.literal("escenario"),
-  v.literal("supervisado"),
-  v.literal("autonomo"),
-);
-
 const areaUnion = v.union(
   v.literal("patagonia"),
   v.literal("datacef"),

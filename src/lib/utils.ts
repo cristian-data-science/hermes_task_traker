@@ -56,3 +56,12 @@ export function isSuperUrgent(t: {
 }): boolean {
   return SUPER_URGENT_ENABLED && t.superUrgent === true && t.status !== "completado";
 }
+
+/**
+ * La capa agente (delegación a ZCode: selector de tipo/carpeta/autonomía,
+ * chips de estado, panel de corridas y vista Agente) es EXCLUSIVA de la web,
+ * igual que la súper urgente. El APK no se toca por ahora: los campos del
+ * modelo viajan igual, así que una tarea delegada desde la web se edita sin
+ * perder su delegación desde donde sea.
+ */
+export const AGENT_UI_ENABLED = !ANDROID_TWA;

@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as agent from "../agent.js";
 import type * as auth from "../auth.js";
 import type * as authGuard from "../authGuard.js";
 import type * as authQuery from "../authQuery.js";
@@ -35,6 +36,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agent: typeof agent;
   auth: typeof auth;
   authGuard: typeof authGuard;
   authQuery: typeof authQuery;

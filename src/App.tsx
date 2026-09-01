@@ -15,6 +15,7 @@ import { ListView } from "./components/ListView";
 import { CalendarView } from "./components/CalendarView";
 import { CatchupView } from "./components/CatchupView";
 import { TaskModal } from "./components/TaskModal";
+import { AgentView } from "./components/AgentView";
 import { AssignedInboxModal } from "./components/AssignedInboxModal";
 import { ClickUpSettings } from "./components/ClickUpSettings";
 import { ClickUpSyncPage } from "./components/ClickUpSyncPage";
@@ -193,6 +194,10 @@ function Dashboard({
               />
             ) : view === "calendar" ? (
               <CalendarView tasks={filteredTasks} onEditTask={openEdit} />
+            ) : view === "agente" ? (
+              // Centro de mando de la delegación (solo web): consulta su propia
+              // data (agentOverview) y no conversa con los filtros del tablero.
+              <AgentView />
             ) : (
               // El catch-up NO recibe `filteredTasks`: su ventana temporal y su
               // alcance de área los define él mismo. Filtrar el tablero por
@@ -204,8 +209,8 @@ function Dashboard({
           </motion.div>
         </AnimatePresence>
 
-        {/* Estado vacío (no aplica al catch-up: tiene sus propios vacíos) */}
-        {filteredTasks.length === 0 && view !== "catchup" && (
+        {/* Estado vacío (no aplica al catch-up ni a la vista agente) */}
+        {filteredTasks.length === 0 && view !== "catchup" && view !== "agente" && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}

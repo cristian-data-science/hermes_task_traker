@@ -44,10 +44,18 @@ import {
   type Executor,
 } from "../lib/constants";
 import { cn } from "../lib/utils";
-import { SUPER_URGENT_ENABLED } from "../lib/utils";
+import { SUPER_URGENT_ENABLED, AGENT_UI_ENABLED } from "../lib/utils";
 import { SubtaskItem } from "./SubtaskItem";
 import { DatePicker } from "./DatePicker";
 import { ClickUpDestinationPicker } from "./ClickUpDestinationPicker";
+import {
+  AgentDelegationSection,
+  EMPTY_AGENT_CONFIG,
+  agentConfigFromTask,
+  type AgentConfig,
+} from "./AgentDelegationSection";
+import { AgentRunsPanel } from "./AgentRunsPanel";
+import { TASK_TYPE_META, AGENT_STATE_META, type AgentState } from "../lib/constants";
 import { useAuth } from "../hooks/useAuth";
 import { isMobileLike } from "../hooks/usePwaInstall";
 
@@ -137,6 +145,10 @@ export function TaskModal({
   const [clickupListId, setClickupListId] = useState<string | undefined>(
     undefined,
   );
+  // Capa agente: config de delegación (solo usa con executor=zcode).
+  const [agentCfg, setAgentCfg] = useState<AgentConfig>(EMPTY_AGENT_CONFIG);
+  // Panel de corridas del agente (solo edición de una tarea delegada).
+  const [runsOpen, setRunsOpen] = useState(false);
 
   // Cargar datos solo cuando CAMBIA el contexto (otra tarea, o editar↔nueva),
   // no cada vez que se reabre el modal. Así, si lo cerrás por misclic mientras
@@ -175,6 +187,7 @@ export function TaskModal({
       setClickupParentId(task.clickupParentId);
       setClickupListId(task.clickupListId);
       setClickupLocal(task.clickupLocal ?? false);
+      setAgentCfg(agentConfigFromTask(task));
     } else {
       setTitle("");
       setArea(
@@ -196,6 +209,7 @@ export function TaskModal({
       setClickupParentId(undefined);
       setClickupListId(undefined);
       setClickupLocal(false);
+      setAgentCfg(EMPTY_AGENT_CONFIG);
     }
     setNewSub("");
     setHydratedKey(ctxKey);
@@ -205,6 +219,17 @@ export function TaskModal({
     if (!title.trim()) {
       toast.error("El título es obligatorio");
       return;
+    }
+    // Capa agente: los tipos con mundo de trabajo definido exigen carpeta.
+    if (executor === "zcode" && AGENT_UI_ENABLED) {
+      const t = agentCfg.taskType;
+      const needsFolder = t ? TASK_TYPE_META[t]?.vcs : null;
+      if (needsFolder && !agentCfg.workspaceId) {
+        toast.error(
+          `Elegí la carpeta destino (${needsFolder === "git" ? "repo Git" : "reporte"}) para la tarea delegada`,
+        );
+        return;
+      }
     }
     setSaving(true);
     try {
@@ -259,6 +284,18 @@ export function TaskModal({
             ? // Si salió de Patagonia, limpiar el destino ClickUp.
               { clickupParentId: "", clickupListId: "" }
             : {}),
+        // Capa agente: solo cuando el ejecutor es ZCode (la validación
+        // tipo↔vcs la repite el backend).
+        ...(executor === "zcode"
+          ? {
+              taskType: agentCfg.taskType || undefined,
+              workspaceId: (agentCfg.workspaceId ||
+                undefined) as Doc<"tasks">["workspaceId"],
+              autonomy: agentCfg.autonomy,
+              model: agentCfg.model || undefined,
+              notifyWhatsapp: agentCfg.notifyWhatsapp,
+            }
+          : {}),
       };
       if (isEdit && task) {
         await updateTask({ id: task._id, sessionToken: token!, ...payload });
@@ -545,6 +582,39 @@ export function TaskModal({
                   </div>
                 </div>
               </div>
+
+              {/* Delegación a ZCode: tipo → carpeta → autonomía → modelo →
+                  WhatsApp. Solo con ejecutor ZCode y en la web. */}
+              {executor === "zcode" && AGENT_UI_ENABLED && (
+                <>
+                  {isEdit && task?.agentState && (
+                    <button
+                      type="button"
+                      onClick={() => setRunsOpen(true)}
+                      className="mb-2 flex w-full items-center justify-between rounded-el border-el px-3 py-2 text-left transition-colors hover:bg-panel2"
+                      style={{
+                        borderColor: `color-mix(in srgb, ${
+                          AGENT_STATE_META[task.agentState as AgentState]?.tone ??
+                          "var(--border)"
+                        } 45%, transparent)`,
+                      }}
+                    >
+                      <span className="flex items-center gap-2 text-xs font-semibold text-ink">
+                        Estado del agente:{" "}
+                        {AGENT_STATE_META[task.agentState as AgentState]?.label}
+                      </span>
+                      <span className="text-[10px] text-faint">
+                        Ver corridas y acciones →
+                      </span>
+                    </button>
+                  )}
+                  <AgentDelegationSection
+                    value={agentCfg}
+                    onChange={setAgentCfg}
+                    area={area}
+                  />
+                </>
+              )}
 
               {/* Destino ClickUp (solo Patagonia) */}
               {area === "patagonia" && (
@@ -885,6 +955,11 @@ export function TaskModal({
             </div>
           </motion.div>
         </motion.div>
+      )}
+
+      {/* Panel de corridas del agente: por encima del modal (misma capa z). */}
+      {isEdit && task && task.executor === "zcode" && AGENT_UI_ENABLED && (
+        <AgentRunsPanel task={task} open={runsOpen} onClose={() => setRunsOpen(false)} />
       )}
     </AnimatePresence>
   );

@@ -13,6 +13,7 @@ import {
   Inbox,
   ClipboardCheck,
   Download,
+  Sparkles,
 } from "lucide-react";
 import {
   AREAS,
@@ -23,9 +24,9 @@ import {
   type Status,
 } from "../lib/constants";
 import { THEMES, THEME_META, type ThemeId } from "../hooks/useTheme";
-import { cn } from "../lib/utils";
+import { cn, AGENT_UI_ENABLED } from "../lib/utils";
 
-export type ViewMode = "kanban" | "list" | "calendar" | "catchup";
+export type ViewMode = "kanban" | "list" | "calendar" | "catchup" | "agente";
 
 interface ToolbarProps {
   view: ViewMode;
@@ -174,6 +175,15 @@ export function Toolbar({
                 icon={<ClipboardCheck className="h-4 w-4" />}
                 label="Catch-up"
               />
+              {/* Centro de mando del agente (solo web). */}
+              {AGENT_UI_ENABLED && (
+                <ViewButton
+                  active={view === "agente"}
+                  onClick={() => onViewChange("agente")}
+                  icon={<Sparkles className="h-4 w-4" />}
+                  label="Agente"
+                />
+              )}
             </div>
 
             {/* Selector de tema (4 temas) */}
