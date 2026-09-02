@@ -49,7 +49,7 @@ function RunStateChip({ state }: { state: string }) {
  *  hermesagent:// (instalado en el PC de Cris por agent-bridge). */
 function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
   if (!task.workspacePath) return null;
-  const open = (mode: "open" | "file", path: string) => {
+  const open = (mode: "open" | "file" | "md", path: string) => {
     window.location.href = `hermesagent://${mode}?path=${encodeURIComponent(path)}`;
   };
   const copy = (text: string) => {
