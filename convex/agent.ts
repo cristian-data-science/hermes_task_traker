@@ -430,6 +430,102 @@ export const bridgeStatus = query({
 
 /**
  * =====================
+ *  CONTRATO OPERATIVO (editable desde la app)
+ * =====================
+ *
+ * El puente lee esto al armar CADA prompt (reglas de oro + receta por tipo).
+ * Si no hay nada guardado, devuelve estos defaults (espejo de lo que vive en
+ * agent-bridge/prompts.mjs). La edición es operative-only: el ciclo de vida,
+ * la matriz de autonomía y la separación Git/archivos NO se editan acá —
+ * esos viven en CONTRATO_AGENTE.md del repo (visible en la app como lectura).
+ */
+export const DEFAULT_CONTRACT = {
+  goldenRules: [
+    "Nada a producción ni al ERP sin OK explícito de Cris.",
+    "El agente nunca envía correos: deja borradores.",
+    "Toda acción deja rastro en la tarea (estado + evidencia).",
+    "En reportes: backup antes de cambio riesgoso, CAMBIOS.md siempre al día, nada se borra (a backups/).",
+    "En repos: jamás pushear master/main; el agente trabaja en rama agent/<slug>.",
+  ],
+  typeRecipes: {
+    reporte:
+      "TIPO: REPORTE POWER BI — trabajas en una carpeta LOCAL sin git.\n- PROHIBIDO cualquier comando git (init/add/commit/push): ni .md ni .pbix se versionan.\n- Antes de un cambio riesgoso: copia el .pbix a backups\\ con fecha en el nombre (formato AAAA-MM-DD).\n- REFRESHES LARGOS: si el refresh tarda más que el timeout del transport (~60s), nunca hagas sleeps ciegos largos: lanza el refresh y sondea cada 2-3 min con UNA consulta DAX liviana; si a los ~15 min no ves progreso, reporta --state pregunta.\n- Al final: guarda el .pbix y actualiza CAMBIOS.md (cambio, problema, pasos, validación con números antes/después, rollback) — como pasos reportables.\n- Nada se borra: las versiones viejas van a backups\\.",
+    desarrollo:
+      "TIPO: DESARROLLO — trabajas en un REPO GIT de git_provisorio.\n- Trabaja en una rama propia agent/<slug-corto> (crea si no existe; jamás commitees a master).\n- Commits chicos y descriptivos; verifica con build/tests antes de reportar.\n- Según tu nivel de autonomía puedes push de la rama (nunca master/main, nunca merge).",
+    analisis:
+      "TIPO: ANÁLISIS — no modifiques nada permanente sin permiso explícito.\n- Investiga, mide, compara y entrega números/conclusiones en el resumen.\n- Si necesitas tocar algo para medir, documenta qué tocaste y reviértelo.",
+    ops: "TIPO: OPS — operaciones sobre infraestructura.\n- SOLO lecturas y diagnósticos por defecto; cualquier cambio necesita OK de Cris (estado pregunta).\n- Entrega: qué viste, qué está mal, qué recomiendas.",
+    otro: "TIPO: OTRO — sigue las instrucciones de la tarea y las reglas generales del contrato.",
+  },
+};
+
+const CONTRACT_SETTINGS_KEY = "agent.contract";
+
+/** Contrato operativo vigente: lo editado por Cris, o los defaults. */
+export const getContract = query({
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    const raw = await getSetting(ctx, CONTRACT_SETTINGS_KEY);
+    let current;
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.goldenRules) && parsed.typeRecipes) {
+          current = parsed;
+        }
+      } catch {
+        // JSON corrupto → defaults
+      }
+    }
+    return {
+      goldenRules: current?.goldenRules ?? DEFAULT_CONTRACT.goldenRules,
+      typeRecipes: { ...DEFAULT_CONTRACT.typeRecipes, ...(current?.typeRecipes ?? {}) },
+      savedAt: current?.savedAt,
+      isDefault: !current,
+      // Defaults siempre disponibles para "Restablecer" desde la app.
+      defaults: DEFAULT_CONTRACT,
+    };
+  },
+});
+
+/** Guarda el contrato operativo editado desde la app. */
+export const saveContract = mutation({
+  args: {
+    ...sessionArg,
+    goldenRules: v.array(v.string()),
+    typeRecipes: v.object({
+      reporte: v.string(),
+      desarrollo: v.string(),
+      analisis: v.string(),
+      ops: v.string(),
+      otro: v.string(),
+    }),
+  },
+  handler: async (ctx, { sessionToken, goldenRules, typeRecipes }) => {
+    await requireAuth(ctx, sessionToken);
+    const cleanRules = goldenRules
+      .map((r) => r.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+      .map((r) => r.slice(0, 300));
+    if (!cleanRules.length)
+      throw new Error("Necesitás al menos una regla de oro");
+    const cleanRecipes = Object.fromEntries(
+      Object.entries(typeRecipes).map(([k, v]) => [k, v.slice(0, 3000)]),
+    ) as typeof DEFAULT_CONTRACT.typeRecipes;
+    const savedAt = Date.now();
+    await setSetting(
+      ctx,
+      CONTRACT_SETTINGS_KEY,
+      JSON.stringify({ goldenRules: cleanRules, typeRecipes: cleanRecipes, savedAt }),
+    );
+    return { savedAt };
+  },
+});
+
+/**
+ * =====================
  *  MUTATIONS — puente (agent-bridge)
  * =====================
  */

@@ -35,6 +35,7 @@ import {
 } from "../lib/constants";
 import { cn, formatAgo, formatRelative } from "../lib/utils";
 import { AgentRunsPanel } from "./AgentRunsPanel";
+import { AgentContractSection } from "./AgentContractSection";
 
 type OverviewTask = Doc<"tasks">;
 
@@ -531,6 +532,9 @@ export function AgentView() {
           ))}
         </Section>
       </div>
+
+      {/* Contrato del agente: visible y editable (reglas + recetas por tipo) */}
+      <AgentContractSection />
 
       {/* Gestión de carpetas: agrupadas por mundo (Git vs locales) y
           colapsadas por defecto — la vista queda limpia. */}

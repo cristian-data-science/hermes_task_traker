@@ -298,6 +298,10 @@ async function dispatchTaskInner({ task, workspace }, run) {
   const folder = task.workspacePath || workspace?.path || "";
   const notifyMode = task.notifyWhatsapp ?? "off";
 
+  // Contrato operativo vigente (editable por Cris en la app): fresco en cada
+  // despacho, así una edición aplica sin reiniciar el puente.
+  const contract = await q("agent:getContract").catch(() => null);
+
   // 1) Carpeta en disco: sin carpeta el agente no sabe dónde trabajar →
   //    pregunta (no error): Cris elige la carpeta en la app y re-encola.
   if (!folder || !existsSync(folder)) {
@@ -328,7 +332,7 @@ async function dispatchTaskInner({ task, workspace }, run) {
   }
   run.runId = runId;
 
-  const prompt = buildPrompt({ task, workspacePath: folder, runId, followUp, resumed: !!task.agentSessionId });
+  const prompt = buildPrompt({ task, workspacePath: folder, runId, followUp, resumed: !!task.agentSessionId, contract });
   const mode = AUTONOMY_MODE[task.autonomy] ?? "yolo";
   const needsSwap = run.effectiveModel !== defaultModel;
   // Sin --disallowed-tools: en 0.16.5 un spec "Bash(...)" tumba la

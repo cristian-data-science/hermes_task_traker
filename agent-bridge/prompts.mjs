@@ -48,7 +48,22 @@ const TYPE_RECIPES = {
 };
 
 /**
+ * Reglas de oro por defecto (fallback): se usan solo si el contrato guardado
+ * en Convex no está disponible. El contrato vigente (editable por Cris en la
+ * app) llega en buildPrompt(input.contract).
+ */
+const DEFAULT_GOLDEN_RULES = [
+  "Nada a producción ni al ERP sin OK explícito de Cris.",
+  "El agente nunca envía correos: deja borradores.",
+  "Toda acción deja rastro en la tarea (estado + evidencia).",
+  "En reportes: backup antes de cambio riesgoso, CAMBIOS.md siempre al día, nada se borra (a backups/).",
+  "En repos: jamás pushear master/main; el agente trabaja en rama agent/<slug>.",
+];
+
+/**
  * Arma el prompt completo de despacho (o seguimiento, si hay followUp).
+ * `contract` = contrato operativo guardado en Convex (getContract):
+ * { goldenRules: string[], typeRecipes: {reporte, desarrollo, analisis, ops, otro} }.
  */
 export function buildPrompt(input) {
   const {
@@ -57,7 +72,17 @@ export function buildPrompt(input) {
     runId,
     followUp,
     resumed,
+    contract,
   } = input;
+
+  const goldenRules =
+    Array.isArray(contract?.goldenRules) && contract.goldenRules.length
+      ? contract.goldenRules
+      : DEFAULT_GOLDEN_RULES;
+  const recipe =
+    contract?.typeRecipes?.[task.taskType] ??
+    TYPE_RECIPES[task.taskType] ??
+    TYPE_RECIPES.otro;
 
   const lines = [];
   // La PRIMERA línea se convierte en el título de la sesión en ZCode
@@ -75,16 +100,14 @@ export function buildPrompt(input) {
     );
   }
 
-  lines.push("\n=== REGLAS DEL CONTRATO (CONTRATO_AGENTE.md — resumen) ===");
-  lines.push(
-    "- Toda acción deja rastro: reporta SIEMPRE al terminar (estado + resumen con evidencia).",
-  );
-  lines.push("- Nunca silencio: si te bloqueas o falta contexto → estado pregunta con la pregunta concreta.");
-  lines.push("- Nada a producción ni al ERP sin OK explícito. Correos: solo borradores, nunca se envían.");
+  lines.push("\n=== REGLAS DEL CONTRATO (vigentes — editadas por Cris en la app) ===");
+  for (const rule of goldenRules) {
+    lines.push(`- ${rule}`);
+  }
   lines.push(`- Producción de la tarea en: ${workspacePath} (respeta la receta de abajo).`);
 
   lines.push(`\n${AUTONOMY_RULES[task.autonomy] ?? AUTONOMY_RULES.supervisado}`);
-  lines.push(`\n${TYPE_RECIPES[task.taskType] ?? TYPE_RECIPES.otro}`);
+  lines.push(`\n${recipe}`);
 
   if (resumed && followUp) {
     lines.push("\n=== SEGUIMIENTO (retomas tu sesión anterior) ===");
