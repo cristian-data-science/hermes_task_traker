@@ -13,13 +13,15 @@ import {
   Circle,
   CircleDot,
   Trash2,
-  FolderGit2,
   Folder,
   Eye,
   Check,
   MessageCircle,
   Zap,
   Clock3,
+  ChevronDown,
+  GitBranch,
+  ChartColumn,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -261,6 +263,120 @@ function Section({
   );
 }
 
+/**
+ * Grupo colapsable de carpetas (Desarrollo / Reportes). Cerrado por defecto
+ * (el estado se recuerda en localStorage): 38 carpetas sueltas eran ruido.
+ */
+function WorkspaceGroup({
+  storageKey,
+  title,
+  subtitle,
+  Icon,
+  tone,
+  items,
+  onToggle,
+  onRemove,
+}: {
+  storageKey: string;
+  title: string;
+  subtitle: string;
+  Icon: typeof GitBranch;
+  tone: string;
+  items: Doc<"agentWorkspaces">[];
+  onToggle: (ws: Doc<"agentWorkspaces">) => Promise<void>;
+  onRemove: (ws: Doc<"agentWorkspaces">) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(storageKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  function toggleOpen() {
+    setOpen((v) => {
+      try {
+        localStorage.setItem(storageKey, v ? "0" : "1");
+      } catch {
+        // sin localStorage: igual colapsa visualmente
+      }
+      return !v;
+    });
+  }
+
+  const activeCount = items.filter((w) => w.enabled).length;
+  return (
+    <div className="overflow-hidden rounded-el border-el border-line">
+      <button
+        onClick={toggleOpen}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 bg-panel2/40 px-3 py-2.5 text-left transition-colors hover:bg-panel2"
+      >
+        <ChevronDown
+          className={cn(
+            "h-4 w-4 shrink-0 text-faint transition-transform",
+            open && "rotate-180",
+          )}
+        />
+        <Icon className={cn("h-4 w-4 shrink-0", tone)} />
+        <span className="text-xs font-semibold text-ink">{title}</span>
+        <span className="text-[10px] text-faint">· {subtitle}</span>
+        <span className="ml-auto flex items-center gap-1.5 text-[10px] text-faint">
+          <span className="text-emerald-600 dark:text-emerald-400">
+            {activeCount} activas
+          </span>
+          <span className="rounded-full bg-panel px-1.5 py-0.5">{items.length}</span>
+        </span>
+      </button>
+      {open && (
+        <div className="grid grid-cols-1 gap-1.5 p-2 sm:grid-cols-2 xl:grid-cols-3">
+          {items.map((ws) => (
+            <div
+              key={ws._id}
+              className={cn(
+                "flex items-center gap-2 rounded-el border-el px-2.5 py-2",
+                ws.enabled
+                  ? "border-line bg-panel2/40"
+                  : "border-dashed border-line opacity-50",
+              )}
+            >
+              <Folder className="h-3.5 w-3.5 shrink-0 text-faint" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-xs font-medium text-ink">{ws.label}</p>
+                <p className="truncate font-mono text-[10px] text-faint" title={ws.path}>
+                  {ws.path}
+                </p>
+              </div>
+              <button
+                onClick={() => void onToggle(ws)}
+                title={ws.enabled ? "Deshabilitar" : "Habilitar"}
+                className="rounded-el p-1 text-faint hover:bg-panel hover:text-ink"
+              >
+                <CircleDot
+                  className={cn("h-3.5 w-3.5", ws.enabled && "text-emerald-500")}
+                />
+              </button>
+              <button
+                onClick={() => void onRemove(ws)}
+                title="Quitar del registro"
+                className="rounded-el p-1 text-faint hover:bg-panel hover:text-red-500"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          ))}
+          {items.length === 0 && (
+            <p className="col-span-full px-1 py-2 text-[11px] text-faint">
+              Sin carpetas en este grupo.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AgentView() {
   const { token } = useAuth();
   const since = useMemo(() => {
@@ -416,7 +532,8 @@ export function AgentView() {
         </Section>
       </div>
 
-      {/* Gestión de carpetas */}
+      {/* Gestión de carpetas: agrupadas por mundo (Git vs locales) y
+          colapsadas por defecto — la vista queda limpia. */}
       <section>
         <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-mute">
           Carpetas del agente
@@ -427,54 +544,29 @@ export function AgentView() {
         <p className="mb-2 text-[11px] text-faint">
           Desarrollo → solo carpetas <strong>Git</strong> (git_provisorio) ·
           Reporte → solo carpetas <strong>locales</strong> (C:\mcp_servers, sin
-          git). La validación es doble: este picker y el backend.
+          git). La validación es doble: el picker y el backend.
         </p>
-        <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-          {workspaces.map((ws) => {
-            const Icon = ws.vcs === "git" ? FolderGit2 : Folder;
-            return (
-              <div
-                key={ws._id}
-                className={cn(
-                  "flex items-center gap-2 rounded-el border-el px-2.5 py-2",
-                  ws.enabled ? "border-line bg-panel2/40" : "border-dashed border-line opacity-50",
-                )}
-              >
-                <Icon
-                  className={cn(
-                    "h-4 w-4 shrink-0",
-                    ws.vcs === "git"
-                      ? "text-sky-600 dark:text-sky-400"
-                      : "text-amber-600 dark:text-amber-400",
-                  )}
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-ink">
-                    {ws.label}
-                  </p>
-                  <p className="truncate font-mono text-[10px] text-faint" title={ws.path}>
-                    {ws.path}
-                  </p>
-                </div>
-                <button
-                  onClick={() => void toggleWs(ws)}
-                  title={ws.enabled ? "Deshabilitar" : "Habilitar"}
-                  className="rounded-el p-1 text-faint hover:bg-panel hover:text-ink"
-                >
-                  <CircleDot
-                    className={cn("h-3.5 w-3.5", ws.enabled && "text-emerald-500")}
-                  />
-                </button>
-                <button
-                  onClick={() => void removeWs(ws)}
-                  title="Quitar del registro"
-                  className="rounded-el p-1 text-faint hover:bg-panel hover:text-red-500"
-                >
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            );
-          })}
+        <div className="space-y-2">
+          <WorkspaceGroup
+            storageKey="agent-ws-dev-open"
+            title="Desarrollo"
+            subtitle="repos Git de git_provisorio"
+            Icon={GitBranch}
+            tone="text-sky-600 dark:text-sky-400"
+            items={workspaces.filter((w) => w.vcs === "git")}
+            onToggle={toggleWs}
+            onRemove={removeWs}
+          />
+          <WorkspaceGroup
+            storageKey="agent-ws-rep-open"
+            title="Reportes"
+            subtitle="carpetas locales de C:\mcp_servers (sin git)"
+            Icon={ChartColumn}
+            tone="text-amber-600 dark:text-amber-400"
+            items={workspaces.filter((w) => w.vcs === "ninguno")}
+            onToggle={toggleWs}
+            onRemove={removeWs}
+          />
         </div>
       </section>
 
