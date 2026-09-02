@@ -226,7 +226,7 @@ export function TaskModal({
       const needsFolder = t ? TASK_TYPE_META[t]?.vcs : null;
       if (needsFolder && !agentCfg.workspaceId) {
         toast.error(
-          `Elegí la carpeta destino (${needsFolder === "git" ? "repo Git" : "reporte"}) para la tarea delegada`,
+          `Elige la carpeta destino (${needsFolder === "git" ? "repo Git" : "reporte"}) para la tarea delegada`,
         );
         return;
       }

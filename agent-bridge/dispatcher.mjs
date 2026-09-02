@@ -312,8 +312,8 @@ async function dispatchTaskInner({ task, workspace }, run) {
       taskId,
       state: "pregunta",
       question: folder
-        ? `La carpeta destino no existe en este PC: ${folder}. Corregila en la app y respondé acá para reintentar.`
-        : "La tarea no tiene carpeta destino. Elegila al editar la tarea y respondé acá para que reintente.",
+        ? `La carpeta destino no existe en este PC: ${folder}. Corrígela en la app y responde aquí para reintentar.`
+        : "La tarea no tiene carpeta destino. Elígela al editar la tarea y responde aquí para que reintente.",
       error: folder ? `carpeta inexistente: ${folder}` : "sin carpeta destino",
     }).catch((e) => log("report pregunta falló:", e.message));
     return;

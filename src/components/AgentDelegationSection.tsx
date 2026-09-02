@@ -179,7 +179,7 @@ export function AgentDelegationSection({
         className="input mb-1"
       >
         <option value="">
-          {typeMeta?.vcs ? "Elegí carpeta…" : "Elegí carpeta (el agente trabaja ahí)…"}
+          {typeMeta?.vcs ? "Elige carpeta…" : "Elige carpeta (el agente trabaja ahí)…"}
         </option>
         {repGroup.length > 0 && (
           <optgroup label="📊 Reportes — carpetas locales (sin git)">

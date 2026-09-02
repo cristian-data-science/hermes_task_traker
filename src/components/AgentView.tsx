@@ -165,7 +165,7 @@ function AgentCard({
                 Esperando turno — el puente está con "{bridgeBusyWith}"
               </span>
             ) : (
-              <span>Esperando al puente (si está apagado, encendélo en tu PC)</span>
+              <span>Esperando al puente (si está apagado, enciéndelo en tu PC)</span>
             )}
           </div>
         )}
@@ -179,7 +179,7 @@ function AgentCard({
               {task.agentQuestion}
             </p>
             <p className="mt-1 flex items-center gap-1 text-[10px] font-semibold text-ink">
-              <Eye className="h-3 w-3" /> Tocá para responder
+              <Eye className="h-3 w-3" /> Toca para responder
             </p>
           </div>
         )}
@@ -199,7 +199,7 @@ function AgentCard({
 
         {state === "error" && (
           <p className="line-clamp-2 rounded-el bg-red-500/10 px-2.5 py-2 text-xs text-red-600 dark:text-red-400">
-            La corrida falló — tocá para ver el detalle y reintentar.
+            La corrida falló — toca para ver el detalle y reintentar.
           </p>
         )}
       </div>
@@ -327,7 +327,7 @@ function WorkspaceGroup({
 
   async function handleAdd() {
     if (!path.trim()) {
-      toast.error("Pegá la ruta completa de la carpeta");
+      toast.error("Pega la ruta completa de la carpeta");
       return;
     }
     setSaving(true);
@@ -581,7 +581,7 @@ export function AgentView() {
             <Circle className="h-4 w-4 text-amber-500" />
             <span className="font-medium text-ink">Puente apagado</span>
             <span className="text-faint">
-              — corré{" "}
+              — corre{" "}
               <code className="rounded bg-panel px-1 py-0.5 font-mono text-[10px]">
                 npm run agent-bridge:daemon
               </code>{" "}
