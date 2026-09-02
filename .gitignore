@@ -64,3 +64,6 @@ android-apk/
 agent-bridge/.token-cache.json
 agent-bridge/.bridge.lock
 agent-bridge/.model-backup.json
+
+.vercel
+.env*
