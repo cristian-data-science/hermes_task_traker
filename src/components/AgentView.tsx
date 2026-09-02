@@ -32,6 +32,7 @@ import {
   TASK_TYPE_META,
   type AgentState,
   type TaskType,
+  type Area,
 } from "../lib/constants";
 import { cn, formatAgo, formatRelative } from "../lib/utils";
 import { AgentRunsPanel } from "./AgentRunsPanel";
@@ -267,6 +268,8 @@ function Section({
 /**
  * Grupo colapsable de carpetas (Desarrollo / Reportes). Cerrado por defecto
  * (el estado se recuerda en localStorage): 38 carpetas sueltas eran ruido.
+ * Incluye alta de carpetas nuevas directamente en su grupo (el vcs queda
+ * fijado por el grupo, así nunca se mezclan mundos).
  */
 function WorkspaceGroup({
   storageKey,
@@ -274,18 +277,22 @@ function WorkspaceGroup({
   subtitle,
   Icon,
   tone,
+  vcs,
   items,
   onToggle,
   onRemove,
+  onAdd,
 }: {
   storageKey: string;
   title: string;
   subtitle: string;
   Icon: typeof GitBranch;
   tone: string;
+  vcs: "git" | "ninguno";
   items: Doc<"agentWorkspaces">[];
   onToggle: (ws: Doc<"agentWorkspaces">) => Promise<void>;
   onRemove: (ws: Doc<"agentWorkspaces">) => Promise<void>;
+  onAdd: (input: { path: string; label: string; area: Area }) => Promise<void>;
 }) {
   const [open, setOpen] = useState(() => {
     try {
@@ -294,6 +301,11 @@ function WorkspaceGroup({
       return false;
     }
   });
+  const [adding, setAdding] = useState(false);
+  const [path, setPath] = useState("");
+  const [label, setLabel] = useState("");
+  const [area, setArea] = useState<Area>("patagonia");
+  const [saving, setSaving] = useState(false);
 
   function toggleOpen() {
     setOpen((v) => {
@@ -304,6 +316,30 @@ function WorkspaceGroup({
       }
       return !v;
     });
+  }
+
+  async function handleAdd() {
+    if (!path.trim()) {
+      toast.error("Pegá la ruta completa de la carpeta");
+      return;
+    }
+    setSaving(true);
+    try {
+      const cleanPath = path.trim().replace(/[\\/]+$/, "");
+      await onAdd({
+        path: cleanPath,
+        label: label.trim() || cleanPath.split(/[\\/]/).pop() || cleanPath,
+        area,
+      });
+      toast.success("Carpeta agregada");
+      setPath("");
+      setLabel("");
+      setAdding(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "No se pudo agregar");
+    } finally {
+      setSaving(false);
+    }
   }
 
   const activeCount = items.filter((w) => w.enabled).length;
@@ -331,47 +367,107 @@ function WorkspaceGroup({
         </span>
       </button>
       {open && (
-        <div className="grid grid-cols-1 gap-1.5 p-2 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((ws) => (
-            <div
-              key={ws._id}
-              className={cn(
-                "flex items-center gap-2 rounded-el border-el px-2.5 py-2",
-                ws.enabled
-                  ? "border-line bg-panel2/40"
-                  : "border-dashed border-line opacity-50",
-              )}
-            >
-              <Folder className="h-3.5 w-3.5 shrink-0 text-faint" />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium text-ink">{ws.label}</p>
-                <p className="truncate font-mono text-[10px] text-faint" title={ws.path}>
-                  {ws.path}
-                </p>
-              </div>
-              <button
-                onClick={() => void onToggle(ws)}
-                title={ws.enabled ? "Deshabilitar" : "Habilitar"}
-                className="rounded-el p-1 text-faint hover:bg-panel hover:text-ink"
-              >
-                <CircleDot
-                  className={cn("h-3.5 w-3.5", ws.enabled && "text-emerald-500")}
+        <div className="p-2">
+          {/* Alta de carpeta dentro de este grupo */}
+          <div className="mb-2 px-1">
+            {adding ? (
+              <div className="space-y-1.5 rounded-el border-el border-line bg-panel p-2">
+                <input
+                  value={path}
+                  onChange={(e) => setPath(e.target.value)}
+                  placeholder={
+                    vcs === "git"
+                      ? "C:\\Users\\patag\\git_provisorio\\nuevo_repo"
+                      : "C:\\mcp_servers\\Nuevo Reporte"
+                  }
+                  autoFocus
+                  className="input font-mono text-xs"
                 />
-              </button>
+                <div className="flex flex-wrap gap-1.5">
+                  <input
+                    value={label}
+                    onChange={(e) => setLabel(e.target.value)}
+                    placeholder="Nombre (opcional — si no, el de la carpeta)"
+                    className="input flex-1 text-xs"
+                  />
+                  <select
+                    value={area}
+                    onChange={(e) => setArea(e.target.value as Area)}
+                    className="input w-auto text-xs"
+                  >
+                    <option value="patagonia">Patagonia</option>
+                    <option value="datacef">Datacef</option>
+                    <option value="personal">Personal</option>
+                  </select>
+                </div>
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => void handleAdd()}
+                    disabled={saving}
+                    className="btn-primary px-2.5 py-1 text-[11px]"
+                  >
+                    {saving ? "Guardando…" : "Agregar"}
+                  </button>
+                  <button
+                    onClick={() => setAdding(false)}
+                    className="btn-ghost border-el px-2.5 py-1 text-[11px] text-mute"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
               <button
-                onClick={() => void onRemove(ws)}
-                title="Quitar del registro"
-                className="rounded-el p-1 text-faint hover:bg-panel hover:text-red-500"
+                onClick={() => setAdding(true)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-mute transition-colors hover:text-ink"
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                + Agregar carpeta a {title.toLowerCase()}
               </button>
-            </div>
-          ))}
-          {items.length === 0 && (
-            <p className="col-span-full px-1 py-2 text-[11px] text-faint">
-              Sin carpetas en este grupo.
-            </p>
-          )}
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 xl:grid-cols-3">
+            {items.map((ws) => (
+              <div
+                key={ws._id}
+                className={cn(
+                  "flex items-center gap-2 rounded-el border-el px-2.5 py-2",
+                  ws.enabled
+                    ? "border-line bg-panel2/40"
+                    : "border-dashed border-line opacity-50",
+                )}
+              >
+                <Folder className="h-3.5 w-3.5 shrink-0 text-faint" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-medium text-ink">{ws.label}</p>
+                  <p className="truncate font-mono text-[10px] text-faint" title={ws.path}>
+                    {ws.path}
+                  </p>
+                </div>
+                <button
+                  onClick={() => void onToggle(ws)}
+                  title={ws.enabled ? "Deshabilitar" : "Habilitar"}
+                  className="rounded-el p-1 text-faint hover:bg-panel hover:text-ink"
+                >
+                  <CircleDot
+                    className={cn("h-3.5 w-3.5", ws.enabled && "text-emerald-500")}
+                  />
+                </button>
+                <button
+                  onClick={() => void onRemove(ws)}
+                  title="Quitar del registro"
+                  className="rounded-el p-1 text-faint hover:bg-panel hover:text-red-500"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
+            {items.length === 0 && (
+              <p className="col-span-full px-1 py-2 text-[11px] text-faint">
+                Sin carpetas en este grupo — agregá la primera con el botón de arriba.
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>
@@ -399,6 +495,7 @@ export function AgentView() {
   const seedWorkspaces = useMutation(api.agent.seedWorkspaces);
   const updateWorkspace = useMutation(api.agent.updateWorkspace);
   const removeWorkspace = useMutation(api.agent.removeWorkspace);
+  const addWorkspace = useMutation(api.agent.addWorkspace);
   const reviewResult = useMutation(api.agent.reviewResult);
   const [panelTask, setPanelTask] = useState<OverviewTask | null>(null);
 
@@ -557,9 +654,18 @@ export function AgentView() {
             subtitle="repos Git de git_provisorio"
             Icon={GitBranch}
             tone="text-sky-600 dark:text-sky-400"
+            vcs="git"
             items={workspaces.filter((w) => w.vcs === "git")}
             onToggle={toggleWs}
             onRemove={removeWs}
+            onAdd={async (input) => {
+              await addWorkspace({
+                sessionToken: token!,
+                ...input,
+                vcs: "git",
+                types: ["desarrollo", "analisis", "ops", "otro"],
+              });
+            }}
           />
           <WorkspaceGroup
             storageKey="agent-ws-rep-open"
@@ -567,9 +673,18 @@ export function AgentView() {
             subtitle="carpetas locales de C:\mcp_servers (sin git)"
             Icon={ChartColumn}
             tone="text-amber-600 dark:text-amber-400"
+            vcs="ninguno"
             items={workspaces.filter((w) => w.vcs === "ninguno")}
             onToggle={toggleWs}
             onRemove={removeWs}
+            onAdd={async (input) => {
+              await addWorkspace({
+                sessionToken: token!,
+                ...input,
+                vcs: "ninguno",
+                types: ["reporte", "analisis", "otro"],
+              });
+            }}
           />
         </div>
       </section>

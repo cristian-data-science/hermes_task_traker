@@ -22,6 +22,7 @@ import {
   AUTONOMY_META,
   NOTIFY_MODES,
   NOTIFY_META,
+  AREA_META,
   type TaskType,
   type Autonomy,
   type NotifyMode,
@@ -78,7 +79,6 @@ function workspaceLabel(
 export function AgentDelegationSection({
   value,
   onChange,
-  area,
 }: {
   value: AgentConfig;
   onChange: (next: AgentConfig) => void;
@@ -100,15 +100,14 @@ export function AgentDelegationSection({
   );
 
   const typeMeta = value.taskType ? TASK_TYPE_META[value.taskType] : null;
-  // Separación dura (CONTRATO_AGENTE.md §4): el tipo filtra las carpetas.
-  const candidates = workspaces.filter(
-    (w) =>
-      w.enabled &&
-      (!typeMeta?.vcs || w.vcs === typeMeta.vcs) &&
-      (!w.types?.length || !value.taskType || w.types.includes(value.taskType)),
-  );
-  const inArea = candidates.filter((w) => w.area === area);
-  const rest = candidates.filter((w) => w.area !== area);
+  // Separación explícita por MUNDO (CONTRATO_AGENTE.md §4): el selector muestra
+  // ambos grupos separados; las carpetas del mundo incompatible con el tipo
+  // elegido aparecen deshabilitadas (así la regla se ve, no se adivina).
+  const enabled = workspaces.filter((w) => w.enabled);
+  const devGroup = enabled.filter((w) => w.vcs === "git");
+  const repGroup = enabled.filter((w) => w.vcs === "ninguno");
+  const isAllowed = (w: { vcs: string }) =>
+    !typeMeta?.vcs || w.vcs === typeMeta.vcs;
   const chosen = workspaces.find((w) => w._id === value.workspaceId);
   const modelList = models?.models ?? [];
   const defaultModel = models?.default ?? "";
@@ -182,20 +181,22 @@ export function AgentDelegationSection({
         <option value="">
           {typeMeta?.vcs ? "Elegí carpeta…" : "Elegí carpeta (el agente trabaja ahí)…"}
         </option>
-        {inArea.length > 0 && (
-          <optgroup label={area === "patagonia" ? "Patagonia" : area === "datacef" ? "Datacef" : "Personal"}>
-            {inArea.map((w) => (
-              <option key={w._id} value={w._id}>
-                {w.label}
+        {repGroup.length > 0 && (
+          <optgroup label="📊 Reportes — carpetas locales (sin git)">
+            {repGroup.map((w) => (
+              <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
+                {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
+                {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
               </option>
             ))}
           </optgroup>
         )}
-        {rest.length > 0 && (
-          <optgroup label="Otras áreas">
-            {rest.map((w) => (
-              <option key={w._id} value={w._id}>
-                {w.label}
+        {devGroup.length > 0 && (
+          <optgroup label="🔀 Desarrollo — repos Git">
+            {devGroup.map((w) => (
+              <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
+                {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
+                {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
               </option>
             ))}
           </optgroup>
