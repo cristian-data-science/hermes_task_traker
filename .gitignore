@@ -63,6 +63,7 @@ android-apk/
 # Puente agente: cache de sesión y backup del swap de modelo (secretos locales)
 agent-bridge/.token-cache.json
 agent-bridge/.bridge.lock
+agent-bridge/bridge.log
 agent-bridge/.model-backup.json
 
 .vercel
