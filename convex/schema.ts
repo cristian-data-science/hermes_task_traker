@@ -273,6 +273,14 @@ export default defineSchema({
     /** Progreso dentro del plan declarado (protocolo --plan): paso N de M. */
     agentStepIndex: v.optional(v.number()),
     agentPlanTotal: v.optional(v.number()),
+    /**
+     * Redirección EN VIVO de Cris (cuadro "Redirigir al agente"): instrucciones
+     * para una corrida ACTIVA. Se entrega en el próximo reporte del agente
+     * (report.mjs se la devuelve en la salida del comando) y se limpia al
+     * entregarla. El agente adapta plan/rumbo con esa instrucción.
+     */
+    agentRedirect: v.optional(v.string()),
+    agentRedirectAt: v.optional(v.number()),
     /** Modelo ZCode elegido para la corrida (id, p.ej. builtin:zai-coding-plan/GLM-5.3). */
     model: v.optional(v.string()),
     /** Notificaciones WhatsApp vía Hermes para esta tarea. */

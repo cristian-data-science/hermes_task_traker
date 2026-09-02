@@ -671,6 +671,45 @@ export const claimTask = mutation({
 });
 
 /**
+ * Redirección EN VIVO: Cris cambia el rumbo de una corrida ACTIVA sin matarla.
+ * La instrucción queda guardada y se entrega al agente en su próximo reporte
+ * (report.mjs se la devuelve en stdout — el agente la lee y adapta el plan).
+ */
+export const redirectAgent = mutation({
+  args: { ...sessionArg, taskId: v.id("tasks"), message: v.string() },
+  handler: async (ctx, { sessionToken, taskId, message }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    if (
+      task.executor !== "zcode" ||
+      !task.agentState ||
+      !["despachada", "trabajando", "pregunta"].includes(task.agentState)
+    )
+      throw new Error(
+        `La tarea no tiene una corrida activa (estado: ${task.agentState ?? "sin delegar"})`,
+      );
+    const clean = message.trim().slice(0, 1500);
+    if (!clean) throw new Error("La instrucción no puede estar vacía");
+    const now = Date.now();
+    await ctx.db.patch(taskId, {
+      agentRedirect: clean,
+      agentRedirectAt: now,
+      updatedAt: now,
+    });
+    await logEvent(ctx, {
+      taskId,
+      kind: "agent_update",
+      task,
+      at: now,
+      detail: `redirección de Cris: ${clean.slice(0, 120)}`,
+    });
+    return { ok: true };
+  },
+});
+
+/**
  * Reporte del agente (CLI report.mjs o hook Stop watchdog): transición de
  * estado + resumen + pregunta/progreso. Es EL punto de entrada de resultados.
  */
@@ -780,6 +819,9 @@ export const agentReport = mutation({
         ? { agentStepIndex: run.progressLog.length }
         : {}),
       ...(args.plan?.length ? { agentPlanTotal: args.plan.length } : {}),
+      // La redirección se ENTREGA en este contacto y se limpia (fail-once).
+      agentRedirect: undefined,
+      agentRedirectAt: undefined,
       ...(args.progress !== undefined
         ? { progress: Math.max(0, Math.min(100, Math.round(args.progress))) }
         : {}),
@@ -799,7 +841,11 @@ export const agentReport = mutation({
         .join(" · ")
         .slice(0, 300),
     });
-    return { ok: true };
+    return {
+      ok: true,
+      // Redirección pendiente de Cris: report.mjs se la muestra al agente.
+      pendingInstruction: task.agentRedirect ?? undefined,
+    };
   },
 });
 

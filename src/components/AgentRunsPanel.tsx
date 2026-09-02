@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2 } from "lucide-react";
+import { X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2, Shuffle } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -182,9 +182,11 @@ export function AgentRunsPanel({
   const reviewResult = useMutation(api.agent.reviewResult);
   const cancelAgent = useMutation(api.agent.cancelAgent);
   const removeTask = useMutation(api.tasks.remove);
+  const redirectAgent = useMutation(api.agent.redirectAgent);
 
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [redirect, setRedirect] = useState("");
   const [acting, setActing] = useState(false);
 
   if (!task || !t) return null;
@@ -211,6 +213,29 @@ export function AgentRunsPanel({
   const canReview = state === "para-revision";
   const canCancel =
     state && !["hecho", "cancelada"].includes(state);
+  // Redirección en vivo: la corrida está activa y Cris quiere cambiar el rumbo
+  // sin matarla. Se entrega en el próximo reporte del agente (--step/--plan).
+  const canRedirect =
+    state === "despachada" || state === "trabajando" || state === "pregunta";
+
+  /** Redirección en vivo: cambia el rumbo de la corrida activa. */
+  async function handleRedirect() {
+    if (!task) return;
+    setActing(true);
+    try {
+      await redirectAgent({
+        sessionToken: token!,
+        taskId: task._id,
+        message: redirect.trim(),
+      });
+      toast.success("Redirección en cola — se entrega en su próximo reporte");
+      setRedirect("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "No se pudo redirigir");
+    } finally {
+      setActing(false);
+    }
+  }
 
   /** Borra la tarea: si la delegación está viva la cancela primero. */
   async function handleDelete() {
@@ -283,6 +308,51 @@ export function AgentRunsPanel({
                   <p className="mt-1 whitespace-pre-wrap text-xs text-mute">
                     {task.agentQuestion}
                   </p>
+                </div>
+              )}
+
+              {/* Redirección en vivo: cambiar el rumbo SIN matar la corrida */}
+              {canRedirect && (
+                <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
+                  <label className="label flex items-center gap-1.5">
+                    <Shuffle className="h-3.5 w-3.5" />
+                    Redirigir al agente en vivo
+                  </label>
+                  {t.agentRedirect ? (
+                    <p className="rounded-el bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-400">
+                      <span className="font-semibold">Instrucción en cola de entrega:</span>{" "}
+                      {t.agentRedirect}
+                    </p>
+                  ) : (
+                    <textarea
+                      value={redirect}
+                      onChange={(e) => setRedirect(e.target.value)}
+                      rows={2}
+                      placeholder="Ej: no toques esa medida, mejor aggregate las 5 columnas al Excel y compara. / Ese camino no: usa la tabla DimX."
+                      className="input resize-y font-normal text-xs"
+                    />
+                  )}
+                  {!t.agentRedirect && (
+                    <>
+                      <button
+                        disabled={acting || !redirect.trim()}
+                        onClick={() => void handleRedirect()}
+                        className="btn-primary mt-2 inline-flex items-center gap-1.5 text-xs"
+                      >
+                        {acting ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Shuffle className="h-3.5 w-3.5" />
+                        )}
+                        Enviar redirección
+                      </button>
+                      <p className="mt-1.5 text-[10px] text-faint">
+                        Se entrega al agente en su próximo reporte (los pasos
+                        suelen llegar cada pocos minutos); verás su adaptación
+                        en la actividad en vivo.
+                      </p>
+                    </>
+                  )}
                 </div>
               )}
 

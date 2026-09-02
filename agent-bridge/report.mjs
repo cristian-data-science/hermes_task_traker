@@ -93,7 +93,7 @@ async function main() {
     }
   }
 
-  await m("agent:agentReport", {
+  const res = await m("agent:agentReport", {
     taskId: task,
     runId: run && /^[a-z0-9]+$/i.test(run) ? run : undefined,
     state: isStepOnly || isPlanOnly ? "trabajando" : state,
@@ -117,6 +117,21 @@ async function main() {
       : isStepOnly ? `paso: ${step}`
       : `reportado: ${state}`,
   );
+
+  // Canal de redirección EN VIVO: si Cris envió instrucciones, se las
+  // devolvemos AQUÍ — el agente lee la salida del comando y adapta el rumbo.
+  if (res?.pendingInstruction) {
+    console.log(
+      "\n" +
+      "════════════════════════════════════════════════════════════\n" +
+      "⚠ INSTRUCCIÓN NUEVA DE CRIS (redirección en vivo — OBLIGATORIA)\n" +
+      "════════════════════════════════════════════════════════════\n" +
+      res.pendingInstruction +
+      "\n════════════════════════════════════════════════════════════\n" +
+      "Adapta tu plan (--plan) y tu trabajo a esta instrucción, y\n" +
+      "confírmalo reportando tu próximo --step con el ajuste aplicado."
+    );
+  }
 
   // Notificación WhatsApp: pasos solo en modo periodica; estados terminales
   // según el modo de la tarea (final → solo terminal).
