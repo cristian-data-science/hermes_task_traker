@@ -512,12 +512,14 @@ async function beat() {
     const now = Date.now();
     for (const run of activeRuns.values()) {
       // ¿Cris borró o canceló la tarea mientras corría? Matar la corrida ya.
-      const t = await q("tasks:get", { taskId: run.taskId }).catch(() => null);
+      // OJO args: tasks:get espera { id } — con el nombre mal, la validación
+      // de Convex falla, el catch devuelve null y mataríamos TODA corrida.
+      const t = await q("tasks:get", { id: run.taskId }).catch(() => null);
       if (
-        !t ||
-        t.deletedAt !== undefined ||
-        t.agentState === "cancelada" ||
-        t.executor !== "zcode"
+        t &&
+        (t.deletedAt !== undefined ||
+          t.agentState === "cancelada" ||
+          t.executor !== "zcode")
       ) {
         log(`✗ "${run.title}" borrada/cancelada — matando corrida ${run.runId}`);
         if (run.kill) run.kill();

@@ -125,6 +125,13 @@ export function AgentRunsPanel({
   onClose: () => void;
 }) {
   const { token } = useAuth();
+  // Tarea EN VIVO: el prop llega de un snapshot de la vista; sin esto, los
+  // botones quedaban pegados al estado viejo (p.ej. responder tras cancelar).
+  const liveTask = useQuery(
+    api.tasks.get,
+    token && task ? { sessionToken: token, id: task._id } : "skip",
+  );
+  const t = liveTask ?? task;
   const runs =
     useQuery(
       api.agent.runsByTask,
@@ -139,10 +146,10 @@ export function AgentRunsPanel({
   const [feedback, setFeedback] = useState("");
   const [acting, setActing] = useState(false);
 
-  if (!task) return null;
-  const state = (task.agentState ?? null) as AgentState | null;
-  const typeMeta = task.taskType ? TASK_TYPE_META[task.taskType as TaskType] : null;
-  const autoMeta = task.autonomy ? AUTONOMY_META[task.autonomy as Autonomy] : null;
+  if (!task || !t) return null;
+  const state = (t.agentState ?? null) as AgentState | null;
+  const typeMeta = t.taskType ? TASK_TYPE_META[t.taskType as TaskType] : null;
+  const autoMeta = t.autonomy ? AUTONOMY_META[t.autonomy as Autonomy] : null;
 
   async function act(fn: () => Promise<unknown>, okMsg: string) {
     setActing(true);
@@ -158,11 +165,11 @@ export function AgentRunsPanel({
     }
   }
 
-  const canAnswer = state === "pregunta" || state === "error";
+  const canAnswer =
+    state === "pregunta" || state === "error" || state === "cancelada";
   const canReview = state === "para-revision";
   const canCancel =
-    state &&
-    !["hecho", "cancelada"].includes(state);
+    state && !["hecho", "cancelada"].includes(state);
 
   /** Borra la tarea: si la delegación está viva la cancela primero. */
   async function handleDelete() {
@@ -238,11 +245,15 @@ export function AgentRunsPanel({
                 </div>
               )}
 
-              {/* Responder (pregunta o error → re-encola con tu respuesta) */}
+              {/* Responder / re-despachar (pregunta, error o cancelada → re-encola) */}
               {canAnswer && (
                 <div className="mb-4">
                   <label className="label">
-                    {state === "pregunta" ? "Tu respuesta" : "Qué corregir / reintentar"}
+                    {state === "pregunta"
+                      ? "Tu respuesta"
+                      : state === "cancelada"
+                        ? "Nuevo intento (re-despachar)"
+                        : "Qué corregir / reintentar"}
                   </label>
                   <textarea
                     value={answer}
@@ -251,7 +262,9 @@ export function AgentRunsPanel({
                     placeholder={
                       state === "pregunta"
                         ? "El contexto o la decisión que le falta al agente…"
-                        : "Instrucciones para la próxima corrida…"
+                        : state === "cancelada"
+                          ? "Instrucciones para este nuevo intento…"
+                          : "Instrucciones para la próxima corrida…"
                     }
                     className="input resize-y font-normal"
                   />
@@ -265,7 +278,7 @@ export function AgentRunsPanel({
                             taskId: task._id,
                             answer: answer.trim(),
                           }),
-                        "Enviado: el agente retoma con tu respuesta",
+                        "Enviado: el agente retoma con tus instrucciones",
                       )
                     }
                     className="btn-primary mt-2 inline-flex items-center gap-1.5 text-xs"
@@ -275,7 +288,7 @@ export function AgentRunsPanel({
                     ) : (
                       <Send className="h-3.5 w-3.5" />
                     )}
-                    Enviar al agente
+                    {state === "cancelada" ? "Re-despachar" : "Enviar al agente"}
                   </button>
                 </div>
               )}

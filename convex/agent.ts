@@ -838,7 +838,8 @@ export const taskForNotify = query({
  * =====================
  */
 
-/** Responde una pregunta del agente: re-encola con la respuesta como followUp. */
+/** Responde una pregunta del agente: re-encola con la respuesta como followUp.
+ *  También sirve para RE-DESPACHAR una delegación cancelada (nuevo intento). */
 export const answerQuestion = mutation({
   args: { ...sessionArg, taskId: v.id("tasks"), answer: v.string() },
   handler: async (ctx, { sessionToken, taskId, answer }) => {
@@ -846,8 +847,14 @@ export const answerQuestion = mutation({
     const task = await ctx.db.get(taskId);
     if (!task || task.deletedAt !== undefined)
       throw new Error("Tarea no encontrada");
-    if (task.agentState !== "pregunta" && task.agentState !== "error")
-      throw new Error("La tarea no está esperando tu respuesta");
+    if (
+      task.agentState !== "pregunta" &&
+      task.agentState !== "error" &&
+      task.agentState !== "cancelada"
+    )
+      throw new Error(
+        `La tarea no está esperando tu respuesta (estado: ${task.agentState ?? "sin delegar"})`,
+      );
     await applyAgentState(ctx, task, "encolada", sessionToken, {
       agentQuestion: undefined,
       agentFollowUp: answer.slice(0, FOLLOWUP_MAX),
