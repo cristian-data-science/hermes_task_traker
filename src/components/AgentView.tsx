@@ -370,13 +370,14 @@ export function AgentView() {
         )}
       </div>
 
-      {/* Las 4 fases del ciclo, tarjetas de misión */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        <Section title="Requiere tu OK" count={overview?.review.length ?? 0}>
-          {overview?.review.map((t) => (
+      {/* Las 4 fases del ciclo, en horizontal (pipeline) — apiladas en pantallas chicas */}
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Section title="En cola" count={overview?.queue.length ?? 0}>
+          {overview?.queue.map((t) => (
             <AgentCard
               key={t._id}
               task={t}
+              bridgeBusyWith={busyWith}
               onOpen={() => setPanelTask(t)}
               onApprove={() => void quickApprove(t)}
             />
@@ -393,12 +394,11 @@ export function AgentView() {
             />
           ))}
         </Section>
-        <Section title="En cola" count={overview?.queue.length ?? 0}>
-          {overview?.queue.map((t) => (
+        <Section title="Requiere tu OK" count={overview?.review.length ?? 0}>
+          {overview?.review.map((t) => (
             <AgentCard
               key={t._id}
               task={t}
-              bridgeBusyWith={busyWith}
               onOpen={() => setPanelTask(t)}
               onApprove={() => void quickApprove(t)}
             />
