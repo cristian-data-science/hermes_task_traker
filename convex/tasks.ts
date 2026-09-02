@@ -10,6 +10,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
 import { internal } from "./_generated/api";
 import { logEvent, logStatusChange } from "./events";
+import { validateDelegation } from "./agent";
 
 /** Literales de área y estado para reutilizar en validaciones. */
 const areaUnion = v.union(
@@ -189,9 +190,9 @@ const taskFields = {
   area: areaUnion,
   status: statusUnion,
   notes: v.optional(v.string()),
-  /** Ejecutor: Cris (tú) o Claw (agente). Por defecto Cris. */
+  /** Ejecutor: Cris (tú), Claw (agente Hermes) o ZCode (agente de código). */
   executor: v.optional(
-    v.union(v.literal("cris"), v.literal("claw")),
+    v.union(v.literal("cris"), v.literal("claw"), v.literal("zcode")),
   ),
   estimate: v.optional(v.string()),
   dueDate: v.optional(v.string()),
@@ -212,6 +213,29 @@ const taskFields = {
   clickupParentId: v.optional(v.string()),
   /** List de ClickUp del destino (para reconstruir el selector al editar). */
   clickupListId: v.optional(v.string()),
+  // ===== Capa agente (solo con executor=zcode; CONTRATO_AGENTE.md) =====
+  taskType: v.optional(
+    v.union(
+      v.literal("reporte"),
+      v.literal("desarrollo"),
+      v.literal("analisis"),
+      v.literal("ops"),
+      v.literal("otro"),
+    ),
+  ),
+  workspaceId: v.optional(v.id("agentWorkspaces")),
+  workspacePath: v.optional(v.string()),
+  autonomy: v.optional(
+    v.union(
+      v.literal("escenario"),
+      v.literal("supervisado"),
+      v.literal("autonomo"),
+    ),
+  ),
+  model: v.optional(v.string()),
+  notifyWhatsapp: v.optional(
+    v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
+  ),
 };
 
 /** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
@@ -219,6 +243,13 @@ export const create = mutation({
   args: { ...taskFields, clickupLocal: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     await requireAuth(ctx, args.sessionToken);
+    // Separación Git/archivos (CONTRATO_AGENTE.md §4) ya en el alta.
+    if (args.executor === "zcode") {
+      await validateDelegation(ctx, {
+        taskType: args.taskType,
+        workspaceId: args.workspaceId,
+      });
+    }
     const now = Date.now();
     const sanitized = sanitizeTaskText(args);
     // Desplazar las tareas existentes del estado +1 para dejar order 0 libre
@@ -253,6 +284,17 @@ export const create = mutation({
       clickupParentId: args.clickupParentId,
       clickupListId: args.clickupListId,
       clickupLocal: args.clickupLocal,
+      // Capa agente: al asignar a ZCode la tarea nace encolada para el puente.
+      taskType: args.executor === "zcode" ? args.taskType : undefined,
+      workspaceId: args.executor === "zcode" ? args.workspaceId : undefined,
+      workspacePath:
+        args.executor === "zcode" && args.workspaceId
+          ? (args.workspacePath ?? undefined)
+          : undefined,
+      autonomy: args.executor === "zcode" ? args.autonomy : undefined,
+      model: args.executor === "zcode" ? args.model : undefined,
+      notifyWhatsapp: args.executor === "zcode" ? args.notifyWhatsapp : undefined,
+      agentState: args.executor === "zcode" ? "encolada" : undefined,
       order: 0,
       completedAt: args.status === "completado" ? now : undefined,
       createdAt: now,
@@ -304,7 +346,7 @@ export const update = mutation({
     status: v.optional(statusUnion),
     notes: v.optional(v.string()),
     executor: v.optional(
-      v.union(v.literal("cris"), v.literal("claw")),
+      v.union(v.literal("cris"), v.literal("claw"), v.literal("zcode")),
     ),
     estimate: v.optional(v.string()),
     dueDate: v.optional(v.string()),
@@ -317,6 +359,30 @@ export const update = mutation({
     clickupParentId: v.optional(v.string()),
     clickupListId: v.optional(v.string()),
     clickupLocal: v.optional(v.boolean()),
+    // ===== Capa agente (solo con executor=zcode) =====
+    taskType: v.optional(
+      v.union(
+        v.literal("reporte"),
+        v.literal("desarrollo"),
+        v.literal("analisis"),
+        v.literal("ops"),
+        v.literal("otro"),
+      ),
+    ),
+    workspaceId: v.optional(v.id("agentWorkspaces")),
+    /** "" explícito = quitar la carpeta asignada. */
+    workspacePath: v.optional(v.string()),
+    autonomy: v.optional(
+      v.union(
+        v.literal("escenario"),
+        v.literal("supervisado"),
+        v.literal("autonomo"),
+      ),
+    ),
+    model: v.optional(v.string()),
+    notifyWhatsapp: v.optional(
+      v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
+    ),
   },
   handler: async (ctx, { sessionToken, id, ...patch }) => {
     await requireAuth(ctx, sessionToken);
@@ -324,6 +390,28 @@ export const update = mutation({
     if (!task || task.deletedAt !== undefined)
       throw new Error("Tarea no encontrada");
     const now = Date.now();
+
+    // ===== Capa agente: coherencia de la delegación al editar =====
+    // El executor final decide si la tarea queda delegada; el vaciado de
+    // carpeta (workspacePath="") se normaliza ANTES como el resto de strings.
+    if (patch.workspacePath === "") patch.workspacePath = undefined;
+    const asPatch = patch as Record<string, unknown>;
+    const nextExecutor = patch.executor ?? task.executor;
+    const delegating = nextExecutor === "zcode";
+    if (delegating) {
+      const nextType = patch.taskType ?? task.taskType;
+      const nextWs = patch.workspaceId !== undefined ? patch.workspaceId : task.workspaceId;
+      await validateDelegation(ctx, { taskType: nextType, workspaceId: nextWs });
+      // Asignación nueva (o re-delegación tras cancelar): vuelve a la cola.
+      if (task.agentState === undefined || task.agentState === "cancelada") {
+        asPatch.agentState = "encolada";
+      }
+    } else if (task.agentState !== undefined && patch.executor !== undefined) {
+      // Se quitó a ZCode como ejecutor: la capa agente se apaga.
+      asPatch.agentState = undefined;
+      asPatch.agentQuestion = undefined;
+      asPatch.agentFollowUp = undefined;
+    }
 
     // Sanea textos y clamp del progreso antes de aplicarlos.
     const sanitized = sanitizeTaskText(patch);

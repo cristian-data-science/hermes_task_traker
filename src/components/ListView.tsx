@@ -39,6 +39,7 @@ export function ListView({ tasks, onEditTask, onNewTask }: ListViewProps) {
     }
     // Ordenar: súper urgentes ancladas arriba, luego no completadas, luego
     // por orden (sort estable: entre súper urgentes manda su order).
+    // Completadas: log por completedAt, la más reciente primero.
     for (const a of AREAS) {
       map[a].sort((x, y) => {
         const ux = Number(isSuperUrgent(x));
@@ -46,6 +47,9 @@ export function ListView({ tasks, onEditTask, onNewTask }: ListViewProps) {
         if (ux !== uy) return uy - ux;
         if ((x.status === "completado") !== (y.status === "completado")) {
           return x.status === "completado" ? 1 : -1;
+        }
+        if (x.status === "completado") {
+          return (y.completedAt ?? 0) - (x.completedAt ?? 0);
         }
         return x.order - y.order;
       });

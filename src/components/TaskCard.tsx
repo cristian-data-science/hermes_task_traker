@@ -18,8 +18,8 @@ import { api } from "~/convex/_generated/api";
 import { AreaBadge, StatusBadge } from "./Badges";
 import { CompleteButton } from "./CompleteButton";
 import { CatchupPinButton } from "./CatchupPinButton";
-import { EXECUTOR_META } from "../lib/constants";
-import { cn, statusTone, formatRelative, isSuperUrgent } from "../lib/utils";
+import { EXECUTOR_META, AGENT_STATE_META, type AgentState } from "../lib/constants";
+import { cn, statusTone, formatRelative, formatAgo, isSuperUrgent, AGENT_UI_ENABLED } from "../lib/utils";
 import { useAuth } from "../hooks/useAuth";
 
 /** Slider rápido de progreso 0-100 (commit al soltar). */
@@ -203,6 +203,59 @@ export function TaskCard({
 
       {/* Footer: metadatos */}
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1.5 text-[11px] text-mute">
+        {/* Chip del ciclo de delegación (solo web): el estado del agente es la
+            fuente de verdad mientras la tarea esté delegada a ZCode. */}
+        {AGENT_UI_ENABLED &&
+          task.executor === "zcode" &&
+          task.agentState &&
+          (() => {
+            const st = AGENT_STATE_META[task.agentState as AgentState];
+            if (!st) return null;
+            return (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full border-el px-1.5 py-0.5 text-[10px] font-semibold",
+                  st.pulse && "animate-pulse",
+                )}
+                style={{
+                  color: st.tone,
+                  borderColor: `color-mix(in srgb, ${st.tone} 45%, transparent)`,
+                  background: `color-mix(in srgb, ${st.tone} 10%, transparent)`,
+                }}
+                title={`Agente: ${st.label}${
+                  task.workspacePath ? ` · ${task.workspacePath}` : ""
+                }`}
+              >
+                <st.Icon className="h-3 w-3" />
+                {st.label}
+              </span>
+            );
+          })()}
+        {/* Última acción del agente en vivo (solo web): el paso reportado o
+            la actividad detectada del transcript, una línea, con antigüedad.
+            Con plan declarado: "Paso N de M · <acción>". */}
+        {AGENT_UI_ENABLED &&
+          task.executor === "zcode" &&
+          task.agentLastStep &&
+          ["despachada", "trabajando", "pregunta"].includes(
+            task.agentState ?? "",
+          ) && (
+            <span
+              className="inline-flex w-full min-w-0 items-center gap-1 text-[10px] text-faint"
+              title={task.agentLastStep}
+            >
+              <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />
+              {task.agentPlanTotal ? (
+                <span className="shrink-0 font-semibold">
+                  Paso {task.agentStepIndex ?? "?"}/{task.agentPlanTotal}:
+                </span>
+              ) : null}
+              <span className="truncate">{task.agentLastStep}</span>
+              {task.agentLastStepAt && (
+                <span className="shrink-0">· {formatAgo(task.agentLastStepAt)}</span>
+              )}
+            </span>
+          )}
         {(() => {
           // Priorizar clickupAssignee (responsable real de ClickUp) sobre executor.
           if (task.clickupAssignee) {

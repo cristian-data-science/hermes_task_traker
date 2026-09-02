@@ -16,6 +16,14 @@ Permite crear, editar, cambiar estado y eliminar tareas agrupadas por área (Pat
 - 🎨 **Diseño moderno** con Tailwind, Framer Motion y Lucide
 - 🌗 **Modo claro/oscuro** (persistente)
 - 📱 **100% responsivo**
+- 🤖 **Delegación a ZCode (centro de mando, solo web)**: asignás tareas al
+  agente con tipo (reporte → carpetas de `C:\mcp_servers` sin git ·
+  desarrollo → repos de `git_provisorio`), carpeta destino, nivel de
+  autonomía (escenario/supervisado/autónomo), modelo y avisos por WhatsApp
+  vía Hermes. El puente local `agent-bridge` las despacha en segundos a
+  ZCode headless y el resultado (estado + resumen + evidencia) vive en la
+  tarea. Ver [`CONTRATO_AGENTE.md`](CONTRATO_AGENTE.md) y
+  [`agent-bridge/README.md`](agent-bridge/README.md).
 
 ## 🛠️ Stack
 

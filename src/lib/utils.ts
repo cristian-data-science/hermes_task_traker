@@ -33,6 +33,22 @@ export function formatRelative(ms?: number | null): string {
   return formatDate(ms);
 }
 
+/**
+ * Tiempo transcurrido con granularidad fina (para actividad en vivo):
+ * "ahora" · "hace 20 s" · "hace 5 min" · "hace 2 h" · formatRelative.
+ */
+export function formatAgo(ms?: number | null): string {
+  if (!ms) return "";
+  const s = Math.round((Date.now() - ms) / 1000);
+  if (s < 15) return "ahora";
+  if (s < 90) return `hace ${s} s`;
+  const m = Math.round(s / 60);
+  if (m < 90) return `hace ${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 36) return `hace ${h} h`;
+  return formatRelative(ms);
+}
+
 /** CSS variable con el color tonal de un estado (depende del tema activo). */
 export function statusTone(status: string): string {
   return `var(--status-${status}, var(--muted))`;
@@ -56,3 +72,12 @@ export function isSuperUrgent(t: {
 }): boolean {
   return SUPER_URGENT_ENABLED && t.superUrgent === true && t.status !== "completado";
 }
+
+/**
+ * La capa agente (delegación a ZCode: selector de tipo/carpeta/autonomía,
+ * chips de estado, panel de corridas y vista Agente) es EXCLUSIVA de la web,
+ * igual que la súper urgente. El APK no se toca por ahora: los campos del
+ * modelo viajan igual, así que una tarea delegada desde la web se edita sin
+ * perder su delegación desde donde sea.
+ */
+export const AGENT_UI_ENABLED = !ANDROID_TWA;

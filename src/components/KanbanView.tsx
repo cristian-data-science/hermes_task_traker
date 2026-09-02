@@ -168,7 +168,13 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
       if (map[t.status]) map[t.status].push(t._id);
     }
     for (const s of KANBAN_COLUMNS) {
-      map[s].sort((a, b) => taskMap[a].order - taskMap[b].order);
+      // Completado es un LOG, no una columna que se acomoda: siempre la más
+      // reciente arriba (por completedAt), sin importar el order histórico.
+      map[s].sort((a, b) =>
+        s === "completado"
+          ? (taskMap[b].completedAt ?? 0) - (taskMap[a].completedAt ?? 0)
+          : taskMap[a].order - taskMap[b].order,
+      );
       if (!groupByProject) continue;
       // Con agrupación activa, las tarjetas se parten por grupo conservando el
       // orden del usuario dentro de cada uno. Se ordena el MISMO array que
@@ -182,7 +188,9 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
         const ra = ranks.get(groupOfTask(taskMap[a], groupOpts).key) ?? 0;
         const rb = ranks.get(groupOfTask(taskMap[b], groupOpts).key) ?? 0;
         if (ra !== rb) return ra - rb;
-        return taskMap[a].order - taskMap[b].order;
+        return s === "completado"
+          ? (taskMap[b].completedAt ?? 0) - (taskMap[a].completedAt ?? 0)
+          : taskMap[a].order - taskMap[b].order;
       });
     }
     // Capa "súper urgente": pase final que las ancla PRIMERAS de su columna,

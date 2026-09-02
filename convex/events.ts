@@ -27,7 +27,13 @@ export type EventKind =
   | "subtask_done"
   | "subtask_undone"
   | "deleted"
-  | "flagged";
+  | "flagged"
+  // Capa agente (CONTRATO_AGENTE.md §1)
+  | "agent_dispatched"
+  | "agent_update"
+  | "agent_question"
+  | "agent_answer"
+  | "agent_review";
 
 interface LogEventInput {
   taskId: Id<"tasks">;

@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as agent from "../agent.js";
 import type * as auth from "../auth.js";
 import type * as authGuard from "../authGuard.js";
 import type * as authQuery from "../authQuery.js";
@@ -20,6 +21,7 @@ import type * as clickupMutations from "../clickupMutations.js";
 import type * as clickupOAuth from "../clickupOAuth.js";
 import type * as clickupOAuthConfig from "../clickupOAuthConfig.js";
 import type * as clickupOAuthNode from "../clickupOAuthNode.js";
+import type * as correos from "../correos.js";
 import type * as events from "../events.js";
 import type * as http from "../http.js";
 import type * as seed from "../seed.js";
@@ -35,6 +37,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  agent: typeof agent;
   auth: typeof auth;
   authGuard: typeof authGuard;
   authQuery: typeof authQuery;
@@ -47,6 +50,7 @@ declare const fullApi: ApiFromModules<{
   clickupOAuth: typeof clickupOAuth;
   clickupOAuthConfig: typeof clickupOAuthConfig;
   clickupOAuthNode: typeof clickupOAuthNode;
+  correos: typeof correos;
   events: typeof events;
   http: typeof http;
   seed: typeof seed;
