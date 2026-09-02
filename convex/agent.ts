@@ -767,6 +767,8 @@ export const agentReport = mutation({
           )
           .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     }
+    // Conteo de pasos tras este reporte (para el "Paso N de M" en la tarjeta).
+    let stepCount: number | undefined;
     if (run) {
       // Protocolo --plan: el roadmap que el agente INTENTA seguir (≤10 × 120).
       const planList = args.plan
@@ -790,6 +792,7 @@ export const agentReport = mutation({
           progressLog = [...(progressLog ?? []), { at: now, text: firstLine }].slice(-20);
         }
       }
+      stepCount = progressLog?.length;
       await ctx.db.patch(run._id, {
         state: args.state as Doc<"agentRuns">["state"],
         summary,
@@ -815,9 +818,7 @@ export const agentReport = mutation({
       ...(stepText
         ? { agentLastStep: stepText, agentLastStepAt: now }
         : {}),
-      ...(stepText && run?.progressLog
-        ? { agentStepIndex: run.progressLog.length }
-        : {}),
+      ...(stepText && stepCount ? { agentStepIndex: stepCount } : {}),
       ...(args.plan?.length ? { agentPlanTotal: args.plan.length } : {}),
       // La redirección se ENTREGA en este contacto y se limpia (fail-once).
       agentRedirect: undefined,
