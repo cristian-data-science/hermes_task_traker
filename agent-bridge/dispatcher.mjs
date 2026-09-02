@@ -502,11 +502,23 @@ async function pump() {
   }
 }
 
-/** Watchdog de atascos + heartbeat rico, cada minuto. */
+/** Watchdog de atascos + kill de tareas borradas/canceladas + heartbeat rico. */
 async function beat() {
   try {
     const now = Date.now();
     for (const run of activeRuns.values()) {
+      // ¿Cris borró o canceló la tarea mientras corría? Matar la corrida ya.
+      const t = await q("tasks:get", { taskId: run.taskId }).catch(() => null);
+      if (
+        !t ||
+        t.deletedAt !== undefined ||
+        t.agentState === "cancelada" ||
+        t.executor !== "zcode"
+      ) {
+        log(`✗ "${run.title}" borrada/cancelada — matando corrida ${run.runId}`);
+        if (run.kill) run.kill();
+        continue; // el post-exit watchdog reporta sin efecto sobre la tarea
+      }
       const silentFor = now - run.lastActivityAt;
       if (silentFor > STALL_MS && !run.stalledNotified) {
         run.stalledNotified = true;

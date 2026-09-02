@@ -6,7 +6,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, CornerDownRight, Check, Ban, Send, Loader2, Copy } from "lucide-react";
+import { X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -133,6 +133,7 @@ export function AgentRunsPanel({
   const answerQuestion = useMutation(api.agent.answerQuestion);
   const reviewResult = useMutation(api.agent.reviewResult);
   const cancelAgent = useMutation(api.agent.cancelAgent);
+  const removeTask = useMutation(api.tasks.remove);
 
   const [answer, setAnswer] = useState("");
   const [feedback, setFeedback] = useState("");
@@ -162,6 +163,27 @@ export function AgentRunsPanel({
   const canCancel =
     state &&
     !["hecho", "cancelada"].includes(state);
+
+  /** Borra la tarea: si la delegación está viva la cancela primero. */
+  async function handleDelete() {
+    if (!task) return;
+    if (!confirm(`¿Eliminar "${task.title}" del tablero?`)) return;
+    setActing(true);
+    try {
+      if (canCancel) {
+        await cancelAgent({ sessionToken: token!, taskId: task._id }).catch(
+          () => {},
+        );
+      }
+      await removeTask({ sessionToken: token!, id: task._id });
+      toast.success("Tarea eliminada");
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "No se pudo eliminar");
+    } finally {
+      setActing(false);
+    }
+  }
 
   return (
     <AnimatePresence>
@@ -324,12 +346,27 @@ export function AgentRunsPanel({
                       "Delegación cancelada",
                     );
                   }}
-                  className="btn-ghost mb-4 inline-flex items-center gap-1.5 border-el text-xs text-mute hover:text-ink"
+                  className="btn-ghost mb-2 inline-flex items-center gap-1.5 border-el text-xs text-mute hover:text-ink"
                 >
                   <Ban className="h-3.5 w-3.5" />
                   Cancelar delegación
                 </button>
               )}
+
+              {/* Eliminar la tarea por completo (soft-delete; si había corrida
+                  viva el puente la mata al detectar el borrado). */}
+              <button
+                disabled={acting}
+                onClick={handleDelete}
+                className="btn-ghost mb-4 inline-flex items-center gap-1.5 border-el text-xs text-danger hover:bg-panel2"
+              >
+                {acting ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                Eliminar tarea
+              </button>
 
               {/* Timeline de corridas */}
               <label className="label">Corridas</label>

@@ -595,8 +595,9 @@ export const agentReport = mutation({
   handler: async (ctx, args) => {
     await requireAuth(ctx, args.sessionToken);
     const task = await ctx.db.get(args.taskId);
-    if (!task || task.deletedAt !== undefined)
-      throw new Error("Tarea no encontrada");
+    // Tarea borrada mientras la corrida vivía (p.ej. Cris la eliminó con el
+    // agente corriendo): no es error — los watchdogs quedan en silencio.
+    if (!task || task.deletedAt !== undefined) return { ok: true, deleted: true };
     if (task.executor !== "zcode")
       throw new Error("La tarea no está delegada al agente");
     if (args.state === "pregunta" && !args.question)
