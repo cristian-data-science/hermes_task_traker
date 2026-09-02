@@ -17,6 +17,23 @@ npm run agent-bridge           # dispatcher a pelo
 npm run agent-bridge:hooks     # una sola vez: registra hooks Stop/SessionStart
 ```
 
+### Auto-arranque al prender el equipo (INSTALADO en el PC de Cris)
+
+- **`agent-bridge/start.cmd`** — lanzador que fija `CONVEX_URL` de producción y
+  corre el daemon. Abre una ventana de consola propia (título "Agent Bridge"):
+  esa ventana ES el puente — si la cerrás, se detiene hasta el próximo logon.
+- **Tarea programada de Windows "Agent Bridge"** — la levanta sola al iniciar
+  sesión (`Register-ScheduledTask -AtLogOn`, no requiere admin). Para operarla:
+  ```powershell
+  Get-ScheduledTask -TaskName "Agent Bridge"        # ¿existe?
+  Start-ScheduledTask -TaskName "Agent Bridge"      # arrancar ahora
+  Stop-ScheduledTask -TaskName "Agent Bridge"       # detener
+  Unregister-ScheduledTask -TaskName "Agent Bridge" # desinstalar
+  ```
+- **Deployment por defecto: PRODUCCIÓN** (`effervescent-crab-895`) — horneado en
+  `config.mjs`, así cualquier arranque sin variables va a la app real. Para dev:
+  `CONVEX_URL=https://adept-lyrebird-492.convex.cloud npm run agent-bridge`.
+
 Instancia única por lockfile (`agent-bridge/.bridge.lock`): un segundo dispatcher
 no arranca mientras el primero viva. Para auto-arranque al login de Windows:
 

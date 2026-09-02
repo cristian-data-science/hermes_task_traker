@@ -29,9 +29,18 @@ function parseEnvFile(file) {
 
 const repoEnv = parseEnvFile(path.join(REPO_DIR, ".env.local"));
 
-/** Deployment Convex: el mismo que usa la app web (default: .env.local). */
+/**
+ * Deployment Convex del puente.
+ *
+ * Orden: variable de entorno CONVEX_URL → .env.local (CONVEX_URL) → PRODUCCIÓN
+ * (el default operativo de Cris: el puente vive para la app de Vercel).
+ * Para pruebas contra dev: CONVEX_URL=https://adept-lyrebird-492.convex.cloud
+ */
+const PROD_CONVEX_URL = "https://effervescent-crab-895.convex.cloud";
 export const CONVEX_URL =
-  process.env.CONVEX_URL || repoEnv.VITE_CONVEX_URL || repoEnv.CONVEX_URL || "";
+  process.env.CONVEX_URL ||
+  repoEnv.CONVEX_URL ||
+  PROD_CONVEX_URL;
 
 /** Clave privada RSA del tracker (la misma que arrastrás para iniciar sesión). */
 export const RSA_KEY_PATH =
