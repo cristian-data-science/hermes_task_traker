@@ -6,7 +6,9 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2, Shuffle } from "lucide-react";
+import {
+  X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2, Shuffle, FolderOpen, FileText,
+} from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
@@ -42,6 +44,56 @@ function RunStateChip({ state }: { state: string }) {
   );
 }
 
+/** Botones de artefactos: abrir carpeta / abrir reporte (.md) / copiar ruta.
+ *  La web no puede abrir rutas locales por seguridad → protocolo
+ *  hermesagent:// (instalado en el PC de Cris por agent-bridge). */
+function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
+  if (!task.workspacePath) return null;
+  const open = (mode: "open" | "file", path: string) => {
+    window.location.href = `hermesagent://${mode}?path=${encodeURIComponent(path)}`;
+  };
+  const copy = (text: string) => {
+    void navigator.clipboard.writeText(text).then(() => toast.success("Ruta copiada"));
+  };
+  const isReporte = task.taskType === "reporte";
+  return (
+    <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
+      <label className="label mb-1.5 flex items-center gap-1.5">
+        <FolderOpen className="h-3.5 w-3.5" />
+        Artefactos
+      </label>
+      <div className="flex flex-wrap gap-1.5">
+        <button
+          onClick={() => open("open", task.workspacePath!)}
+          className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+          title={`Abrir en el Explorador: ${task.workspacePath}`}
+        >
+          <FolderOpen className="h-3.5 w-3.5" /> Abrir carpeta
+        </button>
+        {isReporte && (
+          <button
+            onClick={() => open("file", `${task.workspacePath}\\CAMBIOS.md`)}
+            className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+            title="Abrir la bitácora CAMBIOS.md del reporte (Bloc de notas)"
+          >
+            <FileText className="h-3.5 w-3.5" /> Ver CAMBIOS.md
+          </button>
+        )}
+        <button
+          onClick={() => copy(task.workspacePath!)}
+          className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs text-mute hover:text-ink"
+          title="Copiar la ruta al portapapeles"
+        >
+          <Copy className="h-3.5 w-3.5" /> Copiar ruta
+        </button>
+      </div>
+      <p className="mt-1.5 font-mono text-[10px] text-faint">{task.workspacePath}</p>
+      <p className="mt-1 text-[10px] text-faint">
+        Primera vez: el navegador pedirá permiso para abrir "Hermes Agent Protocol" — acepta siempre.
+      </p>
+    </div>
+  );
+}
 /** Plan declarado (roadmap) + checklist de pasos reales + actividad en vivo. */
 function StepList({ run }: { run: Doc<"agentRuns"> }) {
   const steps = run.progressLog ?? [];
@@ -491,6 +543,9 @@ export function AgentRunsPanel({
                 )}
                 Eliminar tarea
               </button>
+
+              {/* Artefactos: carpeta/reporte abribles desde el PC */}
+              <ArtifactsBlock task={task} />
 
               {/* Timeline de corridas */}
               <label className="label">Corridas</label>

@@ -890,6 +890,10 @@ export const taskForNotify = query({
       title: task.title,
       notifyWhatsapp: task.notifyWhatsapp ?? "off",
       agentState: task.agentState ?? null,
+      // Posición en el plan para el WhatsApp de una línea ("▸ 3/7 · paso").
+      agentStepIndex: task.agentStepIndex,
+      agentPlanTotal: task.agentPlanTotal,
+      workspacePath: task.workspacePath,
     };
   },
 });

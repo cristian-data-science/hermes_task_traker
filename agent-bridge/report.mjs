@@ -133,17 +133,28 @@ async function main() {
     );
   }
 
-  // Notificación WhatsApp: pasos solo en modo periodica; estados terminales
-  // según el modo de la tarea (final → solo terminal).
+  // WhatsApp ORDENADO: el PLAN es el primer mensaje; cada paso es UN renglón
+  // con posición (3/7); el final es el resumen compacto. Sin metadata repetida
+  // (taskId/carpeta/modelo viven en la app, no en el chat).
   try {
     const info = await q("agent:taskForNotify", { taskId: task });
     if (info) {
-      if (isStepOnly) {
+      if (isPlanOnly) {
+        await notifyAgent(info.notifyWhatsapp, "plan", {
+          title: info.title,
+          plan: plan
+            ? String(plan)
+                .split(/\s*[|\n]+\s*/)
+                .map((s) => s.replace(/^\s*\d+[.)]\s*/, "").trim())
+                .filter(Boolean)
+            : [],
+        });
+      } else if (isStepOnly) {
         await notifyAgent(info.notifyWhatsapp, "paso", {
           title: info.title,
-          state: "paso",
-          summary: step,
-          taskId: task,
+          step,
+          stepIndex: info.agentStepIndex,
+          planTotal: info.agentPlanTotal,
         });
       } else if (isFinalState) {
         await notifyAgent(info.notifyWhatsapp, "final", {

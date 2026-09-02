@@ -347,14 +347,8 @@ async function dispatchTaskInner({ task, workspace }, run) {
       (activeRuns.size > 1 ? ` (paralela, ${activeRuns.size} activas)` : ""),
   );
 
-  // 3) Notificación de inicio (solo modo periodica).
-  notifyAgent(notifyMode, "inicio", {
-    title: task.title,
-    state: "trabajando",
-    folder,
-    model: run.effectiveModel,
-    taskId,
-  }).catch(() => {});
+  // 3) (Sin mensaje de "inicio": el PRIMER mensaje de WhatsApp es el PLAN
+  //     que el agente declara; los pasos llegan de a un renglón.)
 
   // 4) Swap de modelo SOLO si se necesita (y por la regla de canDispatch, en
   //    ese caso esta corrida es la única activa).
@@ -383,16 +377,7 @@ async function dispatchTaskInner({ task, workspace }, run) {
         windowsHide: true,
       });
       run.kill = () => child.kill();
-      run.nudge = notifyMode === "periodica"
-        ? setInterval(() => {
-            notifyAgent(notifyMode, "nudge", {
-              title: task.title,
-              state: "trabajando (nudge)",
-              summary: "La corrida sigue activa; sin novedades que reportar.",
-              taskId,
-            }).catch(() => {});
-          }, NUDGE_MS)
-        : null;
+      // Sin nudges: el único WhatsApp es plan + pasos (1 renglón) + final.
       run.tailer = startTailer(run);
 
       let stdout = "";
