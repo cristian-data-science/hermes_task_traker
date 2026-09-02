@@ -70,13 +70,21 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
         >
           <FolderOpen className="h-3.5 w-3.5" /> Abrir carpeta
         </button>
-        {isReporte && (
+        {isReporte ? (
           <button
             onClick={() => open("file", `${task.workspacePath}\\CAMBIOS.md`)}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
             title="Abrir la bitácora CAMBIOS.md del reporte (Bloc de notas)"
           >
             <FileText className="h-3.5 w-3.5" /> Ver CAMBIOS.md
+          </button>
+        ) : (
+          <button
+            onClick={() => open("md", task.workspacePath!)}
+            className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+            title="Abrir el .md modificado más recientemente en esa carpeta (reporte/bitácora del agente)"
+          >
+            <FileText className="h-3.5 w-3.5" /> Ver reporte (.md)
           </button>
         )}
         <button
