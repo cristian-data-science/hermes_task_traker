@@ -19,7 +19,9 @@ function loadCachedToken() {
   if (cachedToken) return cachedToken;
   try {
     const raw = JSON.parse(readFileSync(TOKEN_CACHE, "utf8"));
-    if (raw.token && Date.now() - raw.savedAt < SESSION_TTL_MS) {
+    // El token SOLO vale para el deployment contra el que se emitió: si el
+    // cache viene de otro (dev vs prod), reloguear — nunca mezclar.
+    if (raw.token && raw.url === CONVEX_URL && Date.now() - raw.savedAt < SESSION_TTL_MS) {
       cachedToken = raw.token;
       cachedAt = raw.savedAt;
     }
@@ -45,7 +47,7 @@ export async function login() {
   const { token } = await http.action("auth:signInWithRsa", { challenge, signature });
   cachedToken = token;
   cachedAt = Date.now();
-  writeFileSync(TOKEN_CACHE, JSON.stringify({ token, savedAt: cachedAt }, null, 2));
+  writeFileSync(TOKEN_CACHE, JSON.stringify({ token, savedAt: cachedAt, url: CONVEX_URL }, null, 2));
   return token;
 }
 
