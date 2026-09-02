@@ -147,7 +147,14 @@ function AgentCard({
       {/* Cuerpo por fase: la acción en vivo como protagonista, sin detalle */}
       <div className="mt-2.5 space-y-2">
         {working && task.agentLastStep && (
-          <NowLine text={task.agentLastStep} at={task.agentLastStepAt} />
+          <NowLine
+            text={
+              task.agentPlanTotal
+                ? `Paso ${task.agentStepIndex ?? "?"}/${task.agentPlanTotal}: ${task.agentLastStep}`
+                : task.agentLastStep
+            }
+            at={task.agentLastStepAt}
+          />
         )}
 
         {state === "encolada" && (

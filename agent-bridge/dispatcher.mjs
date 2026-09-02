@@ -158,7 +158,9 @@ async function syncModels() {
 
 /**
  * Encuentra el rollout JSONL de la corrida: archivo nuevo (mtime posterior al
- * spawn) cuyo contenido menciona el taskId. Reintenta hasta encontrarlo.
+ * spawn) cuyo contenido mencione el taskId. OJO: el taskId vive en el prompt
+ * del usuario, que va DESPUÉS del system prompt (~40KB+) — hay que mirar
+ * hondo (1MB), con 8KB nunca matcheaba y el tailer quedaba mudo.
  */
 function findRolloutFile(sinceMs, taskId) {
   try {
@@ -169,11 +171,12 @@ function findRolloutFile(sinceMs, taskId) {
       .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
     for (const f of cands) {
       try {
+        const size = statSync(f).size;
         const fd = openSync(f, "r");
-        const head = Buffer.alloc(8192);
-        readSync(fd, head, 0, 8192, 0);
+        const buf = Buffer.alloc(Math.min(size, 1_000_000));
+        readSync(fd, buf, 0, buf.length, 0);
         closeSync(fd);
-        if (head.toString("utf8").includes(taskId)) return f;
+        if (buf.toString("utf8").includes(taskId)) return f;
       } catch {
         continue;
       }

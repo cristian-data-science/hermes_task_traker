@@ -655,6 +655,8 @@ export const claimTask = mutation({
       agentFollowUp: undefined,
       agentLastStep: undefined,
       agentLastStepAt: undefined,
+      agentStepIndex: undefined,
+      agentPlanTotal: undefined,
       workspacePath: workspacePath ?? task.workspacePath,
     });
     await logEvent(ctx, {
@@ -681,6 +683,8 @@ export const agentReport = mutation({
     summary: v.optional(v.string()),
     /** Paso del protocolo --step: texto corto que se AGREGA al progressLog. */
     step: v.optional(v.string()),
+    /** Plan del protocolo --plan: pasos que el agente INTENTA hacer (| o \n). */
+    plan: v.optional(v.array(v.string())),
     question: v.optional(v.string()),
     progress: v.optional(v.number()),
     sessionId: v.optional(v.string()),
@@ -725,6 +729,12 @@ export const agentReport = mutation({
           .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     }
     if (run) {
+      // Protocolo --plan: el roadmap que el agente INTENTA seguir (≤10 × 120).
+      const planList = args.plan
+        ?.map((p) => p.trim().slice(0, 120))
+        .filter(Boolean)
+        .slice(0, 10);
+
       // Protocolo --step: cada paso se AGREGA (tope 20) y espeja en la tarea.
       const stepText = args.step?.slice(0, 120);
       let progressLog = run.progressLog;
@@ -745,6 +755,7 @@ export const agentReport = mutation({
         state: args.state as Doc<"agentRuns">["state"],
         summary,
         progressLog,
+        plan: planList ?? run.plan,
         stalled: args.state === "trabajando" ? run.stalled : undefined,
         endedAt: terminal ? now : undefined,
         exitCode: args.exitCode,
@@ -753,7 +764,7 @@ export const agentReport = mutation({
       });
     }
 
-    // Tarea: estado + snapshot de sesión + pregunta/progreso + paso espejo.
+    // Tarea: estado + snapshot de sesión + pregunta/progreso + pasos espejo.
     const stepText = args.step?.slice(0, 120);
     await applyAgentState(ctx, task, args.state, args.sessionToken, {
       agentSessionId: args.sessionId ?? task.agentSessionId,
@@ -765,6 +776,10 @@ export const agentReport = mutation({
       ...(stepText
         ? { agentLastStep: stepText, agentLastStepAt: now }
         : {}),
+      ...(stepText && run?.progressLog
+        ? { agentStepIndex: run.progressLog.length }
+        : {}),
+      ...(args.plan?.length ? { agentPlanTotal: args.plan.length } : {}),
       ...(args.progress !== undefined
         ? { progress: Math.max(0, Math.min(100, Math.round(args.progress))) }
         : {}),

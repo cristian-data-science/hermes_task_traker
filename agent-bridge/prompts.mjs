@@ -121,13 +121,22 @@ export function buildPrompt(input) {
 
   lines.push("\n=== PROTOCOLO DE REPORTE (OBLIGATORIO — así ve Cris tu progreso en vivo) ===");
   lines.push(
-    "Trabajá en PASOS numerados y después de CADA paso ejecutá (texto corto, ≤12 palabras):",
+    "PRIMERA ACCIÓN, antes de trabajar: declara tu PLAN (3-7 pasos concretos, separados por |):",
+  );
+  lines.push(
+    `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --plan "explorar X | backup/rama | cambio | verificación con números | documentar"`,
+  );
+  lines.push(
+    "DESPUÉS trabajá en PASOS y reportá cada uno apenas lo completes (texto corto, ≤12 palabras):",
   );
   lines.push(
     `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --step "<paso hecho>"`,
   );
   lines.push(
     'Ejemplos de pasos: "backup creado en backups/", "reporte abierto y conectado", "línea base medida: X", "cambio aplicado", "verificado: antes 12-01 → hoy", "pbix guardado", "CAMBIOS.md actualizado".',
+  );
+  lines.push(
+    "Si el plan cambia a mitad de camino, vuelve a enviar --plan con el plan actualizado (es normal).",
   );
   lines.push(
     'AL TERMINAR — apenas el objetivo esté VERIFICADO, ejecutá INMEDIATAMENTE el reporte final (no lo dejes para después de tareas de embellecimiento):',

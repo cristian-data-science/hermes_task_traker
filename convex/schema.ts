@@ -270,6 +270,9 @@ export default defineSchema({
      */
     agentLastStep: v.optional(v.string()),
     agentLastStepAt: v.optional(v.number()),
+    /** Progreso dentro del plan declarado (protocolo --plan): paso N de M. */
+    agentStepIndex: v.optional(v.number()),
+    agentPlanTotal: v.optional(v.number()),
     /** Modelo ZCode elegido para la corrida (id, p.ej. builtin:zai-coding-plan/GLM-5.3). */
     model: v.optional(v.string()),
     /** Notificaciones WhatsApp vía Hermes para esta tarea. */
@@ -498,6 +501,12 @@ export default defineSchema({
     progressLog: v.optional(
       v.array(v.object({ at: v.number(), text: v.string() })),
     ),
+    /**
+     * Plan declarado por el agente al arrancar (protocolo --plan): los pasos
+     * que INTENTA hacer. La UI lo muestra como roadmap con la posición actual
+     * derivada de progressLog (paso N de M). ≤10 pasos × 120 chars.
+     */
+    plan: v.optional(v.array(v.string())),
     /**
      * Actividad en vivo detectada por el puente leyendo el transcript de la
      * sesión (última acción del agente entre pasos explícitos).

@@ -232,7 +232,8 @@ export function TaskCard({
             );
           })()}
         {/* Última acción del agente en vivo (solo web): el paso reportado o
-            la actividad detectada del transcript, una línea, con antigüedad. */}
+            la actividad detectada del transcript, una línea, con antigüedad.
+            Con plan declarado: "Paso N de M · <acción>". */}
         {AGENT_UI_ENABLED &&
           task.executor === "zcode" &&
           task.agentLastStep &&
@@ -244,6 +245,11 @@ export function TaskCard({
               title={task.agentLastStep}
             >
               <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-current" />
+              {task.agentPlanTotal ? (
+                <span className="shrink-0 font-semibold">
+                  Paso {task.agentStepIndex ?? "?"}/{task.agentPlanTotal}:
+                </span>
+              ) : null}
               <span className="truncate">{task.agentLastStep}</span>
               {task.agentLastStepAt && (
                 <span className="shrink-0">· {formatAgo(task.agentLastStepAt)}</span>

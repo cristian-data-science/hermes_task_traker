@@ -53,17 +53,21 @@ const VALID_STATES = [
 
 async function main() {
   const args = parseArgs(process.argv);
-  const { task, run, state, step } = args;
+  const { task, run, state, step, plan } = args;
 
   if (!task) {
     console.error(
       "uso: report.mjs --task <id> [--run <runId>] --step \"paso corto\" | " +
+        "--plan \"1. paso | 2. paso | 3. paso\" | " +
         '--state <' + VALID_STATES.join("|") + '> [--summary "…" --question "…" --progress N] [--force --watchdog]',
     );
     process.exit(2);
   }
-  if (!step && (!state || !VALID_STATES.includes(state))) {
-    console.error("necesitás --step <texto> o --state <" + VALID_STATES.join("|") + ">");
+  if (!step && !plan && (!state || !VALID_STATES.includes(state))) {
+    console.error(
+      "necesitás --step <texto>, --plan <pasos separados por |> o --state <" +
+        VALID_STATES.join("|") + ">",
+    );
     process.exit(2);
   }
   if (state === "pregunta" && !args.question) {
@@ -72,11 +76,12 @@ async function main() {
   }
 
   const isStepOnly = !!step && !state;
-  const isFinalState = !isStepOnly && state !== "trabajando";
+  const isPlanOnly = !!plan && !state;
+  const isFinalState = !isStepOnly && !isPlanOnly && state !== "trabajando";
 
-  // Protección anti-pisado: pasos siempre pasan; estados terminales solo si la
-  // corrida está abierta (o --force).
-  if (!isStepOnly && !args.force) {
+  // Protección anti-pisado: pasos y planes siempre pasan; estados terminales
+  // solo si la corrida está abierta (o --force).
+  if (!isStepOnly && !isPlanOnly && !args.force) {
     const runs = await q("agent:runsByTask", { taskId: task });
     const open = (runs || []).some(
       (r) =>
@@ -91,8 +96,14 @@ async function main() {
   await m("agent:agentReport", {
     taskId: task,
     runId: run && /^[a-z0-9]+$/i.test(run) ? run : undefined,
-    state: isStepOnly ? "trabajando" : state,
+    state: isStepOnly || isPlanOnly ? "trabajando" : state,
     step,
+    plan: plan
+      ? String(plan)
+          .split(/\s*[|\n]+\s*/)
+          .map((s) => s.replace(/^\s*\d+[.)]\s*/, "").trim())
+          .filter(Boolean)
+      : undefined,
     summary: args.summary,
     question: args.question,
     progress: args.progress !== undefined ? Number(args.progress) : undefined,
@@ -101,7 +112,11 @@ async function main() {
     error: args.error,
     watchdog: !!args.watchdog,
   });
-  console.log(isStepOnly ? `paso: ${step}` : `reportado: ${state}`);
+  console.log(
+    isPlanOnly ? `plan registrado (${String(plan).split(/[|\n]/).length} pasos)`
+      : isStepOnly ? `paso: ${step}`
+      : `reportado: ${state}`,
+  );
 
   // Notificación WhatsApp: pasos solo en modo periodica; estados terminales
   // según el modo de la tarea (final → solo terminal).

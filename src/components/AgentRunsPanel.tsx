@@ -42,10 +42,12 @@ function RunStateChip({ state }: { state: string }) {
   );
 }
 
-/** Checklist numerada de pasos (--step) + actividad en vivo del transcript. */
+/** Plan declarado (roadmap) + checklist de pasos reales + actividad en vivo. */
 function StepList({ run }: { run: Doc<"agentRuns"> }) {
   const steps = run.progressLog ?? [];
+  const plan = run.plan ?? [];
   const open = !run.endedAt;
+  const doneCount = steps.length;
   const lastLive =
     open && run.lastActivity && run.lastActivityAt
       ? { text: run.lastActivity, at: run.lastActivityAt }
@@ -53,8 +55,47 @@ function StepList({ run }: { run: Doc<"agentRuns"> }) {
   // La actividad en vivo se muestra aparte solo si no duplica al último paso.
   const live =
     lastLive && steps[steps.length - 1]?.text !== lastLive.text ? lastLive : null;
+
   return (
     <div>
+      {/* Roadmap: el plan declarado con la posición actual */}
+      {plan.length > 0 && (
+        <div className="mb-2">
+          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-faint">
+            Plan · paso {Math.min(doneCount + (open ? 1 : 0), plan.length) || "–"} de {plan.length}
+          </p>
+          <ol className="space-y-0.5">
+            {plan.map((p, i) => {
+              const done = i < doneCount;
+              const current = open && i === doneCount;
+              return (
+                <li
+                  key={i}
+                  className={cn(
+                    "flex items-baseline gap-1.5 text-[11px]",
+                    current ? "font-semibold text-ink" : done ? "text-mute" : "text-faint",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "shrink-0",
+                      done && "text-emerald-500",
+                      current && "animate-pulse text-fuchsia-600 dark:text-fuchsia-400",
+                    )}
+                  >
+                    {done ? "✓" : current ? "▶" : "○"}
+                  </span>
+                  <span className="min-w-0">
+                    {i + 1}. {p}
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+
+      {/* Registro real de pasos reportados */}
       {steps.length > 0 && (
         <ol className="space-y-1">
           {steps.map((s, i) => {
