@@ -306,10 +306,17 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
                 idx={idx}
                 total={dayItems.length}
                 onEditTask={onEditTask}
-                onRemove={() => void removeFromHoy({ sessionToken: token!, id: item._id })}
+                onRemove={() =>
+                  void removeFromHoy({ sessionToken: token!, id: item._id }).catch(() =>
+                    toast.error("No se pudo quitar del día"),
+                  )
+                }
                 onMove={(dir) => {
                   const next = moveInList(dayItems, idx, dir);
-                  if (next) void reorderHoy({ sessionToken: token!, ids: next.map((d) => d._id) });
+                  if (next)
+                    void reorderHoy({ sessionToken: token!, ids: next.map((d) => d._id) }).catch(
+                      () => toast.error("No se pudo reordenar"),
+                    );
                 }}
               />
             ))}
@@ -348,7 +355,10 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
                 onMove={(dir) => {
                   const next = moveInList(imprevistos, idx, dir);
                   if (next)
-                    void reorderImprevistos({ sessionToken: token!, ids: next.map((d) => d._id) });
+                    void reorderImprevistos({
+                      sessionToken: token!,
+                      ids: next.map((d) => d._id),
+                    }).catch(() => toast.error("No se pudo reordenar"));
                 }}
               />
             ))}
