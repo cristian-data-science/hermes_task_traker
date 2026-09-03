@@ -353,6 +353,26 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     }))
     .sort((a, b) => (b.flaggedAt ?? 0) - (a.flaggedAt ?? 0));
 
+  // --- IMPREVISTOS (panel Hoy) --------------------------------------------
+  // Surgidos en la ventana: cuántos y cuáles. No son tasks (tabla propia),
+  // así que no aplica el scope de áreas ni las exclusiones. El "resuelto el
+  // mismo día" lo calcula el CLIENTE con date-fns en hora local (dueño del
+  // calendario, patrón de todo el catch-up); acá solo viajan crudos.
+  const unplannedRows = await ctx.db
+    .query("imprevistos")
+    .withIndex("by_day", (q) => q.gte("day", from).lt("day", to))
+    .collect();
+  const unplanned = unplannedRows
+    .filter((r) => r.deletedAt === undefined)
+    .map((r) => ({
+      id: r._id,
+      title: r.title,
+      day: r.day,
+      resolvedAt: r.resolvedAt ?? null,
+      promotedAt: r.promotedAt ?? null,
+    }))
+    .sort((a, b) => a.day - b.day);
+
   // --- EXCLUSIONES (la X de la vista) --------------------------------------
   // Tareas quitadas a mano del resumen de ESTA semana: no se listan ni
   // cuentan en las métricas. La tarea sigue viva en el tablero y en ClickUp.
@@ -412,6 +432,8 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
       subtasksClosed,
       /** Cuántas de las que entraron esta semana ya se cerraron. */
       closedSameWeek: incoming.filter((i) => i.closedSameWeek).length,
+      /** Imprevistos del panel Hoy surgidos en la ventana. */
+      unplanned: unplanned.length,
     },
     done,
     inProgress,
@@ -421,6 +443,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     incoming,
     moves,
     talkingPoints,
+    unplanned,
   };
 }
 
