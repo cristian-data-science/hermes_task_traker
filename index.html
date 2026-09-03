@@ -10,8 +10,19 @@
     />
     <!--
       Content Security Policy (entregada vía <meta>).
-       - script-src: self + el hash del script inline del tema (anti-flash).
-         Bloquea la ejecución de scripts inyectados por terceros (mitiga XSS).
+       - script-src: self. El anti-flash del tema es un script EXTERNO
+         (/theme-init.js), así que no necesita hash — hashear el inline viejo
+         era frágil: el hash cambiaba con los finales de línea (CRLF local
+         vs LF en Vercel) y el anti-flash estuvo bloqueado en silencio desde
+         el hardening hasta que salió este error.
+         El único hash extra es del snippet que vite-plugin-pwa inyecta
+         inline SOLO en dev (register-dev-sw, incondicional con
+         devOptions.enabled) — inerte en el build de producción. Si
+         actualizás vite-plugin-pwa y vuelve el error de CSP, recalculalo
+         con el contenido del script que la consola muestra bloqueado.
+         Ojo: el meta CSP solo aplica a lo que viene DESPUÉS de él en el
+         documento — por eso el preamble de react-refresh (que Vite inyecta
+         antes) nunca fue bloqueado.
        - connect-src: self + Convex (WebSocket/HTTPS) para los datos.
        - style-src/font-src/img: self + Google Fonts (estáticos).
       NOTA: HSTS, X-Frame-Options y frame-ancestors NO se pueden forzar vía
@@ -20,7 +31,7 @@
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self' 'sha256-E8/woXC1mYRzlXMBSV1OVriw9lWXXQpv5bgnuPq+LOo='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://*.convex.site; base-uri 'self'; manifest-src 'self'; worker-src 'self';"
+      content="default-src 'self'; script-src 'self' 'sha256-/AO8vAagk08SqUGxY96ci/dGyTDsuoetPOJYMn7sc+E='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://*.convex.cloud https://*.convex.site wss://*.convex.cloud wss://*.convex.site; base-uri 'self'; manifest-src 'self'; worker-src 'self';"
     />
     <meta name="referrer" content="no-referrer" />
     <!-- PWA (móvil/instalada): color de la barra de estado e icono iOS.
@@ -38,19 +49,9 @@
       href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Lora:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Space+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
-    <script>
-      // Aplicar el tema guardado antes del primer paint (evita flash)
-      (function () {
-        try {
-          var t = localStorage.getItem("cat-theme");
-          var valid = ["matrix", "terminal", "paper", "brutal"];
-          document.documentElement.dataset.theme =
-            valid.indexOf(t) >= 0 ? t : "matrix";
-        } catch (e) {
-          document.documentElement.dataset.theme = "matrix";
-        }
-      })();
-    </script>
+    <!-- Anti-flash del tema: script externo (CSP-friendly, ver comentario
+         del meta CSP arriba y de public/theme-init.js). -->
+    <script src="/theme-init.js"></script>
   </head>
   <body>
     <div id="root"></div>
