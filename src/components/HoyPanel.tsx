@@ -4,6 +4,7 @@ import { useMutation, useQuery } from "convex/react";
 import toast from "react-hot-toast";
 import {
   ArrowUpRight,
+  BarChart3,
   CalendarCheck,
   Check,
   ChevronDown,
@@ -23,6 +24,7 @@ import { useAuth } from "../hooks/useAuth";
 import { cn } from "../lib/utils";
 import { CompleteButton } from "./CompleteButton";
 import { StatusDot } from "./Badges";
+import { InsightsDrawer } from "./InsightsDrawer";
 
 /** Id del droppable del panel (KanbanView lo intercepta en handleDragEnd). */
 export const HOY_PANEL_DROP_ID = "hoy-panel";
@@ -60,6 +62,7 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
   const [query, setQuery] = useState("");
   const [quickText, setQuickText] = useState("");
   const [showOld, setShowOld] = useState(true);
+  const [insightsOpen, setInsightsOpen] = useState(false);
 
   // El día lo calcula el cliente en hora local (patrón catch-up: el backend
   // solo compara números). Recalcular por render es barato y sobrevive la
@@ -207,6 +210,13 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
             {format(new Date(today), "EEEE d 'de' MMMM", { locale: es })}
           </p>
         </div>
+        <button
+          onClick={() => setInsightsOpen(true)}
+          title="Insights de imprevistos"
+          className="rounded-el p-1 text-faint transition-colors hover:bg-panel2 hover:text-ink"
+        >
+          <BarChart3 className="h-4 w-4" />
+        </button>
         <button
           onClick={() => setSearchOpen((v) => !v)}
           title="Buscar una tarea del tablero para sumar al día"
@@ -424,6 +434,9 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
           Los imprevistos no van al tablero: se miden aparte.
         </p>
       </form>
+
+      {/* Visor de métricas (drawer fijo, vive acá solo por conveniencia). */}
+      <InsightsDrawer open={insightsOpen} onClose={() => setInsightsOpen(false)} tasks={tasks} />
     </div>
   );
 }
