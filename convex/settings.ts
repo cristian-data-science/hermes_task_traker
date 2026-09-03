@@ -47,6 +47,27 @@ export const _getRaw = internalQuery({
 });
 
 /**
+ * Mutation interna: escribe un valor crudo en settings (upsert por clave).
+ * Sin auth (uso desde actions que ya validaron la sesión). La usan los
+ * find-or-create del sync (p.ej. cachear el id del padre "Imprevistos Cris").
+ */
+export const _upsertRaw = internalMutation({
+  args: { key: v.string(), value: v.string() },
+  handler: async (ctx, { key, value }) => {
+    const now = Date.now();
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", key))
+      .first();
+    if (row) {
+      await ctx.db.patch(row._id, { value, updatedAt: now });
+    } else {
+      await ctx.db.insert("settings", { key, value, updatedAt: now });
+    }
+  },
+});
+
+/**
  * Verifica un sessionToken desde una action (que no tiene ctx.db). Devuelve
  * true si la sesión es válida. Uso interno para actions públicas de ClickUp.
  */

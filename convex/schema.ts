@@ -149,6 +149,12 @@ export default defineSchema({
     clickupUrl: v.optional(v.string()),
     /** Timestamp del último sync exitoso con ClickUp. */
     clickupSyncedAt: v.optional(v.number()),
+    /**
+     * Cuándo se le mandó a ClickUp la nota con el resumen de lo hecho (solo
+     * tareas delegadas al agente, al quedar completadas). Compara contra
+     * completedAt para no duplicar el comentario en re-syncs.
+     */
+    clickupCommentedAt: v.optional(v.number()),
     /** Último error de sync (vacío = ok). Se muestra en la UI como aviso. */
     clickupSyncError: v.optional(v.string()),
     /**
@@ -420,6 +426,84 @@ export default defineSchema({
     taskId: v.id("tasks"),
     createdAt: v.number(),
   }).index("by_weekStart", ["weekStart"]),
+
+  // ===== Panel Hoy: imprevistos (trabajo no trackeado) =====
+  /**
+   * Un imprevisto es una tarea que surgió en el día y NO está registrada en
+   * el tablero: vive en esta tabla propia, no en `tasks`. El objetivo es
+   * medir cuánto trabajo no trackeado aparece por día y cuánto le quita a
+   * lo planificado — si fueran filas de `tasks` habría que filtrarlas de
+   * Kanban, List, Calendario, catch-up, inbound y métricas.
+   *
+   * Cada imprevisto se refleja en ClickUp como SUBTAREA de la tarea
+   * "Imprevistos Cris" (Mesa Técnica), con sync best-effort igual que las
+   * tasks: el error queda en la fila y se reintenta en el próximo sweep.
+   *
+   * `day` es el inicio del día en hora LOCAL, calculado por el cliente
+   * (patrón de catchups: el backend nunca decide qué día es hoy).
+   * `open` está desnormalizado (true = sin resolver ni promover) porque
+   * Convex no indexa bien los opcionales undefined.
+   */
+  imprevistos: defineTable({
+    title: v.string(),
+    /** Día de surgimiento (ms, medianoche local). La métrica cuenta por acá. */
+    day: v.number(),
+    order: v.number(),
+    /** true mientras no esté resuelto ni promovido (alimenta la sección "abiertos"). */
+    open: v.boolean(),
+    /** Cuándo se tachó (resolve). Undefined = abierto. */
+    resolvedAt: v.optional(v.number()),
+    /** Cuándo se promovió a tarea real del tablero. */
+    promotedAt: v.optional(v.number()),
+    /** Tarea creada al promover (para saltar del imprevisto a su tarea). */
+    promotedTaskId: v.optional(v.id("tasks")),
+    // ===== Sync ClickUp (subtask del padre "Imprevistos Cris") =====
+    /** id de la subtask en ClickUp. Vacío = pendiente de sync. */
+    clickupSubtaskId: v.optional(v.string()),
+    clickupUrl: v.optional(v.string()),
+    /** Último error de sync (vacío = ok). Se muestra en la UI del panel. */
+    clickupSyncError: v.optional(v.string()),
+    clickupSyncedAt: v.optional(v.number()),
+    /**
+     * Lock optimista del sync: timestamp de cuando una corrida tomó esta fila
+     * (create o promote). Con alta rápida seguida, dos sweeps solapados podían
+     * crear la subtask DOS veces en ClickUp. Con TTL: si la corrida murió a
+     * mitad, el claim caduca solo.
+     */
+    clickupSyncClaim: v.optional(v.number()),
+    /** Borrado lógico: timestamp cuando se eliminó, o undefined si está activo. */
+    deletedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_day", ["day", "order"])
+    .index("by_open", ["open", "day"]),
+
+  // ===== Panel Hoy: tareas planeadas del día =====
+  /**
+   * Un dayItem es un PUNTERO "esta tarea está en la lista del día X". No
+   * cambia nada de la tarea: ni estado, ni order del tablero, ni ClickUp.
+   * El check del panel completa la tarea con el flujo estándar; este registro
+   * existe para el orden dentro del día y para la métrica plan-vs-real.
+   *
+   * Borrado lógico a propósito: quitar una tarea del día NO borra el dato
+   * histórico de que fue planeada ese día (los insights lo necesitan).
+   * `carriedFrom` marca los ítems traídos de otro día ("traer pendientes de
+   * ayer"): la métrica de imprevistos cuenta cada surgimiento una sola vez.
+   */
+  dayItems: defineTable({
+    /** Día de la lista (ms, medianoche local, igual que imprevistos.day). */
+    day: v.number(),
+    taskId: v.id("tasks"),
+    order: v.number(),
+    /** dayItem original si este ítem fue traído de otro día. */
+    carriedFrom: v.optional(v.id("dayItems")),
+    deletedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_day", ["day", "order"])
+    .index("by_task", ["taskId", "day"]),
 
   // ===== Repertorio de piano =====
   /**

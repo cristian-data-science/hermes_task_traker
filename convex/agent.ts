@@ -13,7 +13,7 @@
  * CONTRATO_AGENTE.md §2 y se sincroniza con ClickUp como cualquier cambio.
  */
 
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalQuery } from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -359,6 +359,25 @@ export const runsByTask = query({
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .collect();
     return runs.sort((a, b) => b.startedAt - a.startedAt);
+  },
+});
+
+/**
+ * Resumen de la corrida más reciente que tenga uno (para la nota que se le
+ * manda a ClickUp al completar la tarea). Internal: la consume syncTask
+ * (action) sin sesión de usuario.
+ */
+export const _latestRunWithSummary = internalQuery({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    const runs = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
+      .collect();
+    const run = runs
+      .filter((r) => !!r.summary)
+      .sort((a, b) => b.startedAt - a.startedAt)[0];
+    return run ? { summary: run.summary as string } : null;
   },
 });
 

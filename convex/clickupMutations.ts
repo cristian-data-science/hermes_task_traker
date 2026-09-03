@@ -45,6 +45,14 @@ export const _markSyncError = internalMutation({
   },
 });
 
+/** Registra que ya se le mandó a ClickUp la nota con el resumen al completar. */
+export const _markCommented = internalMutation({
+  args: { taskId: v.id("tasks") },
+  handler: async (ctx, { taskId }) => {
+    await ctx.db.patch(taskId, { clickupCommentedAt: Date.now() });
+  },
+});
+
 /** Desvincula una tarea de ClickUp (limpia clickupId, sin borrar en ClickUp). */
 export const _unlinkClickUp = internalMutation({
   args: { taskId: v.id("tasks") },

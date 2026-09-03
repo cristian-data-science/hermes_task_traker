@@ -60,6 +60,14 @@ export interface ClickupSubscription {
   label: string;
 }
 /**
+ * id de la tarea "Imprevistos Cris" en Mesa Técnica: el padre bajo el que se
+ * anidan las subtasks de los imprevistos del panel Hoy. Lo cachea el
+ * find-or-create del sync (imprevistosSync.ensureParent) para no re-buscar
+ * la tarea en cada creación.
+ */
+export const SETTINGS_KEY_IMPREVISTOS_PARENT = "clickup.imprevistosParentId";
+
+/**
  * Override de prueba: si vale "true", el sync outbound corre AUN en dev.
  * Sirve para validar la integración contra ClickUp real desde local sin
  * deployar a prod. Default off (en dev el sync está bloqueado por seguridad).
