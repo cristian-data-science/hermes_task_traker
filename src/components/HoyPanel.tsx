@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { useDroppable } from "@dnd-kit/core";
 import { useMutation, useQuery } from "convex/react";
 import toast from "react-hot-toast";
@@ -39,6 +39,30 @@ function loadCollapsed(): boolean {
   }
 }
 
+/**
+ * Ancho del panel (redimensionable arrastrando el borde derecho).
+ * MIN = el w-72 original; MAX deja lugar cómodo para las columnas del Kanban.
+ */
+const PANEL_MIN_W = 288;
+const PANEL_MAX_W = 640;
+const WIDTH_KEY = "hoy-panel-width";
+function loadPanelWidth(): number | null {
+  try {
+    const n = Number(localStorage.getItem(WIDTH_KEY));
+    return Number.isFinite(n) && n >= PANEL_MIN_W && n <= PANEL_MAX_W ? n : null;
+  } catch {
+    return null;
+  }
+}
+function savePanelWidth(w: number | null) {
+  try {
+    if (w === null) localStorage.removeItem(WIDTH_KEY);
+    else localStorage.setItem(WIDTH_KEY, String(w));
+  } catch {
+    /* ignore */
+  }
+}
+
 interface HoyPanelProps {
   tasks: Doc<"tasks">[];
   onEditTask: (t: Doc<"tasks">) => void;
@@ -63,6 +87,7 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
   const [quickText, setQuickText] = useState("");
   const [showOld, setShowOld] = useState(true);
   const [insightsOpen, setInsightsOpen] = useState(false);
+  const [width, setWidth] = useState<number | null>(loadPanelWidth);
 
   // El día lo calcula el cliente en hora local (patrón catch-up: el backend
   // solo compara números). Recalcular por render es barato y sobrevive la
@@ -123,6 +148,61 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
       } catch {
         /* ignore */
       }
+      return next;
+    });
+  }
+
+  /**
+   * Redimensionado por arrastre del borde derecho. Pointer capture: los
+   * pointermove/up llegan al handle aunque el puntero se pase del panel.
+   * Mientras dura, se desactiva la selección de texto global (si no, se
+   * selecciona todo lo que cruza el puntero).
+   */
+  function startResize(e: ReactPointerEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startW = width ?? PANEL_MIN_W;
+    let latest = startW;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+    const onMove = (ev: PointerEvent) => {
+      latest = Math.min(
+        PANEL_MAX_W,
+        Math.max(PANEL_MIN_W, startW + (ev.clientX - startX)),
+      );
+      setWidth(latest);
+    };
+    const onUp = () => {
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      handle.removeEventListener("pointercancel", onUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+      savePanelWidth(latest);
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+    handle.addEventListener("pointercancel", onUp);
+  }
+
+  /**
+   * Ancho por teclado (el handle es focusable): flechas ±32px, Enter/Home
+   * restaura el default. dir=0 = reset.
+   */
+  function nudgeWidth(dir: -1 | 1 | 0) {
+    if (dir === 0) {
+      setWidth(null);
+      savePanelWidth(null);
+      return;
+    }
+    setWidth((prev) => {
+      const next = Math.min(
+        PANEL_MAX_W,
+        Math.max(PANEL_MIN_W, (prev ?? PANEL_MIN_W) + dir * 32),
+      );
+      savePanelWidth(next);
       return next;
     });
   }
@@ -194,11 +274,39 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
   return (
     <div
       ref={setNodeRef}
+      style={{ width: width ?? PANEL_MIN_W }}
       className={cn(
-        "flex h-full w-72 shrink-0 flex-col rounded-el-lg border-el border-line bg-panel shadow-el transition-all",
+        // transition-shadow (y no transition-all): el ancho cambia con cada
+        // pointermove del resize y animarlo se sentiría gomoso.
+        "relative flex h-full shrink-0 flex-col rounded-el-lg border-el border-line bg-panel shadow-el transition-shadow",
         isOver && "ring-2 ring-accent",
       )}
     >
+      {/* Handle de redimensionado: borde derecho (arrastrar/doble clic). */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Ajustar ancho del panel Hoy"
+        tabIndex={0}
+        title="Arrastrá para agrandar · doble clic restaura el ancho"
+        onPointerDown={startResize}
+        onDoubleClick={() => nudgeWidth(0)}
+        onKeyDown={(e) => {
+          if (e.key === "ArrowRight") {
+            e.preventDefault();
+            nudgeWidth(1);
+          } else if (e.key === "ArrowLeft") {
+            e.preventDefault();
+            nudgeWidth(-1);
+          } else if (e.key === "Enter" || e.key === "Home") {
+            e.preventDefault();
+            nudgeWidth(0);
+          }
+        }}
+        className="group/handle absolute inset-y-0 right-0 z-10 flex w-2 cursor-col-resize touch-none items-center justify-center select-none"
+      >
+        <span className="h-10 w-1 rounded-full bg-line transition-colors group-hover/handle:bg-accent group-focus-visible/handle:bg-accent" />
+      </div>
       {/* ===== Header ===== */}
       <div className="flex items-center gap-2 border-b border-line px-3 py-2.5">
         <div className="min-w-0 flex-1">
