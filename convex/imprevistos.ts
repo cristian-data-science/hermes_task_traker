@@ -357,15 +357,20 @@ export const _clearSync = internalMutation({
 });
 
 /**
- * Completa la promoción: crea la tarea Hermes real enlazada a la tarea de
- * primer nivel de Mesa Técnica que dejó el sync, y ancla promotedTaskId.
+ * Completa la promoción: crea la tarea Hermes real y ancla promotedTaskId.
  * Espeja la lógica de tasks.create (order 0 arriba + evento created) para
  * que la tarea nueva se comporte como cualquier otra del tablero.
+ *
+ * `clickupTaskId` es opcional a propósito: cuando ClickUp está apagado en el
+ * entorno (dev con sync desactivado), la promoción NO puede quedarse a medias
+ * esperando el sync — la tarea se crea IGUAL como solo-local, y si el sync se
+ * habilita después, la primera edición la publica por el flujo normal de
+ * syncTask (igual que cualquier tarea creada en dev).
  */
 export const _finishPromotion = internalMutation({
   args: {
     imprevistoId: v.id("imprevistos"),
-    clickupTaskId: v.string(),
+    clickupTaskId: v.optional(v.string()),
     clickupUrl: v.optional(v.string()),
     /** Estado final de la tarea según el imprevisto al momento de promover. */
     status: v.union(v.literal("pendiente"), v.literal("completado")),
@@ -376,7 +381,7 @@ export const _finishPromotion = internalMutation({
     if (row.promotedTaskId !== undefined) return; // idempotente
 
     const now = Date.now();
-    // Desplazar +1 las pendientes para dejar order 0 arriba (como tasks.create).
+    // Desplazar +1 las del estado para dejar order 0 arriba (como tasks.create).
     const pending = await ctx.db
       .query("tasks")
       .withIndex("by_status", (q) => q.eq("status", status))
@@ -395,10 +400,14 @@ export const _finishPromotion = internalMutation({
       notes: `Promovido desde el panel Hoy (imprevisto del ${new Date(row.day).toLocaleDateString("es-CL")}).`,
       order: 0,
       completedAt: status === "completado" ? now : undefined,
-      // Ya existe en ClickUp (la subtask promovida): nace sincronizada.
-      clickupId: clickupTaskId,
-      clickupUrl: clickupUrl ?? `https://app.clickup.com/t/${clickupTaskId}`,
-      clickupListId: undefined,
+      // Solo si la promoción pasó por ClickUp nace enlazada; si no, es una
+      // tarea local que el sync publicará recién cuando exista y se edite.
+      ...(clickupTaskId
+        ? {
+            clickupId: clickupTaskId,
+            clickupUrl: clickupUrl ?? `https://app.clickup.com/t/${clickupTaskId}`,
+          }
+        : {}),
       createdAt: now,
       updatedAt: now,
     });
@@ -413,10 +422,15 @@ export const _finishPromotion = internalMutation({
 
     await ctx.db.patch(imprevistoId, {
       promotedTaskId: taskId,
-      clickupSubtaskId: clickupTaskId,
-      clickupUrl: clickupUrl ?? `https://app.clickup.com/t/${clickupTaskId}`,
+      ...(clickupTaskId
+        ? {
+            clickupSubtaskId: clickupTaskId,
+            clickupUrl: clickupUrl ?? `https://app.clickup.com/t/${clickupTaskId}`,
+            clickupSyncedAt: now,
+          }
+        : {}),
       clickupSyncError: undefined,
-      clickupSyncedAt: now,
+      clickupSyncClaim: undefined,
       updatedAt: now,
     });
   },

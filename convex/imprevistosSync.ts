@@ -426,17 +426,29 @@ export const syncImprevisto = internalAction({
  * medias). Agendado en cada alta — es el reintento implícito de todo lo que
  * falló mientras ClickUp estuvo caído. Cada fila se procesa con try/catch
  * propio: un error no frena al resto.
+ *
+ * Con ClickUp apagado (guards fail) el sweep no sincroniza subtasks (los
+ * imprevistos funcionan 100% local), pero las promociones a medias SÍ se
+ * completan: la tarea Hermes se crea solo-local para que el imprevisto no
+ * quede "promoviendo…" para siempre.
  */
 export const sweepPending = internalAction({
   args: {},
   handler: async (ctx) => {
-    if (!(await guardsPass(ctx))) return;
+    const guards = await guardsPass(ctx);
     const rows = await ctx.runQuery(internal.imprevistos._pendingSync, {});
     for (const row of rows) {
       try {
         if (row.promotedAt !== undefined && row.promotedTaskId === undefined) {
-          await promoteRow(ctx, row);
-        } else {
+          if (guards) {
+            await promoteRow(ctx, row);
+          } else {
+            await ctx.runMutation(internal.imprevistos._finishPromotion, {
+              imprevistoId: row._id,
+              status: row.resolvedAt !== undefined ? "completado" : "pendiente",
+            });
+          }
+        } else if (guards) {
           await syncRow(ctx, row);
         }
       } catch (err) {
@@ -449,18 +461,32 @@ export const sweepPending = internalAction({
   },
 });
 
-/** Ejecuta la promoción de un imprevisto (agendada por la mutation promote). */
+/**
+ * Ejecuta la promoción de un imprevisto (agendada por la mutation promote).
+ * Con ClickUp disponible hace el flujo completo (subtask → tarea de primer
+ * nivel → task enlazada). Con ClickUp apagado, la tarea se crea IGUAL
+ * (solo-local): la promoción es un hecho local que no puede depender de que
+ * el sync esté prendido — si el sync se habilita después, la primera edición
+ * de la tarea la publica por el flujo normal de syncTask.
+ */
 export const promoteImprevisto = internalAction({
   args: { imprevistoId: v.id("imprevistos") },
   handler: async (ctx, { imprevistoId }) => {
-    if (!(await guardsPass(ctx))) return;
     const row = await ctx.runQuery(internal.imprevistos._getInternal, {
       imprevistoId,
     });
     if (!row || row.promotedAt === undefined || row.promotedTaskId !== undefined)
       return;
     try {
-      await promoteRow(ctx, row);
+      const guards = await guardsPass(ctx);
+      if (guards) {
+        await promoteRow(ctx, row);
+      } else {
+        await ctx.runMutation(internal.imprevistos._finishPromotion, {
+          imprevistoId,
+          status: row.resolvedAt !== undefined ? "completado" : "pendiente",
+        });
+      }
     } catch (err) {
       await ctx.runMutation(internal.imprevistos._markSyncError, {
         imprevistoId,
