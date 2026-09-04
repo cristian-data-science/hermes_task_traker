@@ -45,16 +45,13 @@ function RunStateChip({ state }: { state: string }) {
   );
 }
 
-/** Botones de artefactos: abrir carpeta / abrir reporte (.md) / copiar ruta.
+/** Botones de artefactos: abrir carpeta / abrir reporte (.md) / ver en ClickUp.
  *  La web no puede abrir rutas locales por seguridad → protocolo
  *  hermesagent:// (instalado en el PC de Cris por agent-bridge). */
 function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
   if (!task.workspacePath) return null;
   const open = (mode: "open" | "file" | "md", path: string) => {
     window.location.href = `hermesagent://${mode}?path=${encodeURIComponent(path)}`;
-  };
-  const copy = (text: string) => {
-    void navigator.clipboard.writeText(text).then(() => toast.success("Ruta copiada"));
   };
   const isReporte = task.taskType === "reporte";
   const clickupHref =
@@ -102,13 +99,6 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
             <FileText className="h-3.5 w-3.5" /> Ver reporte (.md)
           </button>
         )}
-        <button
-          onClick={() => copy(task.workspacePath!)}
-          className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs text-mute hover:text-ink"
-          title="Copiar la ruta al portapapeles"
-        >
-          <Copy className="h-3.5 w-3.5" /> Copiar ruta
-        </button>
       </div>
       <p className="mt-1.5 font-mono text-[10px] text-faint">{task.workspacePath}</p>
       <p className="mt-1 text-[10px] text-faint">
