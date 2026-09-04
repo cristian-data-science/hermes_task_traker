@@ -398,7 +398,10 @@ function HistorySection({
   );
 }
 
-/** Una línea del historial: estado · título · cuándo · link ClickUp · ver. */
+/** Una línea del historial: estado · título · cuándo · link ClickUp · ver.
+ *  GRID de columnas fijas (y no flex): con flex, la posición del estado y la
+ *  fecha dependía del largo del título y se veía desalineado (reporte de Cris).
+ *  Columnas: icono | título (elástico) | estado | fecha | ClickUp | ver. */
 function HistoryRow({
   task,
   zebra,
@@ -427,33 +430,44 @@ function HistoryRow({
       }}
       title={`${meta?.label ?? ""} — tocar para ver las corridas${task.model ? ` · ${task.model.split("/").pop()}` : ""}`}
       className={cn(
-        "flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-xs transition-colors hover:bg-panel2",
+        "grid w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-xs transition-colors hover:bg-panel2",
         zebra && "bg-panel/40",
       )}
+      style={{
+        gridTemplateColumns:
+          "auto minmax(0, 1fr) 4.5rem 6rem auto auto",
+      }}
     >
-      <meta.Icon className="h-3.5 w-3.5 shrink-0" style={{ color: meta?.tone }} />
-      <span className="min-w-0 flex-1 truncate font-medium text-ink">
-        {task.title}
-      </span>
-      <span className="hidden shrink-0 text-[10px] font-medium sm:inline" style={{ color: meta?.tone }}>
+      <meta.Icon className="h-3.5 w-3.5" style={{ color: meta?.tone }} />
+      <span className="min-w-0 truncate font-medium text-ink">{task.title}</span>
+      <span
+        className="truncate text-[10px] font-medium"
+        style={{ color: meta?.tone }}
+      >
         {meta?.label}
       </span>
-      <span className="w-24 shrink-0 text-right text-[10px] text-faint" title={new Date(when).toLocaleString("es-CL")}>
+      <span
+        className="truncate text-right text-[10px] text-faint"
+        title={new Date(when).toLocaleString("es-CL")}
+      >
         {formatRelative(when)}
       </span>
-      {clickupHref && !task.clickupDetached && (
+      {clickupHref && !task.clickupDetached ? (
         <a
           href={clickupHref}
           target="_blank"
           rel="noopener noreferrer"
           onClick={(e) => e.stopPropagation()}
           title="Abrir en ClickUp"
-          className="shrink-0 rounded-el p-0.5 text-faint hover:text-accent"
+          className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
+      ) : (
+        // Columna reservada: sin esto, "Ver" baila cuando no hay link.
+        <span />
       )}
-      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-faint">
+      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-faint">
         <Eye className="h-3 w-3" /> Ver
       </span>
     </div>
