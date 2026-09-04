@@ -337,6 +337,16 @@ export const agentOverview = query({
     const cut = since ?? Date.now() - 24 * 60 * 60 * 1000;
     const pick = (states: string[]) =>
       delegated.filter((t) => states.includes(t.agentState!));
+    // Historial: delegaciones terminadas de días ANTERIORES (las de hoy viven
+    // en `done`, en el pipeline). Sin esto, al pasar el día la tarea desaparecía
+    // de la vista y con ella corridas, pasos y resúmenes — el trabajo hecho por
+    // el agente dejaba de ser consultable (pedido explícito de Cris).
+    const history = [
+      ...pick(["hecho"]).filter((t) => (t.completedAt ?? t.updatedAt) < cut),
+      ...pick(["cancelada"]),
+    ]
+      .sort((a, b) => (b.completedAt ?? b.updatedAt) - (a.completedAt ?? a.updatedAt))
+      .slice(0, 50);
     return {
       queue: pick(["encolada"]),
       working: pick(["despachada", "trabajando"]),
@@ -345,6 +355,7 @@ export const agentOverview = query({
         (t) => (t.completedAt ?? t.updatedAt) >= cut,
       ),
       cancelled: pick(["cancelada"]),
+      history,
     };
   },
 });

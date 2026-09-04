@@ -20,6 +20,7 @@ import {
   Zap,
   Clock3,
   ChevronDown,
+  ExternalLink,
   GitBranch,
   ChartColumn,
 } from "lucide-react";
@@ -99,13 +100,27 @@ function AgentCard({
   const meta = AGENT_STATE_META[state];
   const typeMeta = task.taskType ? TASK_TYPE_META[task.taskType as TaskType] : null;
   const working = ["despachada", "trabajando"].includes(state);
+  // Link a ClickUp: desvinculada = ya no le pertenece a ClickUp.
+  const clickupHref =
+    task.clickupUrl ??
+    (task.clickupId ? `https://app.clickup.com/t/${task.clickupId}` : undefined);
 
   // Tono de fase: borde izquierdo + tinte sutil del estado.
+  // div role=button (y no <button>): el footer necesita un <a> real a ClickUp,
+  // y anclar interactive content dentro de un button es HTML inválido.
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
       className={cn(
-        "block w-full overflow-hidden rounded-el border-el border-line bg-panel2/40 p-3 text-left transition-colors hover:bg-panel2",
+        "block w-full cursor-pointer overflow-hidden rounded-el border-el border-line bg-panel2/40 p-3 text-left transition-colors hover:bg-panel2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
         meta?.pulse && "border-fuchsia-500/40",
       )}
       style={{ borderLeftWidth: "3px", borderLeftColor: meta?.tone }}
@@ -215,6 +230,20 @@ function AgentCard({
             {task.notifyWhatsapp === "final" ? "resultado" : "periódico"}
           </span>
         )}
+        {/* Link a la tarea en ClickUp: ver cómo quedó allá sin abrir nada más. */}
+        {clickupHref && !task.clickupDetached && (
+          <a
+            href={clickupHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            title="Abrir esta tarea en ClickUp"
+            className="inline-flex items-center gap-1 rounded-el border-el border-line px-1.5 py-0.5 text-[10px] font-medium text-mute transition-colors hover:border-accent/40 hover:text-accent"
+          >
+            <ExternalLink className="h-3 w-3" />
+            ClickUp
+          </a>
+        )}
         <span className="ml-auto flex items-center gap-1.5">
           {state === "para-revision" && (
             <span
@@ -240,7 +269,7 @@ function AgentCard({
           </span>
         </span>
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -267,6 +296,70 @@ function Section({
         </p>
       ) : (
         <div className="space-y-2">{children}</div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Historial de delegaciones terminadas (hecho de días anteriores + canceladas).
+ * Reutiliza AgentCard: al tocarla se abre el panel de corridas completo, igual
+ * que en el pipeline — el pasado se consulta con el mismo detalle que el hoy.
+ */
+function HistorySection({
+  items,
+  onOpen,
+}: {
+  items: OverviewTask[];
+  onOpen: (t: OverviewTask) => void;
+}) {
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem("agent-history-open") !== "0";
+    } catch {
+      return true;
+    }
+  });
+  function toggle() {
+    setOpen((v) => {
+      try {
+        localStorage.setItem("agent-history-open", v ? "0" : "1");
+      } catch {
+        /* sin localStorage: igual colapsa visualmente */
+      }
+      return !v;
+    });
+  }
+  if (items.length === 0) return null;
+  return (
+    <section>
+      <button
+        onClick={toggle}
+        aria-expanded={open}
+        className="mb-2 flex w-full items-center gap-2 text-left text-xs font-semibold uppercase tracking-wide text-mute hover:text-ink"
+      >
+        <ChevronDown
+          className={cn("h-4 w-4 shrink-0 text-faint transition-transform", open && "rotate-180")}
+        />
+        Historial del agente
+        <span className="rounded-full bg-panel2 px-1.5 py-0.5 text-[10px] font-normal text-faint">
+          {items.length}
+        </span>
+        <span className="ml-auto text-[10px] font-normal normal-case text-faint">
+          terminadas de días anteriores
+        </span>
+      </button>
+      {open && (
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+          {items.map((t) => (
+            <AgentCard
+              key={t._id}
+              task={t}
+              onOpen={() => onOpen(t)}
+              onApprove={() => undefined}
+            />
+          ))}
+        </div>
       )}
     </section>
   );
@@ -636,6 +729,14 @@ export function AgentView() {
           ))}
         </Section>
       </div>
+
+      {/* Historial del agente: delegaciones terminadas de días anteriores.
+          Colapsable con memoria — el trabajo del agente queda consultable
+          para siempre (corridas, pasos y resúmenes al tocar la tarjeta). */}
+      <HistorySection
+        items={overview?.history ?? []}
+        onOpen={(t) => setPanelTask(t)}
+      />
 
       {/* Contrato del agente: visible y editable (reglas + recetas por tipo) */}
       <AgentContractSection />

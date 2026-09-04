@@ -8,6 +8,7 @@ import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2, Shuffle, FolderOpen, FileText,
+  ExternalLink,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -56,6 +57,9 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
     void navigator.clipboard.writeText(text).then(() => toast.success("Ruta copiada"));
   };
   const isReporte = task.taskType === "reporte";
+  const clickupHref =
+    task.clickupUrl ??
+    (task.clickupId ? `https://app.clickup.com/t/${task.clickupId}` : undefined);
   return (
     <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
       <label className="label mb-1.5 flex items-center gap-1.5">
@@ -70,6 +74,17 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
         >
           <FolderOpen className="h-3.5 w-3.5" /> Abrir carpeta
         </button>
+        {clickupHref && !task.clickupDetached && (
+          <a
+            href={clickupHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+            title="Abrir esta tarea en ClickUp y ver cómo quedó"
+          >
+            <ExternalLink className="h-3.5 w-3.5" /> Ver en ClickUp
+          </a>
+        )}
         {isReporte ? (
           <button
             onClick={() => open("file", `${task.workspacePath}\\CAMBIOS.md`)}
@@ -253,6 +268,11 @@ export function AgentRunsPanel({
   const state = (t.agentState ?? null) as AgentState | null;
   const typeMeta = t.taskType ? TASK_TYPE_META[t.taskType as TaskType] : null;
   const autoMeta = t.autonomy ? AUTONOMY_META[t.autonomy as Autonomy] : null;
+  // Link a ClickUp: visible siempre que la tarea esté vinculada (cualquier
+  // estado de la delegación). Desvinculada = ya no le pertenece a ClickUp.
+  const clickupHref =
+    t.clickupUrl ??
+    (t.clickupId ? `https://app.clickup.com/t/${t.clickupId}` : undefined);
 
   async function act(fn: () => Promise<unknown>, okMsg: string) {
     setActing(true);
@@ -348,6 +368,18 @@ export function AgentRunsPanel({
                   {autoMeta && <span>· {autoMeta.label}</span>}
                   {task.model && (
                     <span className="font-mono">· {task.model.split("/").pop()}</span>
+                  )}
+                  {clickupHref && !t.clickupDetached && (
+                    <a
+                      href={clickupHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-accent hover:underline"
+                      title="Abrir esta tarea en ClickUp"
+                    >
+                      <ExternalLink className="h-3 w-3" />
+                      Abrir en ClickUp
+                    </a>
                   )}
                 </div>
               </div>
