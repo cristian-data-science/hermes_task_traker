@@ -399,9 +399,10 @@ function HistorySection({
 }
 
 /** Una línea del historial: estado · título · cuándo · link ClickUp · ver.
- *  GRID de columnas fijas (y no flex): con flex, la posición del estado y la
- *  fecha dependía del largo del título y se veía desalineado (reporte de Cris).
- *  Columnas: icono | título (elástico) | estado | fecha | ClickUp | ver. */
+ *  GRID con TODAS las columnas en medida fija (solo el título es 1fr):
+ *  cada fila es su propia grilla, así que cualquier columna "auto" se medía
+ *  contra el contenido DE ESA fila y las filas quedaban desalineadas entre sí
+ *  (segundo reporte de Cris). Fijas, se alinean píxel a píxel siempre. */
 function HistoryRow({
   task,
   zebra,
@@ -434,8 +435,7 @@ function HistoryRow({
         zebra && "bg-panel/40",
       )}
       style={{
-        gridTemplateColumns:
-          "auto minmax(0, 1fr) 4.5rem 6rem auto auto",
+        gridTemplateColumns: "1.25rem minmax(0, 1fr) 4.5rem 5.5rem 1.75rem 2.5rem",
       }}
     >
       <meta.Icon className="h-3.5 w-3.5" style={{ color: meta?.tone }} />
@@ -464,10 +464,11 @@ function HistoryRow({
           <ExternalLink className="h-3.5 w-3.5" />
         </a>
       ) : (
-        // Columna reservada: sin esto, "Ver" baila cuando no hay link.
+        // Columna fija reservada: el hueco mantiene la alineación aunque la
+        // tarea no tenga ClickUp.
         <span />
       )}
-      <span className="inline-flex items-center gap-1 text-[10px] font-medium text-faint">
+      <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] font-medium text-faint">
         <Eye className="h-3 w-3" /> Ver
       </span>
     </div>
