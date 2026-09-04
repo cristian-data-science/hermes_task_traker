@@ -14,6 +14,7 @@ import {
   ClipboardCheck,
   Download,
   Sparkles,
+  ChartColumn,
 } from "lucide-react";
 import {
   AREAS,
@@ -26,7 +27,13 @@ import {
 import { THEMES, THEME_META, type ThemeId } from "../hooks/useTheme";
 import { cn, AGENT_UI_ENABLED } from "../lib/utils";
 
-export type ViewMode = "kanban" | "list" | "calendar" | "catchup" | "agente";
+export type ViewMode =
+  | "kanban"
+  | "list"
+  | "calendar"
+  | "catchup"
+  | "agente"
+  | "insights";
 
 interface ToolbarProps {
   view: ViewMode;
@@ -174,6 +181,12 @@ export function Toolbar({
                 onClick={() => onViewChange("catchup")}
                 icon={<ClipboardCheck className="h-4 w-4" />}
                 label="Catch-up"
+              />
+              <ViewButton
+                active={view === "insights"}
+                onClick={() => onViewChange("insights")}
+                icon={<ChartColumn className="h-4 w-4" />}
+                label="Insights"
               />
               {/* Centro de mando del agente (solo web). */}
               {AGENT_UI_ENABLED && (
