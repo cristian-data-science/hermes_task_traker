@@ -124,6 +124,12 @@ export function TaskCard({
   layoutAnim = true,
 }: TaskCardProps) {
   const isCompleted = task.status === "completado";
+  // URL de ClickUp con fallback: toda tarea con clickupId es abrible aunque
+  // no tenga la URL guardada (filas viejas o creaciones cuyo _markSynced
+  // quedó corto). Desvinculada nunca es abrollable.
+  const clickupHref =
+    task.clickupUrl ??
+    (task.clickupId ? `https://app.clickup.com/t/${task.clickupId}` : undefined);
   const superUrgent = isSuperUrgent(task);
 
   return (
@@ -347,9 +353,9 @@ export function TaskCard({
             <Unlink className="h-3 w-3" />
             Desvinculada
           </span>
-        ) : task.clickupUrl ? (
+        ) : clickupHref ? (
           <a
-            href={task.clickupUrl}
+            href={clickupHref}
             target="_blank"
             rel="noopener noreferrer"
             data-no-dnd
@@ -357,13 +363,15 @@ export function TaskCard({
             title={
               task.clickupSyncError
                 ? `ClickUp: error de sync — ${task.clickupSyncError}`
-                : "Ver en ClickUp"
+                : "Abrir en ClickUp"
             }
             className={cn(
-              "inline-flex items-center gap-1",
+              // Pill con borde: antes era texto pelado ("ClickUp") al final
+              // del footer y nadie lo encontraba — peditorio explícito de Cris.
+              "inline-flex items-center gap-1 rounded-el border-el px-1.5 py-0.5 text-[10px] font-medium transition-colors",
               task.clickupSyncError
-                ? "text-danger"
-                : "text-mute hover:text-accent",
+                ? "border-danger/40 text-danger hover:bg-panel2"
+                : "border-line text-mute hover:border-accent/40 hover:bg-panel2 hover:text-accent",
             )}
           >
             {task.clickupSyncError ? (

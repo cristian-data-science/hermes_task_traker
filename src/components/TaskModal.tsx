@@ -720,8 +720,13 @@ export function TaskModal({
                   )}
                   {/* Estado de sync / link. Se muestra también SIN clickupUrl:
                       una creación en ClickUp que falló no tiene URL, y antes
-                      el error quedaba invisible (la tarea parecía "Local"). */}
-                  {isEdit && (task?.clickupUrl || task?.clickupSyncError) && (
+                      el error quedaba invisible (la tarea parecía "Local").
+                      Con clickupId la URL se puede reconstruir, así que el
+                      link también aparece en ese caso. */}
+                  {isEdit &&
+                    (task?.clickupUrl ||
+                      task?.clickupId ||
+                      task?.clickupSyncError) && (
                     <div className="mt-2 flex flex-col gap-0.5 text-xs">
                       {task.clickupSyncError ? (
                         <>
@@ -746,7 +751,10 @@ export function TaskModal({
                         </>
                       ) : (
                         <a
-                          href={task.clickupUrl}
+                          href={
+                            task.clickupUrl ??
+                            `https://app.clickup.com/t/${task.clickupId}`
+                          }
                           target="_blank"
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 text-accent hover:underline"
