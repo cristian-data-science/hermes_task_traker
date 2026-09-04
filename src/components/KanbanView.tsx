@@ -3,6 +3,8 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import {
   DndContext,
@@ -92,6 +94,10 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<Status | null>(null);
+  // Panéo horizontal con la ruedita (middle-drag): agarrás el tablero y lo
+  // arrastrás como un dedo en pantalla. `panning` solo alimenta el cursor.
+  const [panning, setPanning] = useState(false);
+  const panRef = useRef<{ startX: number; startScroll: number } | null>(null);
   const { isHidden, toggle, showAll, hidden } = useHiddenColumns();
   const { enabled: groupByProject, toggle: toggleGrouping } =
     useGroupByProject();
@@ -237,6 +243,64 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
     cols[target].scrollIntoView({ behavior: "smooth", inline: "start", block: "nearest" });
   }
   latestServer.current = serverCols;
+
+  // ===== Panéo horizontal con la ruedita (middle-drag) =====
+
+  /** ¿Este middle-click es candidato a panéo? Los <a> conservan su gesto
+      nativo (ruedita sobre el link de ClickUp = abrir en pestaña nueva) y
+      durante un drag de tarea no se pelea el puntero. */
+  function isPanCandidate(e: {
+    button: number;
+    target: EventTarget | null;
+  }): boolean {
+    return (
+      e.button === 1 &&
+      !activeId &&
+      !((e.target as HTMLElement | null)?.closest?.("a") ?? false)
+    );
+  }
+
+  /** Fase captura ANTES de que el evento llegue a las tarjetas: arranca el
+      panéo y frena la propagación (así dnd-kit jamás ve la ruedita). */
+  function handleBoardPanDown(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!isPanCandidate(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = boardScrollRef.current;
+    if (!el) return;
+    panRef.current = { startX: e.clientX, startScroll: el.scrollLeft };
+    // Captura del puntero: el gesto sigue aunque el mouse salga del tablero.
+    el.setPointerCapture(e.nativeEvent.pointerId);
+    setPanning(true);
+  }
+
+  /** El mousedown de la ruedita tiene como acción default el autoscroll
+      nativo del navegador; se anula acá porque pointerdown preventDefault
+      no lo cubre. Solo cuando el gesto es nuestro (mismo filtro). */
+  function handleBoardMouseDown(e: ReactMouseEvent<HTMLDivElement>) {
+    if (isPanCandidate(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+
+  function handleBoardPanMove(e: ReactPointerEvent<HTMLDivElement>) {
+    const pan = panRef.current;
+    const el = boardScrollRef.current;
+    if (!pan || !el) return;
+    el.scrollLeft = pan.startScroll - (e.clientX - pan.startX);
+  }
+
+  function handleBoardPanEnd(e: ReactPointerEvent<HTMLDivElement>) {
+    if (!panRef.current) return;
+    panRef.current = null;
+    setPanning(false);
+    try {
+      boardScrollRef.current?.releasePointerCapture(e.pointerId);
+    } catch {
+      // El capture ya se liberó solo (p.ej. pointer cancelado): no importa.
+    }
+  }
 
   function findContainer(id: string): Status | null {
     if ((KANBAN_COLUMNS as string[]).includes(id)) return id as Status;
@@ -588,8 +652,14 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
             estado completo; con la preferencia OFF, scroll libre como siempre. */}
         <div
           ref={boardScrollRef}
+          onPointerDownCapture={handleBoardPanDown}
+          onMouseDownCapture={handleBoardMouseDown}
+          onPointerMove={handleBoardPanMove}
+          onPointerUp={handleBoardPanEnd}
+          onPointerCancel={handleBoardPanEnd}
           className={cn(
             "flex h-full min-w-0 flex-1 gap-3 overflow-x-auto px-1 pb-2",
+            panning && "cursor-ew-resize select-none",
             activeId
               ? "snap-none"
               : snapEnabled
