@@ -16,7 +16,6 @@ import {
   Folder,
   Eye,
   Check,
-  MessageCircle,
   Zap,
   Clock3,
   ChevronDown,
@@ -434,7 +433,7 @@ function HistoryRow({
         zebra && "bg-panel/40",
       )}
       style={{
-        gridTemplateColumns: "1.25rem minmax(0, 1fr) 4.5rem 5.5rem 1.75rem 1.75rem 2.5rem",
+        gridTemplateColumns: "1.25rem minmax(0, 1fr) 4.5rem 5.5rem 1.75rem 2.5rem",
       }}
     >
       <meta.Icon className="h-3.5 w-3.5" style={{ color: meta?.tone }} />
@@ -451,18 +450,6 @@ function HistoryRow({
       >
         {formatRelative(when)}
       </span>
-      {task.agentSessionId && task.workspacePath ? (
-        <a
-          href={`hermesagent://zcode?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}`}
-          onClick={(e) => e.stopPropagation()}
-          title="Abrir ZCode desktop en la carpeta de esta tarea (la sesión, si sigue viva, aparece en la lista de esa carpeta)"
-          className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"
-        >
-          <MessageCircle className="h-3.5 w-3.5" />
-        </a>
-      ) : (
-        <span />
-      )}
       {clickupHref && !task.clickupDetached ? (
         <a
           href={clickupHref}
