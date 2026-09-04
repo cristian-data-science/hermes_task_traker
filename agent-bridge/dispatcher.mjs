@@ -324,7 +324,9 @@ async function dispatchTaskInner({ task, workspace }, run) {
   try {
     const claimed = await m("agent:claimTask", {
       taskId,
-      resumed: !!task.agentSessionId,
+      // resumed = la corrida RETOMA una sesión previa (el rollout sigue vivo),
+      // no solo "la tarea tenía un sessionId guardado" (puede estar rotado).
+      resumed: sessAlive,
       workspacePath: folder,
     });
     runId = claimed.runId;
@@ -338,6 +340,15 @@ async function dispatchTaskInner({ task, workspace }, run) {
   const prompt = buildPrompt({ task, workspacePath: folder, runId, followUp, resumed: !!task.agentSessionId, contract });
   const mode = AUTONOMY_MODE[task.autonomy] ?? "yolo";
   const needsSwap = run.effectiveModel !== defaultModel;
+  // Resume REAL de la sesión del agente (la intención documentada en el
+  // schema, nunca implementada): si el rollout de esa sesión sigue vivo en
+  // ZCode, el agente retoma TODO su contexto (para seguir trabajo o para
+  // responder preguntas sobre lo que hizo). Si fue rotado (ZCode limpia los
+  // viejos), se despacha sin resume y contesta desde el prompt + artefactos.
+  const sessFile = task.agentSessionId
+    ? path.join(ROLLOUT_DIR, `model-io-${task.agentSessionId}.jsonl`)
+    : null;
+  const sessAlive = sessFile ? existsSync(sessFile) : false;
   // Sin --disallowed-tools: en 0.16.5 un spec "Bash(...)" tumba la
   // herramienta Bash entera (ver config.mjs). Los límites de git son
   // contractuales (prompt).
@@ -357,6 +368,7 @@ async function dispatchTaskInner({ task, workspace }, run) {
     ZCODE_CLI,
     "-p",
     prompt,
+    ...(sessAlive ? ["--resume", task.agentSessionId] : []),
     "--cwd",
     folder,
     "--mode",
