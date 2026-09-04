@@ -370,6 +370,17 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
       day: r.day,
       resolvedAt: r.resolvedAt ?? null,
       promotedAt: r.promotedAt ?? null,
+      /**
+       * ¿La tarea promovida ya se completó? Sin esto, el catch-up mostraría
+       * "→ tarea" eterno aunque el trabajo ya esté hecho: el imprevisto en sí
+       * nunca se "resuelve", lo que se resuelve es la tarea a la que se
+       * transformó. Resuelto contra el tablero en vivo (los snapshots viejos
+       * quedan congelados con lo que se veía entonces, como todo el resumen).
+       */
+      taskDone:
+        r.promotedTaskId !== undefined
+          ? tasksById.get(r.promotedTaskId)?.status === "completado"
+          : false,
     }))
     .sort((a, b) => a.day - b.day);
 

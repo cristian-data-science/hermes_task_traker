@@ -705,19 +705,35 @@ function ImprevistoRow({
   const promotedTask = imprevisto.promotedTaskId
     ? taskMap.get(imprevisto.promotedTaskId)
     : undefined;
+  // La fila promovida hereda el estado de SU tarea: si la tarea ya está
+  // completada, el imprevisto se muestra resuelto (el trabajo está hecho);
+  // mientras la tarea viva siga abierta, queda "en curso" con su flechita.
+  const promotedTaskDone =
+    promotedTask !== undefined && promotedTask.status === "completado";
   const daysOpen = differenceInCalendarDays(new Date(today), new Date(imprevisto.day)) + 1;
 
   return (
     <li className="group flex items-center gap-2 rounded-el px-1 py-1 hover:bg-panel2">
-      {/* Check: resolver / reabrir. Promovidos se congelan: su "check" es el
-          salto a la tarea (el trabajo NO está hecho, cambió de forma). */}
+      {/* Izquierda: el estado real del trabajo. Resuelto → check verde
+          (clic = reabrir). Promovido con tarea completada → check verde
+          punteado (se resuelve desde la tarea, no desde acá). Promovido
+          en curso → flechita. Abierto → check para resolver. */}
       {promoted ? (
-        <span
-          className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-dashed border-accent text-accent"
-          title="Se transformó en tarea"
-        >
-          <ArrowUpRight className="h-3 w-3" />
-        </span>
+        promotedTaskDone ? (
+          <span
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-dashed border-[var(--status-completado)] bg-[var(--status-completado)] text-white"
+            title="La tarea promovida está completada"
+          >
+            <Check className="h-3.5 w-3.5" strokeWidth={3} />
+          </span>
+        ) : (
+          <span
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-dashed border-accent text-accent"
+            title="Se transformó en tarea (en curso)"
+          >
+            <ArrowUpRight className="h-3 w-3" />
+          </span>
+        )
       ) : (
         <button
           onClick={onResolve}
@@ -737,8 +753,9 @@ function ImprevistoRow({
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-sm",
-          // Solo lo RESUELTO se tacha: promovido no está hecho, se graduó.
-          resolved ? "text-faint line-through" : "text-ink",
+          // Tachado solo cuando el trabajo REALMENTE terminó: resuelto, o
+          // promovido cuya tarea ya está completada.
+          resolved || promotedTaskDone ? "text-faint line-through" : "text-ink",
         )}
         title={imprevisto.clickupSyncError ?? imprevisto.title}
       >
@@ -764,16 +781,27 @@ function ImprevistoRow({
         </span>
       )}
 
-      {/* Promover → saltar a la tarea creada. */}
+      {/* Promover → saltar a la tarea creada (viva: botón; eliminada: estático). */}
       {promoted &&
         (promotedTask ? (
           <button
             onClick={() => onEditTask(promotedTask)}
-            title="Ver la tarea creada (en-curso, en tus Planeadas de hoy)"
+            title={
+              promotedTaskDone
+                ? "Ver la tarea (completada)"
+                : "Ver la tarea (en curso, en tus Planeadas de hoy)"
+            }
             className="shrink-0 rounded-el border-el border-accent/40 bg-accent/10 px-1.5 text-[10px] font-semibold text-accent hover:bg-accent/20"
           >
-            → tarea
+            → tarea{promotedTaskDone ? " ✓" : ""}
           </button>
+        ) : imprevisto.promotedTaskId ? (
+          <span
+            className="shrink-0 rounded-el border-el border-line px-1.5 text-[10px] font-medium text-faint"
+            title="La tarea promovida fue eliminada del tablero"
+          >
+            → tarea
+          </span>
         ) : (
           <span className="shrink-0 text-[10px] text-faint" title="Creando la tarea…">
             promoviendo…
