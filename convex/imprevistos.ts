@@ -31,6 +31,7 @@ import { v } from "convex/values";
 import { requireAuth } from "./authGuard";
 import { internal } from "./_generated/api";
 import { logEvent } from "./events";
+import { softDeleteTask } from "./tasks";
 
 const sessionArg = { sessionToken: v.string() };
 
@@ -145,6 +146,60 @@ export const create = mutation({
     });
 
     // El sweep procesa este imprevisto y reintenta los pendientes previos.
+    await ctx.scheduler.runAfter(0, internal.imprevistosSync.sweepPending, {});
+    return id;
+  },
+});
+
+/**
+ * Convierte una tarea del tablero en imprevisto del día (el camino inverso
+ * de promover): a veces cargás una tarea y después te das cuenta de que era
+ * trabajo no planificado que se te coló.
+ *
+ * Es un MOVE, no una copia: la tarea sale del tablero con la MISMA semántica
+ * que `tasks.remove` (borrado lógico de tarea + subtareas, evento en la
+ * bitácora y DELETE de su contraparte en ClickUp agendado) y nace un
+ * imprevisto con el mismo título para el día indicado, que a su vez el sweep
+ * sincroniza como subtask de "Imprevistos Cris". En ClickUp neto: la tarea
+ * vieja se borra y aparece la subtask del imprevisto.
+ *
+ * `movedFromTaskId` deja la traza de origen (la tarea borrada sigue en la
+ * DB para auditoría).
+ */
+export const createFromTask = mutation({
+  args: { ...sessionArg, taskId: v.id("tasks"), day: v.number() },
+  handler: async (ctx, { sessionToken, taskId, day }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+
+    const now = Date.now();
+    // Desplazar +1 los activos del día para dejar order 0 arriba.
+    const dayRows = await ctx.db
+      .query("imprevistos")
+      .withIndex("by_day", (q) => q.eq("day", day))
+      .collect();
+    const active = dayRows
+      .filter((r) => r.deletedAt === undefined)
+      .sort((a, b) => a.order - b.order);
+    await Promise.all(
+      active.map((r, i) => ctx.db.patch(r._id, { order: i + 1, updatedAt: now })),
+    );
+
+    const id = await ctx.db.insert("imprevistos", {
+      title: task.title.slice(0, TITLE_MAX),
+      day,
+      order: 0,
+      open: true,
+      movedFromTaskId: taskId,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    // La tarea sale del tablero (mismo criterio que el botón Eliminar).
+    await softDeleteTask(ctx, task, sessionToken, now);
+    // El imprevisto nuevo busca su subtask en ClickUp (sweep + reintentos).
     await ctx.scheduler.runAfter(0, internal.imprevistosSync.sweepPending, {});
     return id;
   },

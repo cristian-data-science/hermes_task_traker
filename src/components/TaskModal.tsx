@@ -29,6 +29,7 @@ import {
   Zap,
 } from "lucide-react";
 import toast from "react-hot-toast";
+import { startOfDay } from "date-fns";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
 import { CatchupNoteField } from "./CatchupPinButton";
@@ -89,6 +90,7 @@ export function TaskModal({
   const updateTask = useMutation(api.tasks.update);
   const removeTask = useMutation(api.tasks.remove);
   const detachFromClickup = useMutation(api.tasks.detachFromClickup);
+  const convertToImprevisto = useMutation(api.imprevistos.createFromTask);
 
   // Sub-tareas
   const subtasks = useQuery(
@@ -361,6 +363,43 @@ export function TaskModal({
       onClose();
     } catch (err) {
       toast.error("No se pudo eliminar");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  /**
+   * Convierte la tarea en imprevisto de hoy (el camino inverso de promover):
+   * la tarea sale del tablero —y su contraparte de ClickUp se borra por el
+   * flujo estándar de eliminación— y nace un imprevisto con el mismo título
+   * en el panel Hoy, que se sincroniza como subtask de "Imprevistos Cris".
+   */
+  async function handleConvertToImprevisto() {
+    if (!task) return;
+    if (
+      !confirm(
+        `¿Convertir "${task.title}" en imprevisto de hoy?\n\n` +
+          `• La tarea sale del tablero (y se borra de ClickUp si estaba sincronizada).\n` +
+          `• Aparece como imprevisto en el panel Hoy, vinculado como subtask de "Imprevistos Cris".`,
+      )
+    )
+      return;
+    setSaving(true);
+    try {
+      await convertToImprevisto({
+        sessionToken: token!,
+        taskId: task._id,
+        day: startOfDay(new Date()).getTime(),
+      });
+      toast.success("Convertida en imprevisto de hoy");
+      // Invalidar el borrador: la tarea ya no existe como tal.
+      lastCtx.current = null;
+      setHydratedKey(null);
+      onClose();
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "No se pudo convertir en imprevisto",
+      );
     } finally {
       setSaving(false);
     }
@@ -921,6 +960,17 @@ export function TaskModal({
                     <span className="hidden sm:inline">
                       Desvincular de ClickUp
                     </span>
+                  </button>
+                )}
+                {isEdit && (
+                  <button
+                    onClick={handleConvertToImprevisto}
+                    disabled={saving}
+                    className="btn-ghost text-mute hover:bg-panel2 hover:text-ink"
+                    title="La tarea sale del tablero (y de ClickUp) y pasa a ser un imprevisto de hoy en el panel Hoy."
+                  >
+                    <Zap className="h-4 w-4" />
+                    <span className="hidden sm:inline">Convertir en imprevisto</span>
                   </button>
                 )}
                 {isEdit && (
