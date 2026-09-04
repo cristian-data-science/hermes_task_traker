@@ -32,8 +32,11 @@ export class MouseSensor extends LibMouseSensor {
         { nativeEvent: event }: MouseEvent,
         { onActivation }: MouseSensorOptions,
       ) => {
-        // Botón derecho o zona protegida → no arrastrar
-        if (event.button === 2 || isNoDndTarget(event.target)) return false;
+        // SOLO el botón izquierdo arrastra. La ruedita (middle, button=1)
+        // queda libre para el panéo horizontal del tablero (KanbanView) y
+        // el derecho abre menú contextual. Sin este filtro, dnd-kit tratába
+        // la ruedita igual que el izquierdo y arrastraba la tarjeta.
+        if (event.button !== 0 || isNoDndTarget(event.target)) return false;
         onActivation?.({ event });
         return true;
       },
