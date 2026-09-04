@@ -8,7 +8,7 @@ import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2, Shuffle, FolderOpen, FileText,
-  ExternalLink,
+  ExternalLink, MessageCircle,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -81,6 +81,17 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
           >
             <ExternalLink className="h-3.5 w-3.5" /> Ver en ClickUp
           </a>
+        )}
+        {task.agentSessionId && (
+          <button
+            onClick={() => {
+              window.location.href = `hermesagent://zcode?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}`;
+            }}
+            className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+            title="Abrir una terminal con ZCode retomando la sesión de esta tarea: preguntale sobre las decisiones, el reporte o pedile ajustes con todo el contexto."
+          >
+            <MessageCircle className="h-3.5 w-3.5" /> Discutir en ZCode
+          </button>
         )}
         {isReporte ? (
           <button

@@ -23,8 +23,7 @@ import {
   ExternalLink,
   GitBranch,
   ChartColumn,
-} from "lucide-react";
-import toast from "react-hot-toast";
+} from "lucide-react";import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
@@ -435,7 +434,7 @@ function HistoryRow({
         zebra && "bg-panel/40",
       )}
       style={{
-        gridTemplateColumns: "1.25rem minmax(0, 1fr) 4.5rem 5.5rem 1.75rem 2.5rem",
+        gridTemplateColumns: "1.25rem minmax(0, 1fr) 4.5rem 5.5rem 1.75rem 1.75rem 2.5rem",
       }}
     >
       <meta.Icon className="h-3.5 w-3.5" style={{ color: meta?.tone }} />
@@ -452,6 +451,18 @@ function HistoryRow({
       >
         {formatRelative(when)}
       </span>
+      {task.agentSessionId && task.workspacePath ? (
+        <a
+          href={`hermesagent://zcode?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}`}
+          onClick={(e) => e.stopPropagation()}
+          title="Discutir en ZCode: abre una terminal retomando la sesión de esta tarea, con todo el contexto de lo que hizo"
+          className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"
+        >
+          <MessageCircle className="h-3.5 w-3.5" />
+        </a>
+      ) : (
+        <span />
+      )}
       {clickupHref && !task.clickupDetached ? (
         <a
           href={clickupHref}
