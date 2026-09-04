@@ -96,10 +96,17 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
   ElseIf mode = "zcode" Then
     ' La sesión va a parar a una línea de comandos: solo tokens seguros
     ' (sess_ + hex/guiones/guion_bajo) para que nadie pueda inyectar nada.
+    '
+    ' POR QUÉ LA APP DESKTOP Y NO EL CLI EN TERMINAL: el TUI interactivo
+    ' importa @zcode/tui, que vive empaquetado DENTRO del app.asar del
+    ' desktop — un node pelado no lo resuelve ("Cannot find package") y el
+    ' CLI headless (-p) funciona porque no importa ese paquete. El desktop
+    ' además comparte las sesiones de ~/.zcode/cli, así que la sesión de la
+    ' tarea aparece en su lista. Le pasamos session por si el deep-link la
+    ' honra; si no, al menos abre el workspace correcto.
     If Len(session) > 10 And IsSafeToken(session) Then
-      ' cmd /k deja la ventana abierta con el TUI interactivo de ZCode.
       CreateObject("WScript.Shell").Run _
-        "cmd /k cd /d """ & path & """ && node ""C:\Users\patag\AppData\Local\Programs\ZCode\resources\glm\zcode.cjs"" --resume " & session, _
+        """C:\Users\patag\AppData\Local\Programs\ZCode\ZCode.exe"" ""zcode://workspace/open?path=" & URLEnc(path) & "&session=" & session & """", _
         1, False
     End If
   Else
@@ -144,6 +151,25 @@ Function URLDecode(s)
   r = Replace(r, "%C3%81", "Á")
   r = Replace(r, "%26", "&")
   URLDecode = r
+End Function
+
+' Codifica un valor para usarlo como parámetro de URL (percent-encoding de
+' todo lo que no sea [A-Za-z0-9-_.~]).
+Function URLEnc(s)
+  Dim r, i, c, code
+  r = ""
+  For i = 1 To Len(s)
+    c = Mid(s, i, 1)
+    code = AscW(c)
+    If (code >= 48 And code <= 57) Or (code >= 65 And code <= 90) _
+       Or (code >= 97 And code <= 122) Or code = 45 Or code = 46 _
+       Or code = 95 Or code = 126 Then
+      r = r & c
+    Else
+      r = r & "%" & Right("0" & Hex(code), 2)
+    End If
+  Next
+  URLEnc = r
 End Function
 
 ' true si todos los caracteres son [A-Za-z0-9_-] (ids de sesión: sess_<hex>).
