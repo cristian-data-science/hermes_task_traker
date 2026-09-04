@@ -455,7 +455,7 @@ function HistoryRow({
         <a
           href={`hermesagent://zcode?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}`}
           onClick={(e) => e.stopPropagation()}
-          title="Discutir en ZCode: abre una terminal retomando la sesión de esta tarea, con todo el contexto de lo que hizo"
+          title="Abrir ZCode desktop en la carpeta de esta tarea (la sesión, si sigue viva, aparece en la lista de esa carpeta)"
           className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"
         >
           <MessageCircle className="h-3.5 w-3.5" />
