@@ -585,42 +585,59 @@ export const remove = mutation({
     const task = await ctx.db.get(id);
     if (!task || task.deletedAt !== undefined)
       throw new Error("Tarea no encontrada");
-    // Marcar sub-tareas asociadas como borradas
-    const subtasks = await ctx.db
-      .query("subtasks")
-      .withIndex("by_task", (q) => q.eq("taskId", id))
-      .collect();
-    await Promise.all(
-      subtasks
-        .filter((s) => s.deletedAt === undefined)
-        .map((s) => ctx.db.patch(s._id, { deletedAt: now, updatedAt: now })),
-    );
-    await ctx.db.patch(id, { deletedAt: now, updatedAt: now });
-
-    // ===== Bitácora =====
-    // El evento sobrevive a la tarea: si la borraste el jueves, el catch-up
-    // igual puede contar que existió y qué pasó con ella esa semana.
-    await logEvent(ctx, {
-      taskId: id,
-      kind: "deleted",
-      task,
-      at: now,
-      fromStatus: task.status,
-    });
-
-    // ===== Sync ClickUp: eliminar en ClickUp si estaba sincronizada =====
-    // Al borrar en Hermes, borramos también en ClickUp (la tarea vino de acá).
-    // El handler de op="delete" hace DELETE a ClickUp y desvincula la tarea.
-    if (task.area === "patagonia") {
-      await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
-        sessionToken,
-        taskId: id,
-        op: "delete",
-      });
-    }
+    await softDeleteTask(ctx, task, sessionToken, now);
     return id;
   },
 });
+
+/**
+ * Borrado lógico de una tarea + sus sub-tareas, con bitácora y cleanup de
+ * ClickUp agendado (delete op). Espeja EXACTAMENTE lo que hacía `remove`:
+ * se extrae como helper para que `imprevistos.createFromTask` (convertir
+ * tarea en imprevisto) reutilice la misma semántica sin duplicar la lógica.
+ * Debe llamarse dentro de la mutation caller (comparte su transacción).
+ */
+export async function softDeleteTask(
+  ctx: MutationCtx,
+  task: Doc<"tasks">,
+  sessionToken: string,
+  now: number,
+) {
+  const id = task._id;
+  // Marcar sub-tareas asociadas como borradas
+  const subtasks = await ctx.db
+    .query("subtasks")
+    .withIndex("by_task", (q) => q.eq("taskId", id))
+    .collect();
+  await Promise.all(
+    subtasks
+      .filter((s) => s.deletedAt === undefined)
+      .map((s) => ctx.db.patch(s._id, { deletedAt: now, updatedAt: now })),
+  );
+  await ctx.db.patch(id, { deletedAt: now, updatedAt: now });
+
+  // ===== Bitácora =====
+  // El evento sobrevive a la tarea: si la borraste el jueves, el catch-up
+  // igual puede contar que existió y qué pasó con ella esa semana.
+  await logEvent(ctx, {
+    taskId: id,
+    kind: "deleted",
+    task,
+    at: now,
+    fromStatus: task.status,
+  });
+
+  // ===== Sync ClickUp: eliminar en ClickUp si estaba sincronizada =====
+  // Al borrar en Hermes, borramos también en ClickUp (la tarea vino de acá).
+  // El handler de op="delete" hace DELETE a ClickUp y desvincula la tarea.
+  if (task.area === "patagonia") {
+    await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
+      sessionToken,
+      taskId: id,
+      op: "delete",
+    });
+  }
+}
 
 /**
  * Cambia el estado de una tarea y reordena las columnas afectadas.

@@ -457,6 +457,12 @@ export default defineSchema({
     promotedAt: v.optional(v.number()),
     /** Tarea creada al promover (para saltar del imprevisto a su tarea). */
     promotedTaskId: v.optional(v.id("tasks")),
+    /**
+     * Tarea del tablero de la que este imprevisto nació (conversión inversa:
+     * "esto no era una tarea, era un imprevisto"). La tarea queda borrada
+     * lógicamente; el vínculo es la traza de dónde salió el imprevisto.
+     */
+    movedFromTaskId: v.optional(v.id("tasks")),
     // ===== Sync ClickUp (subtask del padre "Imprevistos Cris") =====
     /** id de la subtask en ClickUp. Vacío = pendiente de sync. */
     clickupSubtaskId: v.optional(v.string()),

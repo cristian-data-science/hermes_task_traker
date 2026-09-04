@@ -81,6 +81,20 @@ imprevisto deja de contar como "abierto".
   tarea de ClickUp
 - **AND** las métricas lo registran como promovido
 
+### Requirement: Convertir tarea en imprevisto
+El sistema SHALL permitir el camino inverso: convertir una tarea existente
+del tablero en imprevisto del día. La conversión es un MOVE: la tarea se
+borra con la semántica estándar de eliminación (borrado lógico de tarea y
+subtareas, evento en la bitácora y DELETE de su contraparte en ClickUp) y
+nace un imprevisto con el mismo título para el día actual, vinculado a la
+tarea original (`movedFromTaskId`) para trazabilidad.
+
+#### Scenario: Me equivoqué, esto era un imprevisto
+- **WHEN** el usuario convierte una tarea sincronizada con ClickUp
+- **THEN** la tarea desaparece del tablero y su tarea de ClickUp se borra
+- **AND** aparece un imprevisto de hoy con el mismo título, que se crea
+  como subtask de "Imprevistos Cris"
+
 ### Requirement: Métricas del día y visor de insights
 El sistema SHALL persistir todo (imprevistos y dayItems en Convex) y
 ofrecer un visor de insights con rango 7/30 días: por día, imprevistos

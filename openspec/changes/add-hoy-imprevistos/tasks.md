@@ -60,3 +60,6 @@
 - [x] 7.1 `npm run build` completo (tsc -b + vite).
 - [ ] 7.2 Smoke manual en dev: crear imprevisto, resolver, promover,
       arrastrar tarea al panel, ver métricas y sección de catch-up.
+- [x] 8.1 Conversión inversa: mutation `imprevistos.createFromTask` (move:
+      soft-delete estándar de la tarea + imprevisto con movedFromTaskId)
+      + botón "Convertir en imprevisto" en TaskModal.
