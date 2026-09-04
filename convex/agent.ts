@@ -965,6 +965,51 @@ export const answerQuestion = mutation({
   },
 });
 
+/**
+ * Preguntarle al agente sobre una delegación ya terminada (historial).
+ * Re-encola la tarea con la pregunta envuelta como followUp y el puente la
+ * re-despacha con --resume: si el rollout de la sesión sigue vivo en ZCode,
+ * el agente responde CON TODO el contexto de lo que hizo; si fue rotado,
+ * contesta desde el prompt + artefactos (fallback del dispatcher). La
+ * respuesta aparece como corrida nueva en el panel.
+ */
+export const askHistory = mutation({
+  args: { ...sessionArg, taskId: v.id("tasks"), question: v.string() },
+  handler: async (ctx, { sessionToken, taskId, question }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    if (task.executor !== "zcode" || !task.agentState)
+      throw new Error("La tarea no está delegada al agente");
+    if (!["hecho", "cancelada", "error", "para-revision"].includes(task.agentState))
+      throw new Error(
+        `La tarea está activa (estado: ${task.agentState}) — usá "Redirigir al agente"`,
+      );
+    if (!task.agentSessionId)
+      throw new Error(
+        "Esta tarea no tiene sesión de ZCode guardada — no hay contexto que retomar",
+      );
+    const wrapped =
+      `PREGUNTA DE CRIS sobre el trabajo ya entregado (no rehagas nada ni ` +
+      `toques archivos: solo respondé. Si tu sesión previa ya no está ` +
+      `disponible, contestá desde lo que recuerdes del prompt y los ` +
+      `artefactos):\n${question.trim().slice(0, FOLLOWUP_MAX)}`;
+    await applyAgentState(ctx, task, "encolada", sessionToken, {
+      agentQuestion: undefined,
+      agentFollowUp: wrapped.slice(0, FOLLOWUP_MAX),
+    });
+    await logEvent(ctx, {
+      taskId,
+      kind: "agent_update",
+      task,
+      at: Date.now(),
+      detail: `pregunta del historial: ${question.trim().slice(0, 220)}`,
+    });
+    return { ok: true };
+  },
+});
+
 /** Aprueba o rechaza lo que quedó en para-revisión. */
 export const reviewResult = mutation({
   args: {

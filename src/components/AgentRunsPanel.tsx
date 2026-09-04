@@ -255,6 +255,7 @@ export function AgentRunsPanel({
       token && task ? { sessionToken: token, taskId: task._id } : "skip",
     ) ?? [];
   const answerQuestion = useMutation(api.agent.answerQuestion);
+  const askHistory = useMutation(api.agent.askHistory);
   const reviewResult = useMutation(api.agent.reviewResult);
   const cancelAgent = useMutation(api.agent.cancelAgent);
   const removeTask = useMutation(api.tasks.remove);
@@ -494,6 +495,52 @@ export function AgentRunsPanel({
                     )}
                     {state === "cancelada" ? "Re-despachar" : "Enviar al agente"}
                   </button>
+                </div>
+              )}
+
+              {/* Preguntarle al agente sobre lo ya entregado (hecho): re-despacha
+                  con --resume, así que responde con el contexto de su sesión si
+                  sigue viva. La respuesta llega como corrida nueva. */}
+              {state === "hecho" && task.agentSessionId && (
+                <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
+                  <label className="label flex items-center gap-1.5">
+                    <MessageCircle className="h-3.5 w-3.5" />
+                    Preguntarle al agente
+                  </label>
+                  <textarea
+                    value={answer}
+                    onChange={(e) => setAnswer(e.target.value)}
+                    rows={3}
+                    placeholder="Sobre las decisiones que tomó, el reporte, o pedile un ajuste — responde con el contexto de lo que hizo…"
+                    className="input resize-y font-normal"
+                  />
+                  <button
+                    disabled={acting || !answer.trim()}
+                    onClick={() =>
+                      act(
+                        () =>
+                          askHistory({
+                            sessionToken: token!,
+                            taskId: task._id,
+                            question: answer.trim(),
+                          }),
+                        "Pregunta enviada: el agente la responde con el contexto de su sesión",
+                      )
+                    }
+                    className="btn-primary mt-2 inline-flex items-center gap-1.5 text-xs"
+                  >
+                    {acting ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
+                    Enviar pregunta
+                  </button>
+                  <p className="mt-1.5 text-[10px] text-faint">
+                    Si la sesión aún vive en ZCode responde con todo el contexto;
+                    si fue rotada, responde desde el reporte y los artefactos. Al
+                    terminar queda en para-revisión para tu OK.
+                  </p>
                 </div>
               )}
 
