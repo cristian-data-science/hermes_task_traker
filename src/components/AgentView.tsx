@@ -16,6 +16,7 @@ import {
   Folder,
   Eye,
   Check,
+  MessageCircle,
   Zap,
   Clock3,
   ChevronDown,
