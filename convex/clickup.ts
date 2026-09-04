@@ -10,6 +10,7 @@ import {
   SETTINGS_KEY_CONFIG,
   SETTINGS_KEY_ENABLED,
   SETTINGS_KEY_FORCE_SYNC_DEV,
+  SETTINGS_KEY_IMPREVISTOS_PARENT,
   parseClickupConfig,
   resolveOutboundDestination,
   isProductionDeployment,
@@ -58,7 +59,7 @@ async function getMcpToken(ctx: unknown): Promise<string | null> {
 }
 
 /** Igual que getMcpToken pero lanza con instrucción clara si falta. */
-async function requireMcpToken(ctx: unknown): Promise<string> {
+export async function requireMcpToken(ctx: unknown): Promise<string> {
   const token = await getMcpToken(ctx);
   if (!token)
     throw new Error(
@@ -74,7 +75,7 @@ async function requireMcpToken(ctx: unknown): Promise<string> {
  * (`event: message\ndata: {...}`); se parsea en modo dual. Lanza ante HTTP
  * distinto de 2xx, error JSON-RPC o `result.isError`. Devuelve `result`.
  */
-async function mcpCall(
+export async function mcpCall(
   toolName: string,
   toolArgs: Record<string, unknown>,
   token: string,
@@ -132,7 +133,7 @@ function mcpContentText(result: any): string {
 }
 
 /** El resultado estructurado preferente; fallback al content parseado. */
-function mcpStructured(result: any): any {
+export function mcpStructured(result: any): any {
   if (result?.structuredContent) return result.structuredContent;
   const text = mcpContentText(result);
   try {
@@ -143,13 +144,74 @@ function mcpStructured(result: any): any {
 }
 
 /** ¿El mensaje corresponde a una tarea que ya no existe en ClickUp? */
-function mcpIsNotFound(msg: string): boolean {
+export function mcpIsNotFound(msg: string): boolean {
   const m = msg.toLowerCase();
   return (
     m.includes("404") ||
     m.includes("not found") ||
     m.includes("does not exist") ||
     m.includes("no se encontró")
+  );
+}
+
+/** Tope del comentario-resumen que se le manda a ClickUp al completar. */
+const COMMENT_MAX_CHARS = 1200;
+
+/** ¿El mensaje dice que esa tool no existe en el servidor MCP? */
+function mcpIsUnknownTool(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return (
+    m.includes("unknown tool") ||
+    m.includes("unknown_tool") ||
+    m.includes("invalid tool") ||
+    m.includes("no such tool") ||
+    m.includes("tool not found")
+  );
+}
+
+/**
+ * Tools MCP candidatas para comentarios. La doc oficial lista "Create Task
+ * Comment" sin nombre de tool; los catálogos públicos del servidor oficial la
+ * nombran clickup_create_task_comment (task_id y comment_text requeridos).
+ * Se prueban en orden: la primera que exista gana; si ninguna existe, el
+ * error queda visible en clickupSyncError.
+ */
+const COMMENT_TOOL_CANDIDATES = [
+  "clickup_create_task_comment",
+  "clickup_add_comment",
+  "clickup_create_comment",
+];
+
+/**
+ * Agrega un comentario a una tarea de ClickUp vía MCP. Si una candidata no
+ * existe (error de tool desconocida) prueba la siguiente; cualquier otro
+ * error se propaga (el caller lo registra en clickupSyncError).
+ */
+async function mcpAddComment(
+  taskId: string,
+  commentText: string,
+  token: string,
+): Promise<void> {
+  let lastUnknown: Error | null = null;
+  for (const tool of COMMENT_TOOL_CANDIDATES) {
+    try {
+      await mcpCall(
+        tool,
+        { task_id: taskId, comment_text: commentText },
+        token,
+      );
+      return;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (mcpIsUnknownTool(msg)) {
+        lastUnknown = err instanceof Error ? err : new Error(msg);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw (
+    lastUnknown ?? new Error("Ninguna tool MCP de comentarios disponible")
   );
 }
 
@@ -575,6 +637,42 @@ export const syncTask = internalAction({
       task.clickupListId,
     );
 
+    // Id en ClickUp tras este sync (cambia si la tarea se crea acá abajo).
+    let finalClickupId: string | undefined = task.clickupId;
+    /**
+     * Nota al completar: si la tarea quedó COMPLETADA y la hizo el agente,
+     * se agrega a la tarea de ClickUp un comentario con el resumen de lo que
+     * se hizo (el que el agente reportó al terminar). Sin encabezado: el
+     * comentario ES el resumen. Sin completar no hay nota; sin resumen
+     * (corrida sin summary) tampoco.
+     * Idempotencia: clickupCommentedAt es la última nota enviada; solo se
+     * comenta de nuevo si completedAt quedó más nuevo (se reabrió y volvió a
+     * completar), así un re-sync nunca duplica el comentario.
+     */
+    const postCompletionNote = async (): Promise<void> => {
+      if (!finalClickupId) return;
+      if (task.status !== "completado" || task.executor !== "zcode") return;
+      if (!task.completedAt) return;
+      if (
+        task.clickupCommentedAt !== undefined &&
+        task.clickupCommentedAt >= task.completedAt
+      )
+        return;
+      const runInfo = await ctx.runQuery(internal.agent._latestRunWithSummary, {
+        taskId,
+      });
+      if (!runInfo?.summary) return;
+      const token = await requireMcpToken(ctx);
+      await mcpAddComment(
+        finalClickupId,
+        runInfo.summary.slice(0, COMMENT_MAX_CHARS),
+        token,
+      );
+      await ctx.runMutation(internal.clickupMutations._markCommented, {
+        taskId,
+      });
+    };
+
     try {
       if (op === "delete") {
         // Borrado explícito: eliminar en ClickUp si estaba sincronizada.
@@ -603,12 +701,10 @@ export const syncTask = internalAction({
 
       if (!task.clickupId) {
         // ===== CREATE =====
-        // Opt-in: sin destino explícito elegido en el picker (ni list ni
-        // parent), la tarea es SOLO LOCAL y no se publica en ClickUp.
-        // Antes todo lo de Patagonia caía acá — incluidas tareas locales
-        // sin asociación — y el default de resolveOutboundDestination las
-        // mandaba a Mesa Técnica sin que nadie lo pidiera.
-        if (!task.clickupListId && !task.clickupParentId) return;
+        // Publicación por defecto: toda tarea de Patagonia no marcada "solo
+        // local" se crea en ClickUp. Sin destino elegido en el picker cae en
+        // Mesa Técnica (resolveOutboundDestination, caso 4) — igual a como se
+        // ve en la UI. El check "solo local" es el único opt-out.
         const token = await requireMcpToken(ctx);
         // create_task MCP anida en el MISMO call (`parent` es un argumento),
         // a diferencia de la API REST donde el POST lo ignoraba. Con parent,
@@ -621,6 +717,7 @@ export const syncTask = internalAction({
         const sc = mcpStructured(created) ?? {};
         const newId = String(sc.task_id ?? "");
         if (!newId) throw new Error("create_task no devolvió task_id");
+        finalClickupId = newId;
         const newUrl = String(sc.task_url ?? `https://app.clickup.com/t/${newId}`);
 
         await ctx.runMutation(internal.clickupMutations._markSynced, {
@@ -650,11 +747,9 @@ export const syncTask = internalAction({
             await ctx.runMutation(internal.clickupMutations._unlinkClickUp, {
               taskId,
             });
-            // Solo se recrea si la tarea tiene destino explícito. Si no lo
-            // tiene (importada sin anclaje, o alguien la borró de ClickUp a
-            // mano para sacarla de ahí), queda desvinculada y local:
-            // recrearla en Mesa Técnica sería re-publicarla sin pedirlo.
-            if (!task.clickupListId && !task.clickupParentId) return;
+            // Se recrea con destino por defecto (Mesa Técnica si no eligió
+            // otro): el opt-out es el check "solo local" en Hermes, no el
+            // borrado manual de la tarea allá.
             const args = mcpTaskArgs(task);
             args.list_id = dest.listId;
             if (dest.parentId) args.parent = dest.parentId;
@@ -662,6 +757,7 @@ export const syncTask = internalAction({
             const sc2 = mcpStructured(created) ?? {};
             const newId = String(sc2.task_id ?? "");
             if (!newId) throw new Error("create_task no devolvió task_id");
+            finalClickupId = newId;
             const newUrl = String(sc2.task_url ?? `https://app.clickup.com/t/${newId}`);
             await ctx.runMutation(internal.clickupMutations._markSynced, {
               taskId,
@@ -670,6 +766,7 @@ export const syncTask = internalAction({
               clickupListId: dest.listId,
             });
             await syncClickupPath(ctx, taskId, newId);
+            await postCompletionNote();
             await ctx.runMutation(internal.clickupMutations._touchLastSync);
             return;
           }
@@ -685,6 +782,9 @@ export const syncTask = internalAction({
         });
       }
 
+      // UPDATE y CREATE caen acá: si la tarea quedó completada y la hizo el
+      // agente, postCompletionNote manda la nota (es idempotente).
+      await postCompletionNote();
       await ctx.runMutation(internal.clickupMutations._touchLastSync);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Error de sync ClickUp";
@@ -860,12 +960,29 @@ export const getInboundDiff = action({
     );
     const ignoredIds = new Set(hermesMapped.ignoredClickupIds);
 
+    // Excluir el contenedor "Imprevistos Cris" y sus subtasks del inbound: los
+    // gestiona el panel Hoy con su propio sync (tabla imprevistos), y su alta
+    // rápida haría que cada imprevisto apareciera como "tarea nueva" en el
+    // modal a los segundos de cargarlo. Si la feature aún no se usó, la key
+    // no existe y esto no excluye nada.
+    const imprevistosParentRow = await ctx.runQuery(internal.settings._getRaw, {
+      key: SETTINGS_KEY_IMPREVISTOS_PARENT,
+    });
+    const imprevistosParentId = imprevistosParentRow?.value || null;
+
     const newTasks: InboundNewTask[] = [];
     const statusChanges: InboundStatusChange[] = [];
 
     for (const ct of allClickupTasks.values()) {
       // ¿Está ignorada? Saltar (no reaparece como nueva).
       if (ignoredIds.has(ct.id)) continue;
+      // ¿Es el padre de imprevistos o una de sus subtasks? Saltar.
+      if (
+        imprevistosParentId &&
+        (ct.id === imprevistosParentId || ct.parent === imprevistosParentId)
+      ) {
+        continue;
+      }
 
       const hermesTask = mappedByClickupId.get(ct.id);
       if (!hermesTask) {

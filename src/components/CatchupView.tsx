@@ -41,7 +41,7 @@ import {
   Unlock,
   X,
 } from "lucide-react";
-import { format } from "date-fns";
+import { format, isSameDay } from "date-fns";
 import { es } from "date-fns/locale";
 import toast from "react-hot-toast";
 import type { Doc, Id } from "~/convex/_generated/dataModel";
@@ -61,6 +61,7 @@ import {
   buildHeadline,
   queuedOf,
   pendingOf,
+  unplannedOf,
   type WeekData,
   type WeekBody,
 } from "../lib/catchupSummary";
@@ -341,6 +342,7 @@ export function CatchupView({ tasks, onEditTask }: CatchupViewProps) {
         onEditTask={onEditTask}
         onExclude={editable ? handleExclude : undefined}
       />
+      <UnplannedSection items={unplannedOf(body)} />
       <TalkingSection
         points={body.talkingPoints}
         tasks={tasks}
@@ -855,6 +857,90 @@ function ActiveSection({
       {showWaiting && waiting.length > 0 && (
         <div className="mt-1.5 overflow-hidden rounded-el border-el border-line bg-panel opacity-80 shadow-el">
           {waiting.map((t) => renderOpen(t))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+/**
+ * Imprevistos de la semana (panel Hoy): cuántos surgieron y cuáles.
+ *
+ * Retráctil y colapsado por defecto — es contexto de la conversación ("me
+ * salieron N cosas no trackeadas"), no el eje del catch-up. El "resuelto el
+ * mismo día" se calcula acá con date-fns en hora local: el backend manda
+ * crudos porque el calendario es del cliente (patrón de toda la vista).
+ */
+function UnplannedSection({ items }: { items: WeekBody["unplanned"] }) {
+  const [show, setShow] = useState(false);
+  if (items.length === 0) return null;
+
+  const sameDay = items.filter(
+    (i) => i.resolvedAt !== null && isSameDay(new Date(i.resolvedAt), new Date(i.day)),
+  ).length;
+  const abiertos = items.filter((i) => i.resolvedAt === null && i.promotedAt === null).length;
+
+  return (
+    <Section title="Imprevistos" count={items.length}>
+      <button
+        onClick={() => setShow((v) => !v)}
+        className="inline-flex items-center gap-1 text-xs text-mute hover:text-ink"
+      >
+        <ChevronDown
+          className={cn("h-3.5 w-3.5 transition-transform", !show && "-rotate-90")}
+        />
+        {sameDay} se resolvieron el mismo día
+        {abiertos > 0 && ` · ${abiertos} sin resolver`}
+      </button>
+      {show && (
+        <div className="mt-1.5 overflow-hidden rounded-el border-el border-line bg-panel opacity-80 shadow-el">
+          {items.map((i) => {
+            const resolvedSameDay =
+              i.resolvedAt !== null && isSameDay(new Date(i.resolvedAt), new Date(i.day));
+            return (
+              <div
+                key={i.id}
+                className="flex items-center gap-2 border-b border-line px-3 py-2 text-sm last:border-b-0"
+              >
+                <span className="w-20 shrink-0 text-xs capitalize text-faint">
+                  {format(new Date(i.day), "EEE d MMM", { locale: es })}
+                </span>
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate",
+                    // Tachado cuando el trabajo terminó: resuelto, o promovido
+                    // cuya tarea ya está completada.
+                    i.resolvedAt !== null || i.taskDone
+                      ? "text-faint line-through"
+                      : "text-ink",
+                  )}
+                  title={i.title}
+                >
+                  {i.title}
+                </span>
+                {i.promotedAt !== null ? (
+                  i.taskDone ? (
+                    <span
+                      className="shrink-0 text-[10px] font-semibold text-[var(--status-completado)]"
+                      title="La tarea promovida está completada"
+                    >
+                      → tarea ✓
+                    </span>
+                  ) : (
+                    <span className="shrink-0 text-[10px] font-semibold text-accent">→ tarea</span>
+                  )
+                ) : resolvedSameDay ? (
+                  <span className="shrink-0 text-[10px] font-medium text-[var(--status-completado)]">
+                    al día
+                  </span>
+                ) : i.resolvedAt !== null ? (
+                  <span className="shrink-0 text-[10px] text-faint">después</span>
+                ) : (
+                  <span className="shrink-0 text-[10px] font-medium text-amber-600">abierto</span>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
     </Section>

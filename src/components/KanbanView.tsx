@@ -60,6 +60,8 @@ import {
 import { useAuth } from "../hooks/useAuth";
 import { MouseSensor, TouchSensor } from "../lib/dndSensors";
 import { cn, isSuperUrgent } from "../lib/utils";
+import { startOfDay } from "date-fns";
+import { HoyPanel, HOY_PANEL_DROP_ID } from "./HoyPanel";
 
 interface KanbanViewProps {
   tasks: Doc<"tasks">[];
@@ -81,8 +83,12 @@ const collisionDetection: CollisionDetection = (args) => {
 export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
   const changeStatus = useMutation(api.tasks.changeStatus);
   const reorderWithinStatus = useMutation(api.tasks.reorderWithinStatus);
+  const addToHoy = useMutation(api.hoy.add);
   const counts = useSubtaskCounts(tasks);
   const { token } = useAuth();
+  // Día actual (medianoche local) para los drops sobre el panel Hoy. El
+  // cliente decide el día; el backend solo compara números (patrón catch-up).
+  const hoyDay = startOfDay(new Date()).getTime();
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<Status | null>(null);
@@ -293,6 +299,24 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
     const id = String(active.id);
     setActiveId(null);
     setOverCol(null);
+
+    // ===== Drop sobre el panel Hoy =====
+    // Suma la tarea al día SIN tocar su columna: findContainer no conoce el
+    // panel (handleDragOver es no-op allá), así que la tarjeta vuelve sola a
+    // su columna y acá solo queda registrar el puntero.
+    if (over && String(over.id) === HOY_PANEL_DROP_ID) {
+      const task = taskMap[id];
+      if (task) {
+        addToHoy({ day: hoyDay, taskId: task._id as Id<"tasks">, sessionToken: token! })
+          .then(() => toast.success("Sumada a Hoy"))
+          .catch((err) => {
+            if (import.meta.env.DEV) console.error("[hoy.add]", err);
+            toast.error("No se pudo sumar a Hoy");
+          });
+      }
+      setOptimisticCols(null);
+      return;
+    }
 
     const task = taskMap[id];
     const container = findContainer(id);
@@ -554,34 +578,40 @@ export function KanbanView({ tasks, onEditTask, onNewTask }: KanbanViewProps) {
         </div>
       )}
 
-      {/* Scroll horizontal; el snap móvil se desactiva durante el drag.
-          Con "Encuadre por estado" activo, cada swipe queda alineado a un
-          estado completo; con la preferencia OFF, scroll libre como siempre. */}
-      <div
-        ref={boardScrollRef}
-        className={cn(
-          "flex h-full gap-3 overflow-x-auto px-1 pb-2",
-          activeId
-            ? "snap-none"
-            : snapEnabled
-              ? "snap-x snap-mandatory sm:snap-none"
-              : "sm:snap-none",
-        )}
-      >
-        {KANBAN_COLUMNS.filter((s) => !isHidden(s)).map((status) => (
-          <Column
-            key={status}
-            status={status}
-            ids={cols[status]}
-            taskMap={taskMap}
-            counts={counts}
-            highlight={activeId !== null && overCol === status}
-            onEditTask={onEditTask}
-            onNewTask={() => onNewTask(status)}
-            groupByProject={groupByProject}
-            groupOpts={groupOpts}
-          />
-        ))}
+      {/* Panel Hoy a la izquierda + tablero: comparten el DndContext para que
+          las tarjetas se puedan soltar sobre el panel y queden sumadas al día. */}
+      <div className="flex w-full items-start gap-3">
+        <HoyPanel tasks={tasks} onEditTask={onEditTask} />
+
+        {/* Scroll horizontal; el snap móvil se desactiva durante el drag.
+            Con "Encuadre por estado" activo, cada swipe queda alineado a un
+            estado completo; con la preferencia OFF, scroll libre como siempre. */}
+        <div
+          ref={boardScrollRef}
+          className={cn(
+            "flex h-full min-w-0 flex-1 gap-3 overflow-x-auto px-1 pb-2",
+            activeId
+              ? "snap-none"
+              : snapEnabled
+                ? "snap-x snap-mandatory sm:snap-none"
+                : "sm:snap-none",
+          )}
+        >
+          {KANBAN_COLUMNS.filter((s) => !isHidden(s)).map((status) => (
+            <Column
+              key={status}
+              status={status}
+              ids={cols[status]}
+              taskMap={taskMap}
+              counts={counts}
+              highlight={activeId !== null && overCol === status}
+              onEditTask={onEditTask}
+              onNewTask={() => onNewTask(status)}
+              groupByProject={groupByProject}
+              groupOpts={groupOpts}
+            />
+          ))}
+        </div>
       </div>
 
       {/* Clon flotante: única tarjeta en movimiento (la original queda como hueco) */}

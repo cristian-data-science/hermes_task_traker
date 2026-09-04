@@ -9,7 +9,7 @@
  * qué está trabado, qué te cayó encima.
  */
 
-import { format } from "date-fns";
+import { format, isSameDay } from "date-fns";
 import { es } from "date-fns/locale";
 import type { FunctionReturnType } from "convex/server";
 import type { api } from "~/convex/_generated/api";
@@ -35,6 +35,7 @@ export type WeekBody = Pick<
   | "incoming"
   | "moves"
   | "talkingPoints"
+  | "unplanned"
 >;
 
 /**
@@ -52,6 +53,11 @@ export function queuedOf(body: WeekBody): WeekBody["queued"] {
 /** Igual que `queuedOf`, para el bloque de pendientes. */
 export function pendingOf(body: WeekBody): WeekBody["pending"] {
   return body.pending ?? [];
+}
+
+/** Igual que `queuedOf`, para los imprevistos del panel Hoy. */
+export function unplannedOf(body: WeekBody): WeekBody["unplanned"] {
+  return (body as { unplanned?: WeekBody["unplanned"] }).unplanned ?? [];
 }
 
 /**
@@ -284,6 +290,29 @@ export function buildCatchupText(
       const closed = t.closedSameWeek ? " · ya cerrada" : "";
       const who = t.requestedBy ? ` · pide: ${t.requestedBy}` : "";
       L.push(`- ${t.title} (${src})${who}${closed}`);
+    }
+    L.push("");
+  }
+
+  // ---- Imprevistos (panel Hoy) --------------------------------------------
+  // Trabajo no trackeado surgido en la ventana: la medida de cuánto se
+  // cuela por semana. Van antes de los temas: son insumo de conversación.
+  const unplanned = unplannedOf(data);
+  if (unplanned.length > 0) {
+    const sameDay = unplanned.filter(
+      (i) => i.resolvedAt !== null && isSameDay(new Date(i.resolvedAt), new Date(i.day)),
+    ).length;
+    L.push(`## Imprevistos (${unplanned.length}, ${sameDay} resueltos el mismo día)`);
+    for (const i of unplanned) {
+      const estado =
+        i.promotedAt !== null
+          ? " · promovido a tarea"
+          : i.resolvedAt === null
+            ? " · abierto"
+            : isSameDay(new Date(i.resolvedAt), new Date(i.day))
+              ? " · al día"
+              : "";
+      L.push(`- ${format(new Date(i.day), "d/MM", { locale: es })} · ${i.title}${estado}`);
     }
     L.push("");
   }

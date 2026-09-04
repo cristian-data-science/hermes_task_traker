@@ -353,6 +353,37 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     }))
     .sort((a, b) => (b.flaggedAt ?? 0) - (a.flaggedAt ?? 0));
 
+  // --- IMPREVISTOS (panel Hoy) --------------------------------------------
+  // Surgidos en la ventana: cuántos y cuáles. No son tasks (tabla propia),
+  // así que no aplica el scope de áreas ni las exclusiones. El "resuelto el
+  // mismo día" lo calcula el CLIENTE con date-fns en hora local (dueño del
+  // calendario, patrón de todo el catch-up); acá solo viajan crudos.
+  const unplannedRows = await ctx.db
+    .query("imprevistos")
+    .withIndex("by_day", (q) => q.gte("day", from).lt("day", to))
+    .collect();
+  const unplanned = unplannedRows
+    .filter((r) => r.deletedAt === undefined)
+    .map((r) => ({
+      id: r._id,
+      title: r.title,
+      day: r.day,
+      resolvedAt: r.resolvedAt ?? null,
+      promotedAt: r.promotedAt ?? null,
+      /**
+       * ¿La tarea promovida ya se completó? Sin esto, el catch-up mostraría
+       * "→ tarea" eterno aunque el trabajo ya esté hecho: el imprevisto en sí
+       * nunca se "resuelve", lo que se resuelve es la tarea a la que se
+       * transformó. Resuelto contra el tablero en vivo (los snapshots viejos
+       * quedan congelados con lo que se veía entonces, como todo el resumen).
+       */
+      taskDone:
+        r.promotedTaskId !== undefined
+          ? tasksById.get(r.promotedTaskId)?.status === "completado"
+          : false,
+    }))
+    .sort((a, b) => a.day - b.day);
+
   // --- EXCLUSIONES (la X de la vista) --------------------------------------
   // Tareas quitadas a mano del resumen de ESTA semana: no se listan ni
   // cuentan en las métricas. La tarea sigue viva en el tablero y en ClickUp.
@@ -412,6 +443,8 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
       subtasksClosed,
       /** Cuántas de las que entraron esta semana ya se cerraron. */
       closedSameWeek: incoming.filter((i) => i.closedSameWeek).length,
+      /** Imprevistos del panel Hoy surgidos en la ventana. */
+      unplanned: unplanned.length,
     },
     done,
     inProgress,
@@ -421,6 +454,7 @@ async function buildSummary(ctx: QueryCtx, from: number, to: number) {
     incoming,
     moves,
     talkingPoints,
+    unplanned,
   };
 }
 
