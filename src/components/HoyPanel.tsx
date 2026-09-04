@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronUp,
+  ExternalLink,
   History,
   Plus,
   Search,
@@ -639,6 +640,10 @@ function PlannedRow({
     );
   }
 
+  const clickupHref =
+    task.clickupUrl ??
+    (task.clickupId ? `https://app.clickup.com/t/${task.clickupId}` : undefined);
+
   return (
     <li className="group flex items-center gap-2 rounded-el px-1 py-1 hover:bg-panel2">
       <CompleteButton task={task} size="sm" />
@@ -656,6 +661,18 @@ function PlannedRow({
           {task.title}
         </span>
       </button>
+      {clickupHref && (
+        <a
+          href={clickupHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          title="Abrir en ClickUp"
+          className="shrink-0 rounded-el p-0.5 text-faint opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
       <StatusDot status={task.status} />
       {item.carriedFrom && (
         <span className="text-[10px] text-faint" title="Traída de otro día">
