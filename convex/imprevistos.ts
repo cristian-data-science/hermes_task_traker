@@ -102,6 +102,8 @@ export const statsRange = query({
         open: r.open,
         resolvedAt: r.resolvedAt ?? null,
         promotedAt: r.promotedAt ?? null,
+        /** Para que el cliente sepa si la tarea promovida ya se completó. */
+        promotedTaskId: r.promotedTaskId ?? null,
       }));
   },
 });

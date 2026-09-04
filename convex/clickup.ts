@@ -157,6 +157,57 @@ export function mcpIsNotFound(msg: string): boolean {
 /** Tope del comentario-resumen que se le manda a ClickUp al completar. */
 const COMMENT_MAX_CHARS = 1200;
 
+// ============================================================
+//  Sanitización de referencias locales en el comentario del agente
+// ============================================================
+
+/**
+ * Extensiones típicas de archivos de trabajo/reporte. Se listan explícitas
+ * (y no como `\.\w+`) para no manglear dominios ("app.clickup.com") ni
+ * versiones ("v1.2").
+ */
+const FILE_EXT_RE =
+  /\.(md|pbix|csv|xlsx|xls|docx|pdf|png|jpe?g|gif|svg|json|txt|log|py|js|mjs|cjs|ts|tsx|sql|zip|parquet|html?|css|ya?ml|toml|ini|env)\b/gi;
+
+/**
+ * Copia SIN flag g para .test(): una regex con /g mantiene lastIndex entre
+ * llamadas y alterna resultados true/false — bug clásico que acá haría que
+ * la mitad de los archivos con extensión se escapen del sanitizador.
+ */
+const FILE_EXT_TEST = new RegExp(FILE_EXT_RE.source, "i");
+
+/** ¿Qué pedazo de una ruta es el "nombre de archivo"? */
+function basenameNoExt(p: string): string {
+  const last = p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+  return last.replace(FILE_EXT_RE, "").trim();
+}
+
+/**
+ * Quita referencias locales del texto que viaja a ClickUp (comentario del
+ * agente al completar). Allá lo lee un cliente: rutas de TU computadora
+ * ("C:\Users\patag\...") y archivos con extensión ("CAMBIOS.md") no tienen
+ * sentido — el detalle completo vive en Hermes, donde sí podés abrirlos.
+ *
+ * Reglas (acordadas con Cris): rutas absolutas → solo el nombre del archivo
+ * final sin extensión; archivos con extensión sueltos → nombre sin extensión.
+ * El resto del texto queda intacto (sanitizador conservador: nunca reescribe
+ * frases, solo neutraliza los token inequívocamente locales).
+ */
+function sanitizeLocalRefs(text: string): string {
+  return (
+    text
+      // Rutas Windows (C:\...) y POSIX absolutas (/home/..., /mnt/...).
+      .replace(
+        /\b[A-Za-z]:\\[^\s"')\]]+|\/(?:home|Users|mnt|var|tmp|opt|root)\/[^\s"')\]]+/g,
+        (m) => basenameNoExt(m),
+      )
+      // Archivos con extensión sueltos: "CAMBIOS.md" → "CAMBIOS".
+      .replace(/\b[\w .-]{1,80}\.[A-Za-z]\w{0,8}\b/g, (m) => {
+        return FILE_EXT_TEST.test(m) ? basenameNoExt(m) : m;
+      })
+  );
+}
+
 /** ¿El mensaje dice que esa tool no existe en el servidor MCP? */
 function mcpIsUnknownTool(msg: string): boolean {
   const m = msg.toLowerCase();
@@ -665,7 +716,9 @@ export const syncTask = internalAction({
       const token = await requireMcpToken(ctx);
       await mcpAddComment(
         finalClickupId,
-        runInfo.summary.slice(0, COMMENT_MAX_CHARS),
+        // Sin referencias locales: allá lo lee un cliente, las rutas de tu PC
+        // y los ".md" no le dicen nada. El detalle completo vive en Hermes.
+        sanitizeLocalRefs(runInfo.summary).slice(0, COMMENT_MAX_CHARS),
         token,
       );
       await ctx.runMutation(internal.clickupMutations._markCommented, {

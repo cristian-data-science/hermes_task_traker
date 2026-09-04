@@ -23,6 +23,7 @@ type ImprevistoStat = {
   open: boolean;
   resolvedAt: number | null;
   promotedAt: number | null;
+  promotedTaskId: string | null;
 };
 
 /** Agregado por día para la grilla del visor. */
@@ -97,27 +98,40 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
     for (const imp of imprevistos) {
       const b = bucketOf(imp.day);
       b.surgidos++;
-      if (imp.promotedAt !== null) {
+
+      // Un promovido cuya tarea ya se completó ES trabajo terminado: cuenta
+      // como resuelto (mismo día o tardío según CUÁNDO se completó la tarea,
+      // no cuándo se promovió). Promovido con la tarea aún viva sigue siendo
+      // "promovido": el trabajo no terminó, cambió de forma.
+      const promotedTask = imp.promotedTaskId
+        ? taskById.get(imp.promotedTaskId)
+        : undefined;
+      const doneAt =
+        imp.promotedAt !== null && promotedTask?.status === "completado"
+          ? (promotedTask.completedAt ?? null)
+          : imp.resolvedAt;
+
+      if (imp.promotedAt !== null && doneAt === null) {
         b.promovidos++;
         continue;
       }
-      if (imp.resolvedAt !== null) {
-        if (isSameDay(new Date(imp.resolvedAt), new Date(imp.day))) b.mismoDia++;
+      if (doneAt !== null) {
+        if (isSameDay(new Date(doneAt), new Date(imp.day))) b.mismoDia++;
         else b.resueltosTarde++;
       } else {
         b.abiertos++;
       }
     }
+    // Plan-vs-real: hecha = la tarea está completada (no importa la fecha —
+    // "la planeé y la terminé" es la pregunta que responde). Las tareas
+    // eliminadas (o convertidas en imprevisto) salen del denominador: una
+    // planeada que ya no existe no es una planeada "no hecha".
     for (const item of dayItems) {
+      const task = taskById.get(item.taskId);
+      if (!task || task.deletedAt !== undefined) continue;
       const b = bucketOf(item.day);
       b.planeadas++;
-      const task = taskById.get(item.taskId);
-      if (
-        task?.completedAt !== undefined &&
-        isSameDay(new Date(task.completedAt), new Date(item.day))
-      ) {
-        b.planeadasHechas++;
-      }
+      if (task.status === "completado") b.planeadasHechas++;
     }
     return [...byKey.values()].sort((a, b) => a.day - b.day);
   }, [imprevistos, dayItems, taskById]);
@@ -125,9 +139,20 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
   const totals = useMemo(() => {
     const surgidos = imprevistos.length;
     const resueltosMismoDia = buckets.reduce((s, b) => s + b.mismoDia, 0);
-    const resueltos = imprevistos.filter((i) => i.resolvedAt !== null);
-    const demoras = resueltos
-      .map((i) => differenceInCalendarDays(new Date(i.resolvedAt!), new Date(i.day)))
+    // "Resueltos" para la demora: resuelto directo O promovido completado
+    // (el trabajo terminó, que es lo que la demora mide).
+    const donePairs = imprevistos
+      .map((i) => {
+        const promotedTask = i.promotedTaskId ? taskById.get(i.promotedTaskId) : undefined;
+        const doneAt =
+          i.promotedAt !== null && promotedTask?.status === "completado"
+            ? (promotedTask.completedAt ?? null)
+            : i.resolvedAt;
+        return { day: i.day, doneAt };
+      })
+      .filter((p): p is { day: number; doneAt: number } => p.doneAt !== null);
+    const demoras = donePairs
+      .map((p) => differenceInCalendarDays(new Date(p.doneAt), new Date(p.day)))
       .filter((d) => d > 0);
     return {
       surgidos,
@@ -140,7 +165,7 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
       planeadas: buckets.reduce((s, b) => s + b.planeadas, 0),
       planeadasHechas: buckets.reduce((s, b) => s + b.planeadasHechas, 0),
     };
-  }, [imprevistos, buckets, rangeDays]);
+  }, [imprevistos, buckets, rangeDays, taskById]);
 
   /** Abiertos más viejos primero (los que más recurso se comen). */
   const viejosAbiertos = useMemo(
@@ -218,7 +243,7 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
                 <Stat
                   label="Plan vs real (rango)"
                   value={`${totals.planeadasHechas}/${totals.planeadas}`}
-                  hint="planeadas completadas el mismo día"
+                  hint="planeadas que quedaron completadas"
                 />
               </div>
 
