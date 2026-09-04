@@ -94,19 +94,15 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
       CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False
     End If
   ElseIf mode = "zcode" Then
-    ' La sesión va a parar a una línea de comandos: solo tokens seguros
-    ' (sess_ + hex/guiones/guion_bajo) para que nadie pueda inyectar nada.
-    '
-    ' POR QUÉ LA APP DESKTOP Y NO EL CLI EN TERMINAL: el TUI interactivo
-    ' importa @zcode/tui, que vive empaquetado DENTRO del app.asar del
-    ' desktop — un node pelado no lo resuelve ("Cannot find package") y el
-    ' CLI headless (-p) funciona porque no importa ese paquete. El desktop
-    ' además comparte las sesiones de ~/.zcode/cli, así que la sesión de la
-    ' tarea aparece en su lista. Le pasamos session por si el deep-link la
-    ' honra; si no, al menos abre el workspace correcto.
+    ' Chat INTERACTIVO en terminal con la sesión del agente (zchat): loop
+    ' pregunta→respuesta con zcode -p --resume — cada turno retoma la sesión,
+    ' así que el agente mantiene TODO su contexto. (El TUI interactivo del
+    ' CLI no puede correr standalone: @zcode/tui solo existe dentro del
+    ' app.asar del desktop, y el desktop no tiene deep-link de sesiones.)
+    ' La sesión va a parar a una línea de comandos: solo tokens seguros.
     If Len(session) > 10 And IsSafeToken(session) Then
       CreateObject("WScript.Shell").Run _
-        """C:\Users\patag\AppData\Local\Programs\ZCode\ZCode.exe"" ""zcode://workspace/open?path=" & URLEnc(path) & "&session=" & session & """", _
+        "cmd /k node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat.mjs"" " & session & " """ & path & """", _
         1, False
     End If
   Else

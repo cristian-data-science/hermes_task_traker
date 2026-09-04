@@ -88,9 +88,9 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
               window.location.href = `hermesagent://zcode?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}`;
             }}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
-            title="Abrir ZCode desktop en la carpeta de esta tarea. Para hacerle preguntas con contexto, usá 'Preguntarle al agente' (abajo)."
+            title="Abre una terminal con chat interactivo contra la sesión de esta tarea: el agente responde con TODO el contexto de lo que hizo. Cada turno tarda ~30-90s."
           >
-            <MessageCircle className="h-3.5 w-3.5" /> Abrir en ZCode desktop
+            <MessageCircle className="h-3.5 w-3.5" /> Chatear en terminal
           </button>
         )}
         {isReporte ? (
