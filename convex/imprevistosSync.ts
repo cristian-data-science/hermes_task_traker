@@ -290,7 +290,12 @@ async function syncRow(
  * quitándole el parent; si el MCP no lo soporta (rechaza parent null o lo
  * ignora), fallback determinista: borrar subtask + crear top-level.
  */
-async function promoteRow(ctx: ActionCtx, row: Doc<"imprevistos">) {
+async function promoteRow(
+  ctx: ActionCtx,
+  row: Doc<"imprevistos">,
+  /** Día del panel que promueve (hoy local); undefined en el sweep. */
+  day?: number,
+) {
   let current = row;
 
   // Asegurar que la subtask exista (promover algo nunca sincronizado).
@@ -323,8 +328,10 @@ async function promoteRow(ctx: ActionCtx, row: Doc<"imprevistos">) {
 
   const token = await requireMcpToken(ctx);
   const listId = await mesaTecnicaListId(ctx);
+  // Abierto → nace EN CURSO (promover es ponerse a trabajar ahora, decisión
+  // de Cris); resuelto antes de promover → completado (raro, pero coherente).
   const wasResolved = after.resolvedAt !== undefined;
-  const status = wasResolved ? "complete" : "to do";
+  const status = wasResolved ? "complete" : "in progress";
 
   // 1) Intento preferido: mover la MISMA subtask (conserva id/historial).
   let finalId = subtaskId;
@@ -376,7 +383,8 @@ async function promoteRow(ctx: ActionCtx, row: Doc<"imprevistos">) {
     imprevistoId: row._id,
     clickupTaskId: finalId,
     clickupUrl: finalUrl,
-    status: wasResolved ? "completado" : "pendiente",
+    status: wasResolved ? "completado" : "en-curso",
+    day,
   });
 }
 
@@ -445,7 +453,7 @@ export const sweepPending = internalAction({
           } else {
             await ctx.runMutation(internal.imprevistos._finishPromotion, {
               imprevistoId: row._id,
-              status: row.resolvedAt !== undefined ? "completado" : "pendiente",
+              status: row.resolvedAt !== undefined ? "completado" : "en-curso",
             });
           }
         } else if (guards) {
@@ -470,8 +478,8 @@ export const sweepPending = internalAction({
  * de la tarea la publica por el flujo normal de syncTask.
  */
 export const promoteImprevisto = internalAction({
-  args: { imprevistoId: v.id("imprevistos") },
-  handler: async (ctx, { imprevistoId }) => {
+  args: { imprevistoId: v.id("imprevistos"), day: v.optional(v.number()) },
+  handler: async (ctx, { imprevistoId, day }) => {
     const row = await ctx.runQuery(internal.imprevistos._getInternal, {
       imprevistoId,
     });
@@ -480,11 +488,12 @@ export const promoteImprevisto = internalAction({
     try {
       const guards = await guardsPass(ctx);
       if (guards) {
-        await promoteRow(ctx, row);
+        await promoteRow(ctx, row, day);
       } else {
         await ctx.runMutation(internal.imprevistos._finishPromotion, {
           imprevistoId,
-          status: row.resolvedAt !== undefined ? "completado" : "pendiente",
+          status: row.resolvedAt !== undefined ? "completado" : "en-curso",
+          day,
         });
       }
     } catch (err) {

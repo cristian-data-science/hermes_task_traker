@@ -225,10 +225,16 @@ export const remove = mutation({
  * padre y crear la tarea Hermes enlazada) la completa async
  * imprevistosSync.promoteImprevisto. Si esa parte falla, el sweep la reintenta
  * (promovido sin promotedTaskId).
+ *
+ * `day` es el día del panel que promueve (hoy, calculado por el cliente):
+ * la tarea creada entra SOLA a las Planeadas de ese día — promover a mitad
+ * de día es una replanificación, y perder el asunto recién convertido sería
+ * un agujero en la lista. Opcional porque el sweep (recuperación de
+ * promociones a medias) no lo tiene y ahí la entrada al día es manual.
  */
 export const promote = mutation({
-  args: { ...sessionArg, id: v.id("imprevistos") },
-  handler: async (ctx, { sessionToken, id }) => {
+  args: { ...sessionArg, id: v.id("imprevistos"), day: v.number() },
+  handler: async (ctx, { sessionToken, id, day }) => {
     await requireAuth(ctx, sessionToken);
     const row = await ctx.db.get(id);
     if (!row || row.deletedAt !== undefined)
@@ -242,6 +248,7 @@ export const promote = mutation({
     });
     await ctx.scheduler.runAfter(0, internal.imprevistosSync.promoteImprevisto, {
       imprevistoId: id,
+      day,
     });
   },
 });
@@ -373,9 +380,18 @@ export const _finishPromotion = internalMutation({
     clickupTaskId: v.optional(v.string()),
     clickupUrl: v.optional(v.string()),
     /** Estado final de la tarea según el imprevisto al momento de promover. */
-    status: v.union(v.literal("pendiente"), v.literal("completado")),
+    status: v.union(
+      v.literal("pendiente"),
+      v.literal("en-curso"),
+      v.literal("completado"),
+    ),
+    /**
+     * Día del panel que promueve (hoy local del cliente): si viene, la tarea
+     * entra SOLA a las Planeadas de ese día (mismo shift order-0 que hoy.add).
+     */
+    day: v.optional(v.number()),
   },
-  handler: async (ctx, { imprevistoId, clickupTaskId, clickupUrl, status }) => {
+  handler: async (ctx, { imprevistoId, clickupTaskId, clickupUrl, status, day }) => {
     const row = await ctx.db.get(imprevistoId);
     if (!row || row.promotedAt === undefined) return; // estado cambió a mitad
     if (row.promotedTaskId !== undefined) return; // idempotente
@@ -433,5 +449,34 @@ export const _finishPromotion = internalMutation({
       clickupSyncClaim: undefined,
       updatedAt: now,
     });
+
+    // La tarea promovida entra a las Planeadas del día (si sabemos el día).
+    // Idempotente por (taskId, day), igual que hoy.add — un reintento del
+    // sweep no duplica la fila.
+    if (day !== undefined) {
+      const existing = await ctx.db
+        .query("dayItems")
+        .withIndex("by_task", (q) => q.eq("taskId", taskId).eq("day", day))
+        .first();
+      if (!existing) {
+        const dayRows = await ctx.db
+          .query("dayItems")
+          .withIndex("by_day", (q) => q.eq("day", day))
+          .collect();
+        const active = dayRows
+          .filter((r) => r.deletedAt === undefined)
+          .sort((a, b) => a.order - b.order);
+        await Promise.all(
+          active.map((r, i) => ctx.db.patch(r._id, { order: i + 1, updatedAt: now })),
+        );
+        await ctx.db.insert("dayItems", {
+          day,
+          taskId,
+          order: 0,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
   },
 });

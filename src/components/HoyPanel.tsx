@@ -451,8 +451,8 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
                   ).catch(() => toast.error("No se pudo actualizar el imprevisto"))
                 }
                 onPromote={() => {
-                  void promoteImprevisto({ sessionToken: token!, id: imp._id })
-                    .then(() => toast.success("Promovido: quedó como tarea del tablero"))
+                  void promoteImprevisto({ sessionToken: token!, id: imp._id, day: today })
+                    .then(() => toast.success("Promovido: la tarea quedó en en-curso y en tu día"))
                     .catch(() => toast.error("No se pudo promover"));
                 }}
                 onRemove={() => {
@@ -507,8 +507,8 @@ export function HoyPanel({ tasks, onEditTask }: HoyPanelProps) {
                       ).catch(() => toast.error("No se pudo actualizar el imprevisto"))
                     }
                     onPromote={() => {
-                      void promoteImprevisto({ sessionToken: token!, id: imp._id })
-                        .then(() => toast.success("Promovido: quedó como tarea del tablero"))
+                      void promoteImprevisto({ sessionToken: token!, id: imp._id, day: today })
+                        .then(() => toast.success("Promovido: la tarea quedó en en-curso y en tu día"))
                         .catch(() => toast.error("No se pudo promover"));
                     }}
                     onRemove={() => {
@@ -709,9 +709,13 @@ function ImprevistoRow({
 
   return (
     <li className="group flex items-center gap-2 rounded-el px-1 py-1 hover:bg-panel2">
-      {/* Check: resolver / reabrir. Promovidos quedan congelados. */}
+      {/* Check: resolver / reabrir. Promovidos se congelan: su "check" es el
+          salto a la tarea (el trabajo NO está hecho, cambió de forma). */}
       {promoted ? (
-        <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-dashed border-line text-faint">
+        <span
+          className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-dashed border-accent text-accent"
+          title="Se transformó en tarea"
+        >
           <ArrowUpRight className="h-3 w-3" />
         </span>
       ) : (
@@ -733,7 +737,8 @@ function ImprevistoRow({
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-sm",
-          resolved || promoted ? "text-faint line-through" : "text-ink",
+          // Solo lo RESUELTO se tacha: promovido no está hecho, se graduó.
+          resolved ? "text-faint line-through" : "text-ink",
         )}
         title={imprevisto.clickupSyncError ?? imprevisto.title}
       >
@@ -764,10 +769,10 @@ function ImprevistoRow({
         (promotedTask ? (
           <button
             onClick={() => onEditTask(promotedTask)}
-            title="Ver la tarea creada"
-            className="shrink-0 rounded-el px-1 text-[10px] font-medium text-accent hover:underline"
+            title="Ver la tarea creada (en-curso, en tus Planeadas de hoy)"
+            className="shrink-0 rounded-el border-el border-accent/40 bg-accent/10 px-1.5 text-[10px] font-semibold text-accent hover:bg-accent/20"
           >
-            tarea ↗
+            → tarea
           </button>
         ) : (
           <span className="shrink-0 text-[10px] text-faint" title="Creando la tarea…">

@@ -908,16 +908,15 @@ function UnplannedSection({ items }: { items: WeekBody["unplanned"] }) {
                 <span
                   className={cn(
                     "min-w-0 flex-1 truncate",
-                    i.resolvedAt !== null || i.promotedAt !== null
-                      ? "text-faint line-through"
-                      : "text-ink",
+                    // Solo lo resuelto se tacha: promovido se graduó a tarea.
+                    i.resolvedAt !== null ? "text-faint line-through" : "text-ink",
                   )}
                   title={i.title}
                 >
                   {i.title}
                 </span>
                 {i.promotedAt !== null ? (
-                  <span className="shrink-0 text-[10px] font-medium text-accent">→ tarea</span>
+                  <span className="shrink-0 text-[10px] font-semibold text-accent">→ tarea</span>
                 ) : resolvedSameDay ? (
                   <span className="shrink-0 text-[10px] font-medium text-[var(--status-completado)]">
                     al día
