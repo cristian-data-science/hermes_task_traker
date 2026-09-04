@@ -21,6 +21,7 @@
  * Arranque: npm run agent-bridge  ·  con auto-restart: npm run agent-bridge:daemon
  */
 import { spawn } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import {
   existsSync,
   openSync,
@@ -66,8 +67,31 @@ let queueDepth = 0;
 /** Token de sesión para el env de las corridas (se renueva a diario). */
 let _tokenForChild = "";
 
-function log(...a) {
-  console.log(`[${new Date().toLocaleTimeString()}]`, ...a);
+/**
+ * ¿La sesión de esta tarea existe en la DB de ZCode? Las sesiones viven
+ * para siempre en db.sqlite (la app desktop las tiene abiertas en modo
+ * compartido: abrir read-only no molesta). Si la DB no se puede leer por
+ * cualquier motivo, devolvemos true — intentar resume es siempre el mejor
+ * esfuerzo; el peor caso es un error rápido del CLI.
+ */
+function sessionAliveInDb(sessionId) {
+  try {
+    const db = new DatabaseSync(
+      path.join(os.homedir(), ".zcode", "cli", "db", "db.sqlite"),
+      { readOnly: true },
+    );
+    const row = db
+      .prepare("SELECT 1 FROM session WHERE id = ?")
+      .get(sessionId);
+    db.close();
+    return !!row;
+  } catch (e) {
+    log("  [resume] no pude leer la DB de sesiones:", e?.message ?? e);
+    return true;
+  }
+}
+
+function log(...a) {  console.log(`[${new Date().toLocaleTimeString()}]`, ...a);
 }
 
 /** Instancia única: lockfile con pid vivo (evita dos puentes pisándose). */
@@ -340,15 +364,13 @@ async function dispatchTaskInner({ task, workspace }, run) {
   const prompt = buildPrompt({ task, workspacePath: folder, runId, followUp, resumed: !!task.agentSessionId, contract });
   const mode = AUTONOMY_MODE[task.autonomy] ?? "yolo";
   const needsSwap = run.effectiveModel !== defaultModel;
-  // Resume REAL de la sesión del agente (la intención documentada en el
-  // schema, nunca implementada): si el rollout de esa sesión sigue vivo en
-  // ZCode, el agente retoma TODO su contexto (para seguir trabajo o para
-  // responder preguntas sobre lo que hizo). Si fue rotado (ZCode limpia los
-  // viejos), se despacha sin resume y contesta desde el prompt + artefactos.
-  const sessFile = task.agentSessionId
-    ? path.join(ROLLOUT_DIR, `model-io-${task.agentSessionId}.jsonl`)
-    : null;
-  const sessAlive = sessFile ? existsSync(sessFile) : false;
+  // Resume REAL de la sesión del agente: las sesiones viven PARA SIEMPRE en
+  // ~/.zcode/cli/db/db.sqlite (nunca se borran — verificado: 305 sesiones),
+  // así que si la tarea tiene agentSessionId el agente retoma TODO su
+  // contexto (seguir trabajo o responder preguntas sobre lo hecho). El
+  // chequeo es contra la DB y no contra los logs model-io de rollout/ (esos
+  // SÍ rotan y el error hizo despachar sin resume creyendo que "rotaba").
+  const sessAlive = task.agentSessionId ? sessionAliveInDb(task.agentSessionId) : false;
   // Sin --disallowed-tools: en 0.16.5 un spec "Bash(...)" tumba la
   // herramienta Bash entera (ver config.mjs). Los límites de git son
   // contractuales (prompt).
