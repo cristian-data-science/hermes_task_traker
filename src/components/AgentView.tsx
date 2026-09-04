@@ -303,8 +303,10 @@ function Section({
 
 /**
  * Historial de delegaciones terminadas (hecho de días anteriores + canceladas).
- * Reutiliza AgentCard: al tocarla se abre el panel de corridas completo, igual
- * que en el pipeline — el pasado se consulta con el mismo detalle que el hoy.
+ * Formato tabla compacta — una línea por tarea — con paginación de 20 por
+ * página (‹ ›): las tarjetas grandes se acumulaban en un scroll vertical
+ * infinito (pedido explícito de Cris). Al tocar una línea se abre el panel
+ * de corridas completo, igual que en el pipeline.
  */
 function HistorySection({
   items,
@@ -320,6 +322,12 @@ function HistorySection({
       return true;
     }
   });
+  const [page, setPage] = useState(0);
+  const PAGE_SIZE = 20;
+  const pages = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const safePage = Math.min(page, pages - 1);
+  const visible = items.slice(safePage * PAGE_SIZE, safePage * PAGE_SIZE + PAGE_SIZE);
+
   function toggle() {
     setOpen((v) => {
       try {
@@ -350,18 +358,105 @@ function HistorySection({
         </span>
       </button>
       {open && (
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((t) => (
-            <AgentCard
-              key={t._id}
-              task={t}
-              onOpen={() => onOpen(t)}
-              onApprove={() => undefined}
-            />
-          ))}
-        </div>
+        <>
+          <div className="overflow-hidden rounded-el border-el border-line bg-panel2/40">
+            {visible.map((t, i) => (
+              <HistoryRow
+                key={t._id}
+                task={t}
+                zebra={i % 2 === 1}
+                onOpen={() => onOpen(t)}
+              />
+            ))}
+          </div>
+          {pages > 1 && (
+            <div className="mt-1.5 flex items-center justify-end gap-2 text-[11px] text-faint">
+              <button
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={safePage === 0}
+                title="Página anterior"
+                className="rounded-el border-el border-line px-2 py-0.5 hover:text-ink disabled:opacity-30"
+              >
+                ‹
+              </button>
+              <span>
+                {safePage + 1} de {pages}
+              </span>
+              <button
+                onClick={() => setPage((p) => Math.min(pages - 1, p + 1))}
+                disabled={safePage === pages - 1}
+                title="Página siguiente"
+                className="rounded-el border-line border-el px-2 py-0.5 hover:text-ink disabled:opacity-30"
+              >
+                ›
+              </button>
+            </div>
+          )}
+        </>
       )}
     </section>
+  );
+}
+
+/** Una línea del historial: estado · título · cuándo · link ClickUp · ver. */
+function HistoryRow({
+  task,
+  zebra,
+  onOpen,
+}: {
+  task: OverviewTask;
+  zebra: boolean;
+  onOpen: () => void;
+}) {
+  const state = (task.agentState ?? "hecho") as AgentState;
+  const meta = AGENT_STATE_META[state];
+  const when = task.completedAt ?? task.updatedAt;
+  const clickupHref =
+    task.clickupUrl ??
+    (task.clickupId ? `https://app.clickup.com/t/${task.clickupId}` : undefined);
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      title={`${meta?.label ?? ""} — tocar para ver las corridas${task.model ? ` · ${task.model.split("/").pop()}` : ""}`}
+      className={cn(
+        "flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-xs transition-colors hover:bg-panel2",
+        zebra && "bg-panel/40",
+      )}
+    >
+      <meta.Icon className="h-3.5 w-3.5 shrink-0" style={{ color: meta?.tone }} />
+      <span className="min-w-0 flex-1 truncate font-medium text-ink">
+        {task.title}
+      </span>
+      <span className="hidden shrink-0 text-[10px] font-medium sm:inline" style={{ color: meta?.tone }}>
+        {meta?.label}
+      </span>
+      <span className="w-24 shrink-0 text-right text-[10px] text-faint" title={new Date(when).toLocaleString("es-CL")}>
+        {formatRelative(when)}
+      </span>
+      {clickupHref && !task.clickupDetached && (
+        <a
+          href={clickupHref}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(e) => e.stopPropagation()}
+          title="Abrir en ClickUp"
+          className="shrink-0 rounded-el p-0.5 text-faint hover:text-accent"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+        </a>
+      )}
+      <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-faint">
+        <Eye className="h-3 w-3" /> Ver
+      </span>
+    </div>
   );
 }
 
