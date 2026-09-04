@@ -14,20 +14,60 @@
 '                                                    agente que hizo la tarea,
 '                                                    con todo su contexto.
 ' La web no puede abrir rutas locales por seguridad; este puente de Windows sí.
+'
+' IMPORTANTE (bug sufrido): Windows NO siempre entrega la URL tal cual — puede
+' llegar "hermesagent://zcode/?path=..." con barra antes del "?", en minúsculas
+' o sin "//". Por eso el modo se detecta por el HOST (segmento entre el esquema
+' y el "?", sin barras y en minúsculas) y NUNCA con InStr de un string exacto:
+' si no matcheaba, el modo quedaba "open" y abría el Explorador en vez de
+' ZCode. Además cada invocación queda logueada en protocol.log para poder
+' diagnosticar qué llegó realmente.
 On Error Resume Next
 Dim raw, mode, path, session, fso
 raw = WScript.Arguments(0)
-mode = "open"
-If InStr(raw, "://file?") > 0 Then mode = "file"
-If InStr(raw, "://md?") > 0 Then mode = "md"
-If InStr(raw, "://zcode?") > 0 Then mode = "zcode"
 
-' Parsear el query string (key=value separado por &)
-Dim qs, parts, i, pair, eq
+' ===== Log de diagnóstico: qué llegó exactamente por la URL =====
+Set fso = CreateObject("Scripting.FileSystemObject")
+Dim logOut
+On Error Resume Next
+Set logOut = fso.OpenTextFile("C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\protocol.log", 8, True)
+If Not logOut Is Nothing Then
+  logOut.WriteLine Now & " | " & raw
+  logOut.Close
+End If
+On Error Resume Next
+
+' ===== Detectar el modo por el HOST del protocolo =====
+' body = lo que sigue al esquema (con o sin "//"); host = hasta el "?".
+Dim body, hostPart, qs
+mode = "open"
+body = raw
+If InStr(body, "://") > 0 Then
+  body = Mid(body, InStr(body, "://") + 3)
+Else
+  body = Mid(body, InStr(body, ":") + 1)
+End If
+If InStr(body, "?") > 0 Then
+  hostPart = Left(body, InStr(body, "?") - 1)
+  qs = Mid(body, InStr(body, "?") + 1)
+Else
+  hostPart = body
+  qs = ""
+End If
+hostPart = LCase(Replace(hostPart, "/", ""))
+If hostPart = "file" Then
+  mode = "file"
+ElseIf hostPart = "md" Then
+  mode = "md"
+ElseIf hostPart = "zcode" Then
+  mode = "zcode"
+End If
+
+' ===== Parsear el query string (key=value separado por &) =====
+Dim parts, i, pair, eq
 path = ""
 session = ""
-If InStr(raw, "?") > 0 Then
-  qs = Mid(raw, InStr(raw, "?") + 1)
+If qs <> "" Then
   parts = Split(qs, "&")
   For i = 0 To UBound(parts)
     pair = parts(i)
@@ -39,6 +79,7 @@ If InStr(raw, "?") > 0 Then
   Next
 End If
 
+' ===== Ejecutar el modo =====
 ' saneo: solo rutas absolutas de este PC
 If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
   If mode = "file" Then
@@ -46,7 +87,6 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
   ElseIf mode = "md" Then
     Dim newestPath, newestDate
     newestPath = ""
-    Set fso = CreateObject("Scripting.FileSystemObject")
     If fso.FolderExists(path) Then ScanFolder fso.GetFolder(path)
     If newestPath <> "" Then
       CreateObject("WScript.Shell").Run "notepad.exe """ & newestPath & """", 1, False
