@@ -2,16 +2,19 @@
 /**
  * zchat-server — chat WEB local con la sesión de ZCode de una tarea.
  *
- *   node zchat-server.mjs <sessionId> <workspacePath>
+ *   node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState]
  *
- * Levanta un servidor en 127.0.0.1 (puerto 43110+) que sirve una página de
- * chat con la estética de Hermes y contesta con `zcode -p --resume`:
- * la sesión EXACTA de la tarea, contexto completo, turno a turno. Se abre
- * solo en el navegador y se auto-apaga tras 30 min de inactividad.
- *
- * Por qué no el TUI del CLI (@zcode/tui no existe fuera del app.asar) ni el
- * desktop (sin deep-link de sesiones; las automatizaciones a ciegas fallan):
- * ver comentarios en protocol-handler.vbs y zchat.mjs.
+ * Levanta un servidor en 127.0.0.1 (puerto 43110+) con:
+ *  - Historial completo de la conversación (db.sqlite: message+part).
+ *  - STREAMING en vivo: mientras el CLI responde, se poll-ea la DB (que es
+ *    la misma que lee el desktop y se actualiza en caliente) y los bloques
+ *    de texto nuevos viajan al navegador por SSE — se ve al agente escribir
+ *    por partes, no 60s de silencio y la respuesta de golpe.
+ *  - Sidebar con el PLAN de la tarea (viaja desde el tracker en el deep
+ *    link, base64url) y el estado ACTUAL de la tarea: se inyecta en cada
+ *    pregunta para que el agente no responda con datos viejos (ej. decía
+ *    "para-revisión" de su turno cuando la tarea ya estaba completada).
+ *  - Auto-apagado tras 30 min de inactividad (o botón "cerrar chat").
  */
 import http from "node:http";
 import { spawn } from "node:child_process";
@@ -41,38 +44,51 @@ const log = (m) => {
   } catch {}
 };
 
-const [sessionId, workspacePath] = process.argv.slice(2);
+const [sessionId, workspacePath, planB64, statusArg, stateArg] = process.argv.slice(2);
 if (!sessionId || !workspacePath || !existsSync(ZCODE_CLI)) {
-  console.error("uso: node zchat-server.mjs <sessionId> <workspacePath>");
+  console.error("uso: node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState]");
   process.exit(1);
+}
+
+const DB_PATH = path.join(os.homedir(), ".zcode", "cli", "db", "db.sqlite");
+
+function openDb() {
+  return new DatabaseSync(DB_PATH, { readOnly: true });
 }
 
 // Título de la sesión para el banner (read-only, no molesta al desktop).
 let sessionTitle = "";
 try {
-  const db = new DatabaseSync(
-    path.join(os.homedir(), ".zcode", "cli", "db", "db.sqlite"),
-    { readOnly: true },
-  );
+  const db = openDb();
   sessionTitle = db.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title ?? "";
   db.close();
 } catch {}
 
+// Plan de la tarea (base64url de un JSON array de pasos) desde el tracker.
+let plan = [];
+try {
+  if (planB64) {
+    plan = JSON.parse(
+      Buffer.from(planB64.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8"),
+    );
+    if (!Array.isArray(plan)) plan = [];
+  }
+} catch (e) {
+  log(`plan no decodificable: ${e?.message ?? e}`);
+  plan = [];
+}
+const taskStatus = (statusArg || "").slice(0, 40);
+const taskAgentState = (stateArg || "").slice(0, 40);
+
 /**
- * Conversación completa de la sesión, leída de db.sqlite (message+part).
- * Las sesiones NO se borran nunca, así que esto sirve para cualquier tarea
- * por vieja que sea: es el revisor de conversaciones sin depender del
- * desktop (cuyo índice de búsqueda solo se arma al arrancar la app y no ve
- * las sesiones creadas después).
- * Devuelve los ÚLTIMOS `limit` mensajes con texto (saltean reasoning/tools).
+ * Conversación completa de la sesión (solo bloques de texto; saltean
+ * reasoning/tools). Las sesiones NO se borran nunca: sirve para cualquier
+ * tarea por vieja que sea.
  */
 function readHistory(sessionId, limit = 80) {
   let db;
   try {
-    db = new DatabaseSync(
-      path.join(os.homedir(), ".zcode", "cli", "db", "db.sqlite"),
-      { readOnly: true },
-    );
+    db = openDb();
     const msgs = db
       .prepare("SELECT id, data FROM message WHERE session_id = ? ORDER BY sequence")
       .all(sessionId);
@@ -105,6 +121,62 @@ function readHistory(sessionId, limit = 80) {
   }
 }
 
+/** rowid máximo de part para la sesión (marca de agua del streaming). */
+function maxPartRowid() {
+  try {
+    const db = openDb();
+    const r = db
+      .prepare("SELECT COALESCE(MAX(rowid), 0) m FROM part WHERE session_id = ?")
+      .get(sessionId);
+    db.close();
+    return r.m;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Bloques NUEVOS de la sesión desde un rowid: texto del assistant (deltas
+ * del streaming) y tools (para el indicador de actividad). El desktop lee
+ * esta misma tabla en vivo — es exactamente su fuente.
+ */
+function newPartsSince(rowid) {
+  let db;
+  try {
+    db = openDb();
+    const rows = db
+      .prepare(
+        `SELECT p.rowid rid, p.data pdata, m.data mdata
+         FROM part p JOIN message m ON m.id = p.message_id
+         WHERE p.session_id = ? AND p.rowid > ?
+         ORDER BY p.rowid`,
+      )
+      .all(sessionId, rowid);
+    const out = [];
+    for (const r of rows) {
+      let role = "assistant";
+      let d;
+      try {
+        role = JSON.parse(r.mdata).role ?? role;
+        d = JSON.parse(r.pdata);
+      } catch {
+        continue;
+      }
+      if (role !== "assistant") continue;
+      if (d.type === "text" && d.text?.trim()) out.push({ kind: "text", text: d.text.trim(), rid: r.rid });
+      else if (d.type === "tool") out.push({ kind: "tool", name: d.toolName ?? d.name ?? "", rid: r.rid });
+    }
+    return out;
+  } catch (e) {
+    log(`newParts: ${e?.message ?? e}`);
+    return [];
+  } finally {
+    try {
+      db?.close();
+    } catch {}
+  }
+}
+
 /* eslint-disable no-useless-escape */
 const PAGE = `<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -116,13 +188,16 @@ const PAGE = `<!doctype html><html lang="es"><head><meta charset="utf-8">
   header{padding:12px 18px;border-bottom:1px solid var(--line);background:var(--panel)}
   header h1{margin:0;font-size:14px;color:var(--accent)}
   header p{margin:3px 0 0;font-size:11px;color:var(--faint)}
+  #main{flex:1;display:flex;min-height:0}
+  #chatwrap{flex:1;display:flex;flex-direction:column;min-width:0}
   #chat{flex:1;overflow-y:auto;padding:18px;display:flex;flex-direction:column;gap:12px}
   .msg{max-width:78%;padding:10px 14px;border-radius:14px;white-space:pre-wrap;word-wrap:break-word}
   .msg.user{align-self:flex-end;background:var(--user);border:1px solid #1e4636}
   .msg.agent{align-self:flex-start;background:var(--panel2);border:1px solid var(--line)}
   .msg pre{background:#000;padding:10px;border-radius:8px;overflow-x:auto;font:12px/1.5 Consolas,monospace;white-space:pre}
   .msg code{font:12px Consolas,monospace;background:#000;padding:1px 5px;border-radius:4px}
-  .msg.busy{color:var(--faint);font-style:italic}
+  .live{color:var(--faint);font-style:italic;font-size:12px}
+  .tool{align-self:flex-start;color:var(--faint);font-size:11px;font-style:italic;padding:0 14px}
   .dots span{animation:blink 1.2s infinite;border-radius:50%;display:inline-block;width:5px;height:5px;background:var(--accent);margin-right:3px}
   .dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
   @keyframes blink{0%,80%,100%{opacity:.2}40%{opacity:1}}
@@ -131,25 +206,49 @@ const PAGE = `<!doctype html><html lang="es"><head><meta charset="utf-8">
   button{background:var(--accent);border:0;color:#00291c;font-weight:600;border-radius:10px;padding:0 18px;cursor:pointer}
   button:disabled{opacity:.4;cursor:default}
   .cerrar{background:none;border:1px solid var(--line);color:var(--faint);font-size:11px;padding:6px 10px}
+  aside{width:270px;flex-shrink:0;border-left:1px solid var(--line);background:var(--panel);overflow-y:auto;padding:14px}
+  aside h2{margin:0 0 8px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--mute)}
+  aside ol{margin:0;padding-left:20px;font-size:12.5px;color:var(--ink)}
+  aside li{margin-bottom:7px}
+  .badge{display:inline-block;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:11px;margin:0 4px 10px 0;background:var(--panel2)}
+  .sep{margin:16px 0}
+  @media(max-width:900px){aside{display:none}}
 </style></head><body>
 <header>
   <h1 id="t">Chat con el agente</h1>
   <p id="sub"></p>
 </header>
-<div id="chat"></div>
-<footer>
-  <textarea id="q" rows="1" placeholder="Preguntale lo que quieras… (Enter envía, Shift+Enter salta línea)"></textarea>
-  <button id="send">Enviar</button>
-</footer>
-<div style="padding:6px 18px 10px;background:var(--panel)"><button class="cerrar" id="quit">cerrar chat</button></div>
+<div id="main">
+  <div id="chatwrap">
+    <div id="chat"></div>
+    <footer>
+      <textarea id="q" rows="1" placeholder="Preguntale lo que quieras… (Enter envía, Shift+Enter salta línea)"></textarea>
+      <button id="send">Enviar</button>
+    </footer>
+    <div style="padding:6px 18px 10px;background:var(--panel)"><button class="cerrar" id="quit">cerrar chat</button></div>
+  </div>
+  <aside id="side"></aside>
+</div>
 <script>
 const chat=document.getElementById('chat'),q=document.getElementById('q'),send=document.getElementById('send');
-let busy=false;
+let busy=false, es=null;
 fetch('/info').then(r=>r.json()).then(i=>{
   document.getElementById('t').textContent='Chat con el agente'+(i.title?' — '+i.title:'');
-  document.getElementById('sub').textContent=i.folder+' · responde con todo el contexto (~30-90s por respuesta)';
+  document.getElementById('sub').textContent=i.folder+' · respuesta en vivo, con todo el contexto de la sesión';
+  if(i.plan&&i.plan.length){
+    const side=document.getElementById('side');
+    let h='<h2>Plan de la tarea</h2><ol>';
+    for(const p of i.plan)h+='<li>'+esc(p)+'</li>';
+    h+='</ol>';
+    let ctx='<div class="sep"></div><h2>Estado en el tracker</h2>';
+    if(i.status)ctx+='<span class="badge">'+esc(i.status)+'</span>';
+    if(i.agentState)ctx+='<span class="badge">'+esc(i.agentState)+'</span>';
+    side.innerHTML=h+ctx;
+  }else if(i.status||i.agentState){
+    document.getElementById('side').innerHTML='<h2>Estado en el tracker</h2>'+(i.status?'<span class="badge">'+esc(i.status)+'</span>':'')+(i.agentState?'<span class="badge">'+esc(i.agentState)+'</span>':'');
+  }
 });
-const esc=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const md=s=>{
   let out='',parts=s.split(/\`\`\`/);
   for(let i=0;i<parts.length;i++){
@@ -165,9 +264,7 @@ const md=s=>{
   return out;
 };
 function bubble(cls,html){const d=document.createElement('div');d.className='msg '+cls;d.innerHTML=html;chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d;}
-// Historial previo de la conversación: los mensajes ya intercambiados en
-// ZCode (desktop o CLI), leídos de la DB local. Texto largo truncado a la
-// vista (el texto completo queda en el tooltip).
+// Historial previo de la conversación (lo ya hablado en ZCode desktop/CLI).
 fetch('/history').then(r=>r.json()).then(j=>{
   const h=j.history||[];
   if(!h.length)return;
@@ -185,21 +282,40 @@ fetch('/history').then(r=>r.json()).then(j=>{
   }
   chat.scrollTop=chat.scrollHeight;
 });
+function stopStream(){if(es){es.close();es=null;}}
 async function ask(){
   const text=q.value.trim();
   if(!text||busy)return;
   busy=true;q.value='';q.disabled=true;send.disabled=true;
   bubble('user',esc(text));
-  const b=bubble('agent busy','<span class="dots"><span></span><span></span><span></span></span> el agente está pensando…');
+  const live=document.createElement('div');
+  live.className='tool';live.innerHTML='<span class="dots"><span></span><span></span><span></span></span> empezando…';
+  chat.appendChild(live);chat.scrollTop=chat.scrollHeight;
+  const b=bubble('agent live','');
+  let acc='';
+  stopStream();
+  es=new EventSource('/stream');
+  es.onmessage=(ev)=>{
+    const j=JSON.parse(ev.data);
+    if(j.delta!==undefined){acc+=(acc?'\\n\\n':'')+j.delta;b.textContent=acc;chat.scrollTop=chat.scrollHeight;}
+    else if(j.tool){live.innerHTML='🔧 '+esc(j.tool);chat.scrollTop=chat.scrollHeight;}
+  };
+  es.addEventListener('done',(ev)=>{
+    stopStream();
+    let t=null;
+    try{t=JSON.parse(ev.data).text;}catch{}
+    b.classList.remove('live');
+    b.innerHTML=md(t||acc||'(sin respuesta)');
+    live.remove();
+    finish();
+  });
   try{
     const r=await fetch('/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({q:text})});
     const j=await r.json();
-    b.className='msg agent';
-    b.innerHTML=j.error?('<b style="color:#e55">error:</b> '+esc(j.error)):md(j.text||'(sin respuesta)');
-  }catch(e){b.className='msg agent';b.innerHTML='<b style="color:#e55">error de conexión</b>';}
-  busy=false;q.disabled=false;send.disabled=false;q.focus();
-  chat.scrollTop=chat.scrollHeight;
+    if(j.error){stopStream();b.classList.remove('live');b.innerHTML='<b style="color:#e55">error:</b> '+esc(j.error);live.remove();finish();}
+  }catch(e){stopStream();b.classList.remove('live');b.innerHTML='<b style="color:#e55">error de conexión</b>';live.remove();finish();}
 }
+function finish(){busy=false;q.disabled=false;send.disabled=false;q.focus();chat.scrollTop=chat.scrollHeight;}
 send.onclick=ask;
 q.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();ask();}});
 document.getElementById('quit').onclick=()=>{fetch('/quit',{method:'POST'}).finally(()=>window.close());};
@@ -210,7 +326,20 @@ q.focus();
 // ---- Servidor ----
 let busy = false;
 let lastActivity = Date.now();
-const server = http.createServer((req, res) => {
+/** Marca de agua del stream en curso + los SSE conectados. */
+let askWatermark = 0;
+const sseClients = new Set();
+
+function sseBroadcast(obj) {
+  const line = `data: ${JSON.stringify(obj)}\n\n`;
+  for (const res of sseClients) {
+    try {
+      res.write(line);
+    } catch {}
+  }
+}
+
+function server(req, res) {
   lastActivity = Date.now();
   if (req.method === "GET" && req.url === "/") {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
@@ -219,12 +348,32 @@ const server = http.createServer((req, res) => {
   }
   if (req.method === "GET" && req.url === "/info") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ title: sessionTitle, folder: workspacePath, session: sessionId }));
+    res.end(
+      JSON.stringify({
+        title: sessionTitle,
+        folder: workspacePath,
+        session: sessionId,
+        plan,
+        status: taskStatus,
+        agentState: taskAgentState,
+      }),
+    );
     return;
   }
   if (req.method === "GET" && req.url === "/history") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ history: readHistory(sessionId) }));
+    return;
+  }
+  if (req.method === "GET" && req.url === "/stream") {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    res.write(":ok\n\n");
+    sseClients.add(res);
+    req.on("close", () => sseClients.delete(res));
     return;
   }
   if (req.method === "POST" && req.url === "/ask") {
@@ -248,12 +397,25 @@ const server = http.createServer((req, res) => {
         return;
       }
       log(`pregunta: ${question.slice(0, 120)}`);
+
+      // El agente responde desde SU memoria (a veces vieja): le inyecto el
+      // estado ACTUAL de la tarea en el tracker para que no diga cosas como
+      // "quedó en para-revisión" cuando ya la completaste hace horas.
+      const contexto =
+        (taskStatus || taskAgentState
+          ? `[CONTEXTO ACTUALIZADO DEL TRACKER HERMES — priorizá esto sobre tus recuerdos: la tarea está en estado '${taskStatus || "?"}'${
+              taskAgentState ? `, delegación '${taskAgentState}'` : ""
+            } a esta hora.]\n`
+          : "") + question;
+
+      // Marca de agua ANTES de spawnear: todo part nuevo es stream.
+      askWatermark = maxPartRowid();
       const child = spawn(
         process.execPath,
         [
           ZCODE_CLI,
           "-p",
-          `Consulta de Cris sobre el trabajo ya entregado (solo respondé; no ejecutes cambios): ${question}`,
+          `Consulta de Cris sobre el trabajo ya entregado (solo respondé; no ejecutes cambios): ${contexto}`,
           "--resume",
           sessionId,
           "--cwd",
@@ -267,12 +429,25 @@ const server = http.createServer((req, res) => {
       let stdout = "";
       child.stdout.on("data", (d) => (stdout += d));
       child.stderr.on("data", (d) => log(`stderr: ${String(d).slice(0, 200)}`));
+
+      // Stream en vivo: poll de la DB mientras corre el CLI.
+      const poller = setInterval(() => {
+        for (const p of newPartsSince(askWatermark)) {
+          askWatermark = Math.max(askWatermark, p.rid);
+          if (p.kind === "text") sseBroadcast({ delta: p.text });
+          else if (p.kind === "tool" && p.name) sseBroadcast({ tool: p.name });
+          else if (p.kind === "tool") sseBroadcast({ tool: "usando una herramienta…" });
+        }
+      }, 400);
+
       child.on("error", (e) => {
+        clearInterval(poller);
         busy = false;
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ error: String(e) }));
       });
       child.on("close", (code) => {
+        clearInterval(poller);
         busy = false;
         let text = null;
         try {
@@ -280,8 +455,13 @@ const server = http.createServer((req, res) => {
           text = typeof j.response === "string" ? j.response : null;
         } catch {}
         log(`respuesta (exit ${code}): ${text ? text.length + " chars" : "sin texto"}`);
+        for (const res2 of sseClients) {
+          try {
+            res2.write(`event: done\ndata: ${JSON.stringify({ text })}\n\n`);
+          } catch {}
+        }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ text: text ?? `La corrida terminó (código ${code}) sin respuesta textual — probá de nuevo.` }));
+        res.end(JSON.stringify({ ok: true, text }));
       });
     });
     return;
@@ -294,14 +474,15 @@ const server = http.createServer((req, res) => {
   }
   res.writeHead(404);
   res.end();
-});
+}
 
 // Puerto libre en el rango, bind local únicamente.
 let port = 43110;
+const serverInst = http.createServer(server);
 const listen = () =>
   new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
+    serverInst.once("error", reject);
+    serverInst.listen(port, "127.0.0.1", () => resolve());
   });
 (async () => {
   for (let i = 0; i < 12; i++) {
@@ -318,9 +499,7 @@ const listen = () =>
   }
   const url = `http://127.0.0.1:${port}`;
   log(`arriba en ${url} · sesión ${sessionId} · ${workspacePath}`);
-  // Abrir el navegador con el chat (start abre el default).
   spawn("cmd", ["/c", "start", "", url], { windowsHide: true });
-  // Auto-apagado por inactividad: no dejar servidores huérfanos.
   setInterval(() => {
     if (Date.now() - lastActivity > 30 * 60 * 1000) {
       log("idle timeout — chau");
