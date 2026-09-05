@@ -85,10 +85,25 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
         {task.agentSessionId && (
           <button
             onClick={() => {
-              window.location.href = `hermesagent://zcode?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}`;
+              // Plan de la corrida más reciente + estado actual: viajan en el
+              // deep link (plan en base64url) para que el chat los muestre en
+              // su sidebar y le inyecte el estado fresco al agente en cada
+              // pregunta (si no, respondía con recuerdos viejos tipo
+              // "quedó en para-revisión" cuando ya estaba completada).
+              const latestWithPlan = runs.find((r) => r.plan && r.plan.length > 0);
+              const planJson = JSON.stringify(latestWithPlan?.plan ?? []);
+              const p64 = btoa(
+                String.fromCharCode(...new TextEncoder().encode(planJson)),
+              )
+                .replace(/\+/g, "-")
+                .replace(/\//g, "_")
+                .replace(/=+$/, "");
+              const st = task.status ?? "";
+              const ag = task.agentState ?? "";
+              window.location.href = `hermesagent://zcode?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
             }}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
-            title="Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: el agente responde con TODO su contexto, ~30-90s por respuesta. Tildá 'Siempre permitir' en el diálogo del navegador la primera vez."
+            title="Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, respuesta en vivo (streaming) y el plan en la barra lateral. Tildá 'Siempre permitir' la primera vez."
           >
             <MessageCircle className="h-3.5 w-3.5" /> Chatear con el agente
           </button>

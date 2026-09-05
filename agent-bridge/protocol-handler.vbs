@@ -95,15 +95,23 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
     End If
   ElseIf mode = "zcode" Then
     ' Chat WEB local con la sesión EXACTA del agente (zchat-server): página de
-    ' chat en el navegador con la estética de Hermes — burbujas, markdown,
-    ' spinner — respondiendo con zcode -p --resume contra la sesión exacta.
-    ' El servidor corre oculto, se abre solo en el navegador y se auto-apaga a
-    ' los 30 min de inactividad (o con el botón "cerrar chat").
-    ' Por qué no el desktop ni el TUI: ver comentarios en zchat-server.mjs.
-    ' Sesión validada (solo [A-Za-z0-9_-]).
+    ' chat en el navegador con estética Hermes — historial completo, respuesta
+    ' EN VIVO (streaming desde la DB de sesiones, la misma que lee el desktop),
+    ' sidebar con el plan de la tarea (p64) y el estado fresco del tracker
+    ' (st/ag), que se inyecta en cada pregunta para que el agente no responda
+    ' con recuerdos viejos. El servidor corre oculto, abre el navegador solo y
+    ' se auto-apaga a los 30 min de inactividad.
+    ' Validaciones: sesión y p64 son [A-Za-z0-9_-]; st/ag palabras sueltas.
+    Dim p64, st, ag
     If Len(session) > 10 And IsSafeToken(session) Then
+      p64 = qsValue(qs, "p64")
+      st = qsValue(qs, "st")
+      ag = qsValue(qs, "ag")
+      If p64 <> "" And Not IsSafeToken(p64) Then p64 = ""
+      If st <> "" And Not IsSafeToken(st) Then st = ""
+      If ag <> "" And Not IsSafeToken(ag) Then ag = ""
       CreateObject("WScript.Shell").Run _
-        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """", _
+        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """ " & p64 & " " & st & " " & ag, _
         0, False
     End If
   Else
@@ -179,6 +187,24 @@ Function IsSafeToken(s)
          Or (code >= 97 And code <= 122) Or code = 45 Or code = 95) Then
       IsSafeToken = False
       Exit Function
+    End If
+  Next
+End Function
+
+' Valor decodificado de una key del query string (o "" si no está).
+Function qsValue(q, key)
+  Dim pp, j, pr, eqp
+  qsValue = ""
+  If q = "" Then Exit Function
+  pp = Split(q, "&")
+  For j = 0 To UBound(pp)
+    pr = pp(j)
+    eqp = InStr(pr, "=")
+    If eqp > 0 Then
+      If LCase(Left(pr, eqp - 1)) = LCase(key) Then
+        qsValue = URLDecode(Mid(pr, eqp + 1))
+        Exit Function
+      End If
     End If
   Next
 End Function
