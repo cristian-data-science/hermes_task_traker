@@ -8,6 +8,10 @@
 :root,
 :root[data-theme="console"] {
   color-scheme: dark;
+  /* Misma fuente que la app (src/index.css --font-sans): JetBrains Mono.
+     Sin esta definición --font-mono queda vacía y todo cae en la fuente
+     del sistema (la "fea" que reportó Cris). */
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --font-ui: var(--font-mono);
   --font-prose: var(--font-mono);
   --fs: 13.5px;
