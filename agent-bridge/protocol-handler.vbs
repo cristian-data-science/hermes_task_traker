@@ -7,12 +7,13 @@
 '                                                    recursiva, sin
 '                                                    node_modules/backups; si
 '                                                    no hay, abre la carpeta)
-'   hermesagent://zcode?path=<carpeta>&session=<sess_..>
-'                                                  → terminal interactiva con
-'                                                    ZCode retomando la sesión
-'                                                    (--resume): chatear con el
-'                                                    agente que hizo la tarea,
-'                                                    con todo su contexto.
+'   hermesagent://zcode?path=<carpeta>&session=<sess_..>[&task=<id>&p64=..&st=..&ag=..&th=..]
+'                                                  → chat WEB local (zchat-server)
+'                                                    contra la sesión EXACTA del
+'                                                    agente que hizo la tarea:
+'                                                    historial, respuesta en vivo
+'                                                    y panel de misión en vivo
+'                                                    (task → Convex).
 ' La web no puede abrir rutas locales por seguridad; este puente de Windows sí.
 '
 ' IMPORTANTE (bug sufrido): Windows NO siempre entrega la URL tal cual — puede
@@ -101,17 +102,27 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
     ' (st/ag), que se inyecta en cada pregunta para que el agente no responda
     ' con recuerdos viejos. El servidor corre oculto, abre el navegador solo y
     ' se auto-apaga a los 30 min de inactividad.
-    ' Validaciones: sesión y p64 son [A-Za-z0-9_-]; st/ag palabras sueltas.
-    Dim p64, st, ag
+    ' Además viaja el id de la tarea (task): con él el servidor se suscribe a
+    ' Convex y muestra el plan/estado EN VIVO (no el snapshot del enlace), y el
+    ' tema inicial (th: aurora|console|paper) como sugerencia.
+    ' Validaciones: sesión, p64 y task son [A-Za-z0-9_-]; st/ag/th palabras
+    ' sueltas. Los valores vacíos viajan como "-" para que la POSICIÓN de cada
+    ' argumento sea siempre la misma (antes, un p64 vacío corría st al lugar
+    ' del plan).
+    Dim p64, st, ag, tk, th
     If Len(session) > 10 And IsSafeToken(session) Then
       p64 = qsValue(qs, "p64")
       st = qsValue(qs, "st")
       ag = qsValue(qs, "ag")
-      If p64 <> "" And Not IsSafeToken(p64) Then p64 = ""
-      If st <> "" And Not IsSafeToken(st) Then st = ""
-      If ag <> "" And Not IsSafeToken(ag) Then ag = ""
+      tk = qsValue(qs, "task")
+      th = qsValue(qs, "th")
+      If p64 = "" Or Not IsSafeToken(p64) Then p64 = "-"
+      If st = "" Or Not IsSafeToken(st) Then st = "-"
+      If ag = "" Or Not IsSafeToken(ag) Then ag = "-"
+      If tk = "" Or Not IsSafeToken(tk) Then tk = "-"
+      If th = "" Or Not IsSafeToken(th) Then th = "-"
       CreateObject("WScript.Shell").Run _
-        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """ " & p64 & " " & st & " " & ag, _
+        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """ " & p64 & " " & st & " " & ag & " " & tk & " " & th, _
         0, False
     End If
   Else

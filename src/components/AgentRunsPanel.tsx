@@ -109,10 +109,13 @@ function ArtifactsBlock({
                 .replace(/=+$/, "");
               const st = task.status ?? "";
               const ag = task.agentState ?? "";
-              window.location.href = `hermesagent://zcode?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
+              // task → el servidor del chat se suscribe a Convex y muestra el
+              // plan, el paso actual y el estado EN VIVO (p64/st/ag quedan
+              // como respaldo si el puente no tiene credenciales).
+              window.location.href = `hermesagent://zcode?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
             }}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
-            title="Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, respuesta en vivo (streaming) y el plan en la barra lateral. Tildá 'Siempre permitir' la primera vez."
+            title="Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Tildá 'Siempre permitir' la primera vez."
           >
             <MessageCircle className="h-3.5 w-3.5" /> Chatear con el agente
           </button>

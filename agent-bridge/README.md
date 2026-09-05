@@ -66,6 +66,63 @@ Variables opcionales (env; defaults ya apuntan a las rutas de esta máquina):
 | `hooks/session-hook.mjs` | re-inyecta contexto si abrís la sesión en el desktop |
 | `register-hooks.mjs` | registra los hooks globales (backup previo; `--remove` para quitarlos) |
 
+## Chat web con el agente (`zchat-server.mjs` + `zchat-ui/`)
+
+El botón **💬 Chatear con el agente** de la app abre `hermesagent://zcode?…`
+(protocolo registrado por `register-protocol.cmd`, handler
+`protocol-handler.vbs`), que lanza oculto `zchat-server.mjs` y abre el
+navegador en `http://127.0.0.1:4311x/`. Es una conversación REAL con la sesión
+de ZCode de la tarea (`zcode -p --resume <sess>`, modo `plan`: responde, no
+ejecuta cambios).
+
+**Cómo se ve la respuesta en vivo.** El CLI corre con
+`--output-format stream-json` y escribe en stdout un evento NDJSON por token:
+`model.streaming` (`reasoning_delta`, `text_delta`, `tool_call`…),
+`tool.updated` (inicio y resultado de cada herramienta), `turn.completed`
+(respuesta final + tokens). El servidor los traduce a bloques con id y los
+empuja al navegador por SSE (`/events`): razonamiento, herramientas (Read,
+Bash, MCP…, con estado y salida) y texto aparecen mientras ocurren, en orden.
+Verificado en zcode 0.16.5: la DB de sesiones (`~/.zcode/cli/db/db.sqlite`)
+se persiste al cerrar cada paso, **no** token a token — por eso la versión
+anterior, que la poll-eaba, mostraba todo de golpe al final. La DB queda como
+respaldo si el CLI no emite eventos; en ese caso los mensajes del turno se
+correlacionan por `anchor.turnId`/`parentID` para no mezclar corridas
+concurrentes del desktop sobre la misma sesión.
+
+**Panel de misión en vivo.** El deep link lleva `task=<id>`; con las
+credenciales del puente (`auth.mjs`, misma clave RSA) el servidor se suscribe
+a Convex (`tasks:get` + `agent:runsByTask`) y muestra plan con paso actual,
+pasos reportados, actividad, estado, resumen y pregunta abierta — y se lo
+inyecta fresco al agente en cada pregunta (`[CONTEXTO ACTUALIZADO DEL
+TRACKER…]`). Sin credenciales cae al snapshot del enlace (`p64/st/ag`).
+
+**Robustez.**
+- Instancia única por sesión: si ya hay un servidor para esa sesión, el nuevo
+  abre esa pestaña y sale (antes cada clic sumaba un servidor y los pollers de
+  todos mezclaban respuestas).
+- `/events` con `id:` por evento → el navegador reconecta solo y el servidor
+  re-envía lo perdido (`Last-Event-ID`); `/state` devuelve el turno en curso
+  completo, así recargar la página a mitad de una respuesta no pierde nada.
+- Un turno a la vez (409 si hay otro), timeout de 15 min, botón **Detener**
+  (`/cancel`), auto-apagado a los 30 min sin uso (nunca con un turno abierto),
+  el proceso hijo muere con el servidor.
+- El texto final autoritativo sale de la DB (fallback: stdout `--json`).
+
+**Temas.** Tres, conmutables en la cabecera y persistidos en el navegador
+(`localStorage: zchat-theme`): **Aurora** (oscuro, vidrio, degradados),
+**Consola** (terminal neón, monoespaciado) y **Papel** (claro, editorial).
+
+**Probar sin gastar tokens.** `ZCHAT_DEMO=1` simula un turno (razonamiento →
+herramientas → respuesta con markdown) sin lanzar el CLI; `ZCHAT_NO_OPEN=1`
+no abre el navegador:
+
+```bash
+ZCHAT_DEMO=1 ZCHAT_NO_OPEN=1 node agent-bridge/zchat-server.mjs <sess_…> "<carpeta>" - - - <taskId>
+```
+
+Otras variables: `ZCHAT_POLL_MS` (200) · `ZCHAT_TURN_TIMEOUT_MS` (900000) ·
+`ZCHAT_IDLE_MS` (1800000). Log: `agent-bridge/zchat-server.log`.
+
 ## Flujo de una tarea
 
 1. Cris crea la tarea en la web: ejecutor **ZCode** + tipo + carpeta + autonomía + modelo + WhatsApp.
