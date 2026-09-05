@@ -94,20 +94,17 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
       CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False
     End If
   ElseIf mode = "zcode" Then
-    ' Chat INTERACTIVO en terminal con la sesión EXACTA del agente (zchat):
-    ' loop pregunta→respuesta con zcode -p --resume — determinista, sin
-    ' depender del foco ni de la UI del desktop.
-    '
-    ' Por qué no el desktop: no tiene deep-link de sesiones, y las dos
-    ' automatizaciones probadas fallan a ciegas (Ctrl+Shift+[ aterriza en la
-    ' conversación "anterior" que no es la nuestra; el palette Ctrl+K busca
-    ' bien pero Enter elige por ranking fuzzy y puede abrir OTRA que matchee).
-    ' El desktop queda como lectura manual: sidebar (Ctrl+B) o palette Ctrl+K.
-    ' La sesión va validada (solo [A-Za-z0-9_-]).
+    ' Chat WEB local con la sesión EXACTA del agente (zchat-server): página de
+    ' chat en el navegador con la estética de Hermes — burbujas, markdown,
+    ' spinner — respondiendo con zcode -p --resume contra la sesión exacta.
+    ' El servidor corre oculto, se abre solo en el navegador y se auto-apaga a
+    ' los 30 min de inactividad (o con el botón "cerrar chat").
+    ' Por qué no el desktop ni el TUI: ver comentarios en zchat-server.mjs.
+    ' Sesión validada (solo [A-Za-z0-9_-]).
     If Len(session) > 10 And IsSafeToken(session) Then
       CreateObject("WScript.Shell").Run _
-        "cmd /k node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat.mjs"" " & session & " """ & path & """", _
-        1, False
+        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """", _
+        0, False
     End If
   Else
     CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False
