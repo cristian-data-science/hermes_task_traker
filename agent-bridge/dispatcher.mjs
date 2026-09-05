@@ -343,13 +343,23 @@ async function dispatchTaskInner({ task, workspace }, run) {
     return;
   }
 
-  // 2) Reclamar (abre la corrida y entrega el followUp pendiente de Cris).
+  // 2) Resume REAL de la sesión del agente: las sesiones viven PARA SIEMPRE en
+  //    ~/.zcode/cli/db/db.sqlite (nunca se borran — verificado: 305 sesiones),
+  //    así que si la tarea tiene agentSessionId el agente retoma TODO su
+  //    contexto (seguir trabajo o responder preguntas sobre lo hecho). El
+  //    chequeo es contra la DB y no contra los logs model-io de rollout/ (esos
+  //    SÍ rotan). Va ANTES del claim: el claim también lo usa, y declararlo
+  //    después era un TDZ ("Cannot access before initialization") que dejaba
+  //    la tarea pegada en encolada para siempre.
+  const sessAlive = task.agentSessionId ? sessionAliveInDb(task.agentSessionId) : false;
+
+  // 3) Reclamar (abre la corrida y entrega el followUp pendiente de Cris).
   let runId, followUp;
   try {
     const claimed = await m("agent:claimTask", {
       taskId,
-      // resumed = la corrida RETOMA una sesión previa (el rollout sigue vivo),
-      // no solo "la tarea tenía un sessionId guardado" (puede estar rotado).
+      // resumed = la corrida RETOMA una sesión previa viva,
+      // no solo "la tarea tenía un sessionId guardado".
       resumed: sessAlive,
       workspacePath: folder,
     });
@@ -364,13 +374,6 @@ async function dispatchTaskInner({ task, workspace }, run) {
   const prompt = buildPrompt({ task, workspacePath: folder, runId, followUp, resumed: !!task.agentSessionId, contract });
   const mode = AUTONOMY_MODE[task.autonomy] ?? "yolo";
   const needsSwap = run.effectiveModel !== defaultModel;
-  // Resume REAL de la sesión del agente: las sesiones viven PARA SIEMPRE en
-  // ~/.zcode/cli/db/db.sqlite (nunca se borran — verificado: 305 sesiones),
-  // así que si la tarea tiene agentSessionId el agente retoma TODO su
-  // contexto (seguir trabajo o responder preguntas sobre lo hecho). El
-  // chequeo es contra la DB y no contra los logs model-io de rollout/ (esos
-  // SÍ rotan y el error hizo despachar sin resume creyendo que "rotaba").
-  const sessAlive = task.agentSessionId ? sessionAliveInDb(task.agentSessionId) : false;
   // Sin --disallowed-tools: en 0.16.5 un spec "Bash(...)" tumba la
   // herramienta Bash entera (ver config.mjs). Los límites de git son
   // contractuales (prompt).
