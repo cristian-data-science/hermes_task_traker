@@ -164,6 +164,8 @@ function newPartsSince(rowid) {
       }
       if (role !== "assistant") continue;
       if (d.type === "text" && d.text?.trim()) out.push({ kind: "text", text: d.text.trim(), rid: r.rid });
+      else if (d.type === "reasoning" && d.text?.trim())
+        out.push({ kind: "reasoning", text: d.text.trim(), rid: r.rid });
       else if (d.type === "tool") out.push({ kind: "tool", name: d.toolName ?? d.name ?? "", rid: r.rid });
     }
     return out;
@@ -197,6 +199,9 @@ const PAGE = `<!doctype html><html lang="es"><head><meta charset="utf-8">
   .msg pre{background:#000;padding:10px;border-radius:8px;overflow-x:auto;font:12px/1.5 Consolas,monospace;white-space:pre}
   .msg code{font:12px Consolas,monospace;background:#000;padding:1px 5px;border-radius:4px}
   .live{color:var(--faint);font-style:italic;font-size:12px}
+  details.think{align-self:flex-start;max-width:78%;border:1px dashed var(--line);border-radius:10px;background:var(--panel2);font-size:12.5px}
+  details.think summary{cursor:pointer;padding:7px 12px;color:var(--mute);user-select:none}
+  details.think .body{padding:2px 14px 10px;color:var(--faint);font-style:italic;white-space:pre-wrap;word-wrap:break-word;max-height:240px;overflow-y:auto}
   .tool{align-self:flex-start;color:var(--faint);font-size:11px;font-style:italic;padding:0 14px}
   .dots span{animation:blink 1.2s infinite;border-radius:50%;display:inline-block;width:5px;height:5px;background:var(--accent);margin-right:3px}
   .dots span:nth-child(2){animation-delay:.2s}.dots span:nth-child(3){animation-delay:.4s}
@@ -292,12 +297,27 @@ async function ask(){
   live.className='tool';live.innerHTML='<span class="dots"><span></span><span></span><span></span></span> empezando…';
   chat.appendChild(live);chat.scrollTop=chat.scrollHeight;
   const b=bubble('agent live','');
-  let acc='';
+  let acc='',thinkEl=null,thinkBody=null,thinkChars=0;
   stopStream();
   es=new EventSource('/stream');
   es.onmessage=(ev)=>{
     const j=JSON.parse(ev.data);
     if(j.delta!==undefined){acc+=(acc?'\\n\\n':'')+j.delta;b.textContent=acc;chat.scrollTop=chat.scrollHeight;}
+    else if(j.reasoning!==undefined){
+      // Cadena de razonamiento, como ZCode: bloque colapsable que se llena
+      // en vivo (muestra la cola) y queda plegado al responder.
+      if(!thinkEl){
+        thinkEl=document.createElement('details');thinkEl.className='think';thinkEl.open=true;
+        thinkEl.innerHTML='<summary>🧠 razonamiento…</summary><div class="body"></div>';
+        thinkBody=thinkEl.querySelector('.body');
+        chat.insertBefore(thinkEl,b);
+      }
+      thinkChars+=j.reasoning.length;
+      thinkBody.textContent+=j.reasoning;
+      thinkBody.scrollTop=thinkBody.scrollHeight;
+      thinkEl.querySelector('summary').textContent='🧠 razonando… ('+thinkChars+' caracteres)';
+      chat.scrollTop=chat.scrollHeight;
+    }
     else if(j.tool){live.innerHTML='🔧 '+esc(j.tool);chat.scrollTop=chat.scrollHeight;}
   };
   es.addEventListener('done',(ev)=>{
@@ -307,6 +327,10 @@ async function ask(){
     b.classList.remove('live');
     b.innerHTML=md(t||acc||'(sin respuesta)');
     live.remove();
+    if(thinkEl){
+      thinkEl.open=false;
+      thinkEl.querySelector('summary').textContent='🧠 razonamiento ('+thinkChars+' caracteres)';
+    }
     finish();
   });
   try{
@@ -435,6 +459,7 @@ function server(req, res) {
         for (const p of newPartsSince(askWatermark)) {
           askWatermark = Math.max(askWatermark, p.rid);
           if (p.kind === "text") sseBroadcast({ delta: p.text });
+          else if (p.kind === "reasoning") sseBroadcast({ reasoning: p.text });
           else if (p.kind === "tool" && p.name) sseBroadcast({ tool: p.name });
           else if (p.kind === "tool") sseBroadcast({ tool: "usando una herramienta…" });
         }
