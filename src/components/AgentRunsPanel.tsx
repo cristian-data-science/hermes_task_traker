@@ -48,7 +48,14 @@ function RunStateChip({ state }: { state: string }) {
 /** Botones de artefactos: abrir carpeta / abrir reporte (.md) / ver en ClickUp.
  *  La web no puede abrir rutas locales por seguridad → protocolo
  *  hermesagent:// (instalado en el PC de Cris por agent-bridge). */
-function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
+function ArtifactsBlock({
+  task,
+  plan,
+}: {
+  task: Doc<"tasks">;
+  /** Plan de la última corrida (para el sidebar del chat). */
+  plan?: string[];
+}) {
   if (!task.workspacePath) return null;
   const open = (mode: "open" | "file" | "md", path: string) => {
     window.location.href = `hermesagent://${mode}?path=${encodeURIComponent(path)}`;
@@ -90,7 +97,9 @@ function ArtifactsBlock({ task }: { task: Doc<"tasks"> }) {
               // su sidebar y le inyecte el estado fresco al agente en cada
               // pregunta (si no, respondía con recuerdos viejos tipo
               // "quedó en para-revisión" cuando ya estaba completada).
-              const latestWithPlan = runs.find((r) => r.plan && r.plan.length > 0);
+              const latestWithPlan = (plan ?? []).length
+                ? { plan }
+                : undefined;
               const planJson = JSON.stringify(latestWithPlan?.plan ?? []);
               const p64 = btoa(
                 String.fromCharCode(...new TextEncoder().encode(planJson)),
@@ -648,7 +657,10 @@ export function AgentRunsPanel({
               </button>
 
               {/* Artefactos: carpeta/reporte abribles desde el PC */}
-              <ArtifactsBlock task={task} />
+              <ArtifactsBlock
+                task={task}
+                plan={runs.find((r) => r.plan && r.plan.length > 0)?.plan}
+              />
 
               {/* Timeline de corridas */}
               <label className="label">Corridas</label>
