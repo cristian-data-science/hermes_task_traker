@@ -94,27 +94,20 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
       CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False
     End If
   ElseIf mode = "zcode" Then
-    ' Abrir la CONVERSACIÓN del agente en el desktop de ZCode.
-    ' El desktop no tiene deep-link de sesiones, pero sí tiene el switcher
-    ' Ctrl+Shift+[ (conversación anterior del workspace — verificado en vivo:
-    ' salta directo a la sesión del agente con TODO su historial) y el
-    ' sidebar con la lista completa. Entonces: abrimos el workspace por
-    ' deep-link y le MANDAMOS el atajo nosotros tras un momento.
-    ' La sesión va validada igual (defensa en profundidad), aunque acá ya no
-    ' llega a una línea de comandos.
-    Dim shell
-    Set shell = CreateObject("WScript.Shell")
+    ' Chat INTERACTIVO en terminal con la sesión EXACTA del agente (zchat):
+    ' loop pregunta→respuesta con zcode -p --resume — determinista, sin
+    ' depender del foco ni de la UI del desktop.
+    '
+    ' Por qué no el desktop: no tiene deep-link de sesiones, y las dos
+    ' automatizaciones probadas fallan a ciegas (Ctrl+Shift+[ aterriza en la
+    ' conversación "anterior" que no es la nuestra; el palette Ctrl+K busca
+    ' bien pero Enter elige por ranking fuzzy y puede abrir OTRA que matchee).
+    ' El desktop queda como lectura manual: sidebar (Ctrl+B) o palette Ctrl+K.
+    ' La sesión va validada (solo [A-Za-z0-9_-]).
     If Len(session) > 10 And IsSafeToken(session) Then
-      shell.Run """C:\Users\patag\AppData\Local\Programs\ZCode\ZCode.exe"" ""zcode://workspace/open?path=" & URLEnc(path) & """", 1, False
-      ' Esperar el arranque/cambio de workspace. Si el desktop estaba frío y
-      ' tardó más, el SendKeys no llega: el usuario presiona Ctrl+Shift+[ a
-      ' mano (el tooltip de la app se lo dice).
-      WScript.Sleep 3500
-      If shell.AppActivate("ZCode") Then
-        WScript.Sleep 400
-        ' En SendKeys, [ es especial: se escapa como {[}.
-        shell.SendKeys "^+{[}"
-      End If
+      CreateObject("WScript.Shell").Run _
+        "cmd /k node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat.mjs"" " & session & " """ & path & """", _
+        1, False
     End If
   Else
     CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False

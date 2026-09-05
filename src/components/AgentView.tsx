@@ -455,7 +455,7 @@ function HistoryRow({
         <a
           href={`hermesagent://zcode?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}`}
           onClick={(e) => e.stopPropagation()}
-          title="Abrir la conversación del agente en ZCode desktop (salta sola; si no, Ctrl+Shift+[ o el sidebar la lista)"
+          title="Chatear con el agente en terminal: abre zchat contra la sesión EXACTA de esta tarea, con todo su contexto (~30-90s por respuesta). Tildá 'Siempre permitir' en el diálogo del navegador."
           className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"
         >
           <MessageCircle className="h-3.5 w-3.5" />
