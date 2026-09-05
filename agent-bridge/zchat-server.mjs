@@ -58,6 +58,53 @@ try {
   db.close();
 } catch {}
 
+/**
+ * Conversación completa de la sesión, leída de db.sqlite (message+part).
+ * Las sesiones NO se borran nunca, así que esto sirve para cualquier tarea
+ * por vieja que sea: es el revisor de conversaciones sin depender del
+ * desktop (cuyo índice de búsqueda solo se arma al arrancar la app y no ve
+ * las sesiones creadas después).
+ * Devuelve los ÚLTIMOS `limit` mensajes con texto (saltean reasoning/tools).
+ */
+function readHistory(sessionId, limit = 80) {
+  let db;
+  try {
+    db = new DatabaseSync(
+      path.join(os.homedir(), ".zcode", "cli", "db", "db.sqlite"),
+      { readOnly: true },
+    );
+    const msgs = db
+      .prepare("SELECT id, data FROM message WHERE session_id = ? ORDER BY sequence")
+      .all(sessionId);
+    const getParts = db.prepare(
+      "SELECT data FROM part WHERE message_id = ? ORDER BY sequence",
+    );
+    const out = [];
+    for (const m of msgs.slice(-limit)) {
+      let role = "assistant";
+      try {
+        role = JSON.parse(m.data).role ?? role;
+      } catch {}
+      const texts = [];
+      for (const p of getParts.all(m.id)) {
+        try {
+          const d = JSON.parse(p.data);
+          if (d.type === "text" && d.text?.trim()) texts.push(d.text.trim());
+        } catch {}
+      }
+      if (texts.length) out.push({ role, text: texts.join("\n\n") });
+    }
+    return out;
+  } catch (e) {
+    log(`history: ${e?.message ?? e}`);
+    return [];
+  } finally {
+    try {
+      db?.close();
+    } catch {}
+  }
+}
+
 /* eslint-disable no-useless-escape */
 const PAGE = `<!doctype html><html lang="es"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -118,6 +165,26 @@ const md=s=>{
   return out;
 };
 function bubble(cls,html){const d=document.createElement('div');d.className='msg '+cls;d.innerHTML=html;chat.appendChild(d);chat.scrollTop=chat.scrollHeight;return d;}
+// Historial previo de la conversación: los mensajes ya intercambiados en
+// ZCode (desktop o CLI), leídos de la DB local. Texto largo truncado a la
+// vista (el texto completo queda en el tooltip).
+fetch('/history').then(r=>r.json()).then(j=>{
+  const h=j.history||[];
+  if(!h.length)return;
+  const div=document.createElement('div');
+  div.style.cssText='text-align:center;color:var(--faint);font-size:11px;padding:4px';
+  div.textContent='── historial previo ('+h.length+' mensajes) ──';
+  chat.appendChild(div);
+  for(const m of h){
+    const t=m.text.length>600?m.text.slice(0,600)+'…':m.text;
+    const d=document.createElement('div');
+    d.className='msg '+(m.role==='user'?'user':'agent');
+    d.innerHTML=md(t);
+    if(m.text.length>600)d.title=m.text;
+    chat.appendChild(d);
+  }
+  chat.scrollTop=chat.scrollHeight;
+});
 async function ask(){
   const text=q.value.trim();
   if(!text||busy)return;
@@ -153,6 +220,11 @@ const server = http.createServer((req, res) => {
   if (req.method === "GET" && req.url === "/info") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ title: sessionTitle, folder: workspacePath, session: sessionId }));
+    return;
+  }
+  if (req.method === "GET" && req.url === "/history") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ history: readHistory(sessionId) }));
     return;
   }
   if (req.method === "POST" && req.url === "/ask") {
