@@ -94,16 +94,27 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
       CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False
     End If
   ElseIf mode = "zcode" Then
-    ' Chat INTERACTIVO en terminal con la sesión del agente (zchat): loop
-    ' pregunta→respuesta con zcode -p --resume — cada turno retoma la sesión,
-    ' así que el agente mantiene TODO su contexto. (El TUI interactivo del
-    ' CLI no puede correr standalone: @zcode/tui solo existe dentro del
-    ' app.asar del desktop, y el desktop no tiene deep-link de sesiones.)
-    ' La sesión va a parar a una línea de comandos: solo tokens seguros.
+    ' Abrir la CONVERSACIÓN del agente en el desktop de ZCode.
+    ' El desktop no tiene deep-link de sesiones, pero sí tiene el switcher
+    ' Ctrl+Shift+[ (conversación anterior del workspace — verificado en vivo:
+    ' salta directo a la sesión del agente con TODO su historial) y el
+    ' sidebar con la lista completa. Entonces: abrimos el workspace por
+    ' deep-link y le MANDAMOS el atajo nosotros tras un momento.
+    ' La sesión va validada igual (defensa en profundidad), aunque acá ya no
+    ' llega a una línea de comandos.
+    Dim shell
+    Set shell = CreateObject("WScript.Shell")
     If Len(session) > 10 And IsSafeToken(session) Then
-      CreateObject("WScript.Shell").Run _
-        "cmd /k node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat.mjs"" " & session & " """ & path & """", _
-        1, False
+      shell.Run """C:\Users\patag\AppData\Local\Programs\ZCode\ZCode.exe"" ""zcode://workspace/open?path=" & URLEnc(path) & """", 1, False
+      ' Esperar el arranque/cambio de workspace. Si el desktop estaba frío y
+      ' tardó más, el SendKeys no llega: el usuario presiona Ctrl+Shift+[ a
+      ' mano (el tooltip de la app se lo dice).
+      WScript.Sleep 3500
+      If shell.AppActivate("ZCode") Then
+        WScript.Sleep 400
+        ' En SendKeys, [ es especial: se escapa como {[}.
+        shell.SendKeys "^+{[}"
+      End If
     End If
   Else
     CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False
