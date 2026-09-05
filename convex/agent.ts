@@ -13,7 +13,12 @@
  * CONTRATO_AGENTE.md §2 y se sincroniza con ClickUp como cualquier cambio.
  */
 
-import { query, mutation, internalQuery } from "./_generated/server";
+import {
+  query,
+  mutation,
+  internalQuery,
+  internalMutation,
+} from "./_generated/server";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -491,9 +496,75 @@ export const DEFAULT_CONTRACT = {
 
 const CONTRACT_SETTINGS_KEY = "agent.contract";
 
+/**
+ * Seed de una tarea DELEGADA (executor=zcode, encolada) sin pasar por la UI.
+ * Interna sin auth: para pruebas end-to-end del puente (los "TEST … (se
+ * borra)" del smoke), invocada con `npx convex run`. Valida la combinación
+ * carpeta/tipo igual que el flujo real.
+ */
+export const _seedDelegatedTask = internalMutation({
+  args: {
+    title: v.string(),
+    area: v.union(
+      v.literal("patagonia"),
+      v.literal("datacef"),
+      v.literal("personal"),
+    ),
+    taskType: v.union(
+      v.literal("reporte"),
+      v.literal("desarrollo"),
+      v.literal("analisis"),
+      v.literal("ops"),
+      v.literal("otro"),
+    ),
+    autonomy: v.union(
+      v.literal("escenario"),
+      v.literal("supervisado"),
+      v.literal("autonomo"),
+    ),
+    workspacePath: v.string(),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Resolver la carpeta del registro para validar la combinación tipo/vcs
+    // igual que el flujo real (validateDelegation trabaja por workspaceId).
+    const ws = await ctx.db
+      .query("agentWorkspaces")
+      .withIndex("by_area", (q) => q.eq("area", args.area))
+      .filter((w) => w.eq(w.field("path"), args.workspacePath))
+      .first();
+    await validateDelegation(ctx, {
+      taskType: args.taskType,
+      workspaceId: ws?._id,
+    });
+    const now = Date.now();
+    const taskId = await ctx.db.insert("tasks", {
+      title: args.title.slice(0, 200),
+      area: args.area,
+      status: "pendiente",
+      notes: args.notes,
+      executor: "zcode",
+      taskType: args.taskType,
+      autonomy: args.autonomy,
+      workspacePath: args.workspacePath,
+      agentState: "encolada",
+      order: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await logEvent(ctx, {
+      taskId,
+      kind: "created",
+      task: { title: args.title, area: args.area },
+      at: now,
+      toStatus: "pendiente",
+    });
+    return taskId;
+  },
+});
+
 /** Contrato operativo vigente: lo editado por Cris, o los defaults. */
-export const getContract = query({
-  args: sessionArg,
+export const getContract = query({  args: sessionArg,
   handler: async (ctx, { sessionToken }) => {
     await requireAuth(ctx, sessionToken);
     const raw = await getSetting(ctx, CONTRACT_SETTINGS_KEY);
