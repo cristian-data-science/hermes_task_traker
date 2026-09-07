@@ -384,9 +384,12 @@
     ticker: null,
     sideOpen: true, // se decide en init() (ancho real de la ventana o preferencia guardada)
     welcome: null,
+    observer: false, // corrida del dispatcher activa: solo se mira
+    exec: false, // modo ejecución (riendas): el agente puede ejecutar de verdad
+    lastHistAgentBody: null, // body del último turno agent del historial (para agrupar append)
   };
   const SIDE_KEY = "zchat-side";
-  let thread, scroll, statusEl, q, sendBtn, cancelBtn;
+  let thread, scroll, statusEl, q, sendBtn, cancelBtn, modeBtn;
 
   // ---------- scroll ----------
   function nearBottom() {
@@ -842,9 +845,21 @@
     on("part_end", (d) => view(d.turnId)?.endPart(d.id, d.end));
     on("turn_done", (d) => view(d.turnId)?.finish(d));
     on("turn_error", (d) => view(d.turnId)?.fail(d.error, d.partialText));
-    on("notice", (d) => view(d.turnId)?.notice(d));
-    on("phase", (d) => view(d.turnId)?.setPhase(d.text));
+    on("notice", (d) => {
+      // Notices globales (sin turno): p. ej. el fin de la corrida observada.
+      if (!d.turnId) {
+        toast(d.text || "");
+        return;
+      }
+      view(d.turnId)?.notice(d);
+    });
+    on("phase", (d) => {
+      if (d.turnId) view(d.turnId)?.setPhase(d.text);
+    });
     on("tracker", (d) => renderTracker(d.tracker));
+    on("observer", (d) => setObserver(!!d.observer));
+    on("mode", (d) => setExec(!!d.exec, { silent: true }));
+    on("history_append", (d) => appendHistoryMessages(d.messages));
     es.addEventListener("resync", () => resync());
   }
   async function resync() {
@@ -866,6 +881,8 @@
         S.info = st.info;
         connectSSE(st.seq || 0);
       }
+      setObserver(!!st.observer);
+      setExec(!!st.exec, { silent: true });
     } catch (e) {
       setConn(false);
     } finally {
@@ -879,6 +896,112 @@
     sendBtn.disabled = b || !q.value.trim();
     cancelBtn.classList.toggle("hidden", !b);
     if (!b) q.focus();
+  }
+
+  // ---------- identidad (agente · modelo · esfuerzo) ----------
+  /** Label bonito del modelo elegido (espeja agentModelLabel del tablero). */
+  function modelLabel(id) {
+    if (!id) return "";
+    const m = String(id).match(/^claude\/(sonnet|opus|haiku)(?:-([\d.]+))?(?:-(low|medium|high|xhigh|max))?$/i);
+    if (m) {
+      const [, alias, ver, effort] = m;
+      return [alias[0].toUpperCase() + alias.slice(1), ver, effort ? effort[0].toUpperCase() + effort.slice(1) : ""]
+        .filter(Boolean)
+        .join(" ");
+    }
+    if (String(id).startsWith("claude/")) return String(id).slice("claude/".length);
+    const last = String(id).split("/").pop();
+    return last || "";
+  }
+  function modelEffort(id) {
+    const m = String(id || "").match(/^claude\/(?:sonnet|opus|haiku)(?:-[\d.]+)?-(low|medium|high|xhigh|max)$/i);
+    return m ? m[1].toLowerCase() : "";
+  }
+  /**
+   * Badge persistente del header: quién trabaja, con qué modelo y (Claude)
+   * con qué esfuerzo. Modelo elegido de la tarea; si no hay, default de la
+   * cuenta + el modelo REAL del último turno cuando se sepa.
+   */
+  function renderIdentity() {
+    const info = S.info || {};
+    const task = S.tracker?.task || {};
+    const agent = info.agentLabel || (info.agent === "claude" ? "Claude Code" : "ZCode");
+    const isClaude = info.agent === "claude" || /claude/i.test(agent);
+    const chosen = modelLabel(task.model);
+    const effort = modelEffort(task.model);
+    const bits = [agent];
+    if (chosen) bits.push(chosen);
+    else bits.push("default de tu cuenta");
+    if (effort) bits.push(`esfuerzo ${effort}`);
+    if (S.exec) bits.push("⚡ ejecución");
+    const node = $("identity");
+    node.textContent = bits.join(" · ");
+    node.classList.remove("hidden");
+    node.title = `Agente ${agent}${chosen ? ` · modelo elegido ${chosen}` : " · sin modelo elegido (default de la cuenta)"}${
+      effort ? ` · esfuerzo ${effort}` : ""
+    }${isClaude ? "" : " (el esfuerzo no aplica a ZCode)"}`;
+    node.classList.toggle("exec", S.exec);
+  }
+
+  // ---------- modo observador / modo ejecución ----------
+  function setObserver(on) {
+    if (S.observer === on) return;
+    S.observer = on;
+    if (on) {
+      if (S.welcome) {
+        S.welcome.remove();
+        S.welcome = null;
+      }
+      thread.append(
+        el("div", {
+          class: "divider",
+          text: "👁 corrida del dispatcher en curso — modo observador (el razonamiento aparece solo)",
+        }),
+      );
+      q.disabled = true;
+      sendBtn.disabled = true;
+      q.placeholder = "Corrida activa — mirando el razonamiento en vivo (podés preguntar cuando termine)…";
+      stick(true);
+    } else {
+      q.disabled = false;
+      sendBtn.disabled = !q.value.trim();
+      q.placeholder = S.exec
+        ? "Pedí lo que quieras — se ejecuta de verdad (modo ejecución)…"
+        : "Preguntale al agente… (Enter envía · Shift+Enter salto de línea)";
+      q.focus();
+    }
+  }
+  function setExec(on, { silent } = {}) {
+    if (S.exec === on) return;
+    S.exec = on;
+    modeBtn.textContent = on ? "⚡ modo ejecución" : "👁 solo consulta";
+    modeBtn.classList.toggle("mode-exec", on);
+    modeBtn.classList.toggle("mode-readonly", !on);
+    modeBtn.title = on
+      ? "MODO EJECUCIÓN ACTIVO: lo que pidas se ejecuta de verdad (edita archivos, corre comandos). Tocá para volver a solo consulta."
+      : "Solo consulta: el agente responde pero no ejecuta cambios (respeta el contrato de la tarea). Tocá para tomar las riendas.";
+    const hint = $("hint");
+    hint.textContent = on
+      ? "Tus instrucciones prevalecen sobre el contrato — el agente ejecuta de verdad"
+      : "Responde con todo el contexto de su sesión";
+    hint.classList.toggle("hint-exec", on);
+    q.placeholder = on
+      ? "Pedí lo que quieras — se ejecuta de verdad (Enter envía)…"
+      : "Preguntale al agente… (Enter envía · Shift+Enter salto de línea)";
+    document.querySelector(".composer .box")?.classList.toggle("box-exec", on);
+    renderIdentity();
+    if (!silent) toast(on ? "⚡ Modo ejecución activo: lo que pidas se ejecuta." : "Modo solo consulta restaurado.");
+  }
+  /** Mensajes nuevos de la corrida observada: se agregan al hilo. */
+  function appendHistoryMessages(messages) {
+    if (!messages?.length) return;
+    if (S.welcome) {
+      S.welcome.remove();
+      S.welcome = null;
+    }
+    const grouped = groupHistory(messages);
+    for (const m of grouped) renderHistoryMessage(m);
+    stick(nearBottom());
   }
   function setStatus(html) {
     if (!html) {
@@ -1000,6 +1123,7 @@
       $("title").textContent = `${title}`;
       document.title = `${title} — chat con ${agentLabel}`;
     }
+    renderIdentity();
     const sm = STATE_META[task.agentState] || null;
     const parts = [];
     parts.push(
@@ -1012,8 +1136,13 @@
     if (sm) chips.push(chip(sm[0], sm[1], sm[2]));
     if (task.status) chips.push(chip(STATUS_LABEL[task.status] || task.status, "muted"));
     if (task.taskType || task.autonomy) chips.push(chip([TYPE_LABEL[task.taskType] || task.taskType, AUTONOMY_LABEL[task.autonomy] || task.autonomy].filter(Boolean).join(" · "), "muted"));
-    const modelName = shortModel(run?.model || task.model);
-    if (modelName) chips.push(chip(modelName, "accent"));
+    const chosen = modelLabel(task.model);
+    const effort = modelEffort(task.model);
+    const realModel = shortModel(run?.model || "");
+    // Chip del modelo: elegido (+esfuerzo) o default; el modelo REAL de la
+    // corrida debajo cuando difiere del elegido.
+    const modelName = chosen || realModel || "";
+    if (modelName) chips.push(chip(effort ? `${modelName} · esfuerzo ${effort}` : modelName, "accent"));
     parts.push(
       `<div class="card"><div class="task-title">${esc(title || "Tarea sin título")}</div>${chips.length ? `<div class="chips">${chips.join("")}</div>` : ""}${
         task.question && task.agentState === "pregunta"
@@ -1077,7 +1206,15 @@
       }</span></div><div class="kv"><span class="k">Sesión ${esc(agentLabel)}</span><span class="v"><span>${esc(info.session || "")}</span><button type="button" data-copy-text="${esc(
         info.session || "",
       )}" title="Copiar el id para /resume en el desktop">copiar</button></span></div>${
-        modelName ? `<div class="kv"><span class="k">Modelo</span><span class="v">${esc(modelName)}</span></div>` : ""
+        modelName
+          ? `<div class="kv"><span class="k">Modelo</span><span class="v">${esc(modelName)}${
+              effort ? ` <span class="dim">· esfuerzo ${esc(effort)}</span>` : ""
+            }${
+              chosen && realModel && shortModel(chosen) !== realModel
+                ? ` <span class="dim">· corrida: ${esc(realModel)}</span>`
+                : ""
+            }</span></div>`
+          : ""
       }</div>`,
     );
     parts.push(`<div class="side-foot">${tr?.live ? `actualizado ${esc(fmtAgo(tr.updatedAt))}` : "sin conexión al tracker: el plan es el del momento en que abriste el chat"}${info.demo ? " · modo demo" : ""}</div>`);
@@ -1137,6 +1274,32 @@
     });
     sendBtn.addEventListener("click", send);
     cancelBtn.addEventListener("click", cancel);
+    modeBtn = $("mode");
+    modeBtn.addEventListener("click", async () => {
+      if (S.exec) {
+        // Volver a solo consulta: sin ceremonia.
+        try {
+          await postJson("/mode", { exec: false });
+        } catch {}
+        setExec(false);
+        return;
+      }
+      // Activar ejecución: confirmación explícita — el contrato queda en las
+      // manos de Cris y lo que pida se ejecuta de verdad.
+      const ok = confirm(
+        "⚡ Modo ejecución (tomar las riendas)\n\n" +
+          "El contrato de la tarea queda subordinado a TUS instrucciones de este chat: " +
+          "el agente va a editar archivos, correr comandos y hacer git si se lo pedís.\n\n" +
+          "Solo vos podés revertirlo (mismo botón). ¿Activar?",
+      );
+      if (!ok) return;
+      try {
+        await postJson("/mode", { exec: true });
+        setExec(true);
+      } catch {
+        toast("No pude cambiar el modo (¿server vivo?).");
+      }
+    });
     q.addEventListener("input", autosize);
     q.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -1176,7 +1339,7 @@
       ov.append(
         el("div", { class: "card" }, [
           el("h3", { text: "Chat cerrado" }),
-          el("p", { text: "El servidor local se apagó. Ya podés cerrar esta pestaña; la conversación queda guardada en la sesión de ZCode." }),
+          el("p", { text: `El servidor local se apagó. Ya podés cerrar esta pestaña; la conversación queda guardada en la sesión de ${S.info?.agentLabel || "el agente"}.` }),
         ]),
       );
       document.body.append(ov);
@@ -1194,6 +1357,8 @@
     S.info = st.info;
     S.seq = st.seq || 0;
     renderTracker(st.tracker);
+    setExec(!!(st.exec ?? st.info?.exec), { silent: true });
+    setObserver(!!st.observer);
     await loadHistory();
     if (st.turn && st.turn.status === "running") hydrateTurn(st.turn);
     connectSSE(S.seq);

@@ -81,3 +81,32 @@ export function isSuperUrgent(t: {
  * perder su delegación desde donde sea.
  */
 export const AGENT_UI_ENABLED = !ANDROID_TWA;
+
+/**
+ * Label legible del modelo de una delegación, por agente:
+ *  - Claude: id interno "claude/sonnet-5-high" → "Sonnet 5 High".
+ *  - ZCode: "builtin:zai-coding-plan/GLM-5.3" → "GLM-5.3".
+ * Vacío/complicado → "" (el llamador decide qué mostrar).
+ */
+export function agentModelLabel(model: string | undefined): string {
+  if (!model) return "";
+  const m = model.match(/^claude\/(sonnet|opus|haiku)(?:-([\d.]+))?(?:-(low|medium|high|xhigh|max))?$/i);
+  if (m) {
+    const [, alias, ver, effort] = m;
+    const parts = [
+      `${alias[0].toUpperCase()}${alias.slice(1)}`,
+      ver,
+      effort ? `${effort[0].toUpperCase()}${effort.slice(1)}` : "",
+    ].filter(Boolean);
+    return parts.join(" ");
+  }
+  if (model.startsWith("claude/")) return model.slice("claude/".length);
+  return model.split("/").pop() ?? "";
+}
+
+/** Esfuerzo elegido para una corrida Claude ("high", "max", …) o "" si no aplica. */
+export function agentModelEffort(model: string | undefined): string {
+  if (!model) return "";
+  const m = model.match(/^claude\/(?:sonnet|opus|haiku)(?:-[\d.]+)?-(low|medium|high|xhigh|max)$/i);
+  return m ? m[1].toLowerCase() : "";
+}

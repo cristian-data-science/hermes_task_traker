@@ -135,9 +135,13 @@ const sessionTitle =
 // Prefijos que este chat agrega a cada pregunta (se limpian al mostrar).
 const ASK_PREFIX = "Consulta de Cris sobre el trabajo ya entregado (solo respondé; no ejecutes cambios): ";
 const ASK_PREFIX_RE = /^Consulta de Cris sobre el trabajo ya entregado \([^)]*\):\s*/;
+// Modo ejecución (riendas): Cris conduce — sus instrucciones prevalecen sobre
+// el contrato de la tarea y el agente PUEDE ejecutar (bypass/yolo).
+const EXEC_PREFIX = "CRIS TOMÓ LAS RIENDAS de esta conversación (sus instrucciones de este chat prevalecen sobre el contrato de la tarea): ";
+const EXEC_PREFIX_RE = /^CRIS TOMÓ LAS RIENDAS de esta conversación [^:]*:\s*/;
 const CTX_RE = /^\[CONTEXTO ACTUALIZADO DEL TRACKER HERMES[^\]]*\]\s*/;
 function stripWrappers(text) {
-  return String(text).replace(ASK_PREFIX_RE, "").replace(CTX_RE, "").trim();
+  return String(text).replace(EXEC_PREFIX_RE, "").replace(ASK_PREFIX_RE, "").replace(CTX_RE, "").trim();
 }
 
 // ---- Herramientas: etiqueta y resumen legible del input ----
@@ -492,9 +496,65 @@ function computeTracker(task, runs) {
   };
 }
 
+// ---- Modo observador (corrida del dispatcher activa sobre esta tarea) ----
+// El chat no puede lanzar turnos propios mientras el dispatcher corre (dos
+// procesos sobre la misma sesión se pisan); en su lugar, MUESTRA lo que pasa:
+// poll del historial y eventos history_append con los mensajes nuevos.
+let observer = false;
+let observerPoller = null;
+let historyIds = new Set();
+
+/** (Re)inicializa el set de mensajes conocidos sin emitir nada. */
+function seedHistoryIds() {
+  historyIds = new Set(readHistory(500).messages.map((m) => m.id));
+}
+
+/**
+ * Activa/desactiva el modo observador según si la corrida está abierta.
+ * Al activar: divisor visual + poll cada 2 s. Al desactivar: notice de que
+ * ya se puede preguntar.
+ */
+function syncObserver(runOpen) {
+  if (runOpen === observer) return;
+  observer = runOpen;
+  emit("observer", { observer });
+  if (observer) {
+    seedHistoryIds();
+    emit("phase", { text: "Corrida del dispatcher activa — modo observador" });
+    if (!observerPoller) {
+      observerPoller = setInterval(() => {
+        try {
+          const { messages } = readHistory(120);
+          const fresh = messages.filter((m) => !historyIds.has(m.id));
+          for (const m of messages) historyIds.add(m.id);
+          if (fresh.length) {
+            // El usuario está mirando: cuenta como actividad (no auto-apagar).
+            lastActivity = Date.now();
+            emit("history_append", { messages: fresh });
+          }
+        } catch {
+          // lectura transitoria (sqlite ocupada): reintenta el próximo tick
+        }
+      }, 2000);
+    }
+  } else {
+    if (observerPoller) {
+      clearInterval(observerPoller);
+      observerPoller = null;
+    }
+    emit("notice", {
+      level: "info",
+      text: "La corrida terminó — ya podés preguntarle al agente.",
+    });
+  }
+}
+
+// ---- Modo ejecución (riendas): Cris conduce, el contrato queda subordinado
+// a SUS instrucciones explícitas del chat. Default OFF (solo consulta). ----
+let execMode = false;
+
 async function startTracker() {
-  if (!taskId) return;
-  try {
+  if (!taskId) return;  try {
     const [{ ConvexClient }, { getToken }, { CONVEX_URL }] = await Promise.all([
       import("convex/browser"),
       import("./auth.mjs"),
@@ -512,6 +572,9 @@ async function startTracker() {
         if (task === undefined || runs === undefined) return;
         tracker = computeTracker(task, runs);
         emit("tracker", { tracker });
+        // ¿Hay una corrida del dispatcher ABIERTA sobre esta tarea? → el chat
+        // pasa a modo observador (historial vivo, sin turnos propios).
+        syncObserver(tracker.run?.open === true);
       }, 120);
     };
     client.onUpdate(
@@ -1329,18 +1392,23 @@ function contextoTracker() {
 
 function runTurn(t) {
   if (DEMO) return simulateTurn(t);
-  const prompt = `${ASK_PREFIX}${contextoTracker()}${t.question}`;
+  // Prefijo según modo: consulta (read-only) o riendas (ejecución real).
+  const prefix = execMode
+    ? `${EXEC_PREFIX}ejecutá lo que Cris pida y contale qué hiciste (con evidencia: archivos, comandos, números). Esto NO es una corrida del dispatcher: no reportes por report.mjs. `
+    : ASK_PREFIX;
+  const prompt = `${prefix}${contextoTracker()}${t.question}`;
   let child;
   if (AGENT === "claude") {
-    // Claude: read-only igual que zcode --mode plan; cwd = carpeta de trabajo
-    // (no existe --cwd). stream-json + parciales = razonamiento token a token.
+    // Claude: read-only (plan) o riendas (bypassPermissions); cwd = carpeta de
+    // trabajo (no existe --cwd). stream-json + parciales = razonamiento token
+    // a token.
     const args = [
       "-p",
       prompt,
       "--resume",
       sessionId,
       "--permission-mode",
-      "plan",
+      execMode ? "bypassPermissions" : "plan",
       "--output-format",
       "stream-json",
       "--verbose",
@@ -1370,7 +1438,7 @@ function runTurn(t) {
       "--cwd",
       workspacePath,
       "--mode",
-      "plan",
+      execMode ? "yolo" : "plan",
       "--output-format",
       "stream-json",
     ];
@@ -1563,6 +1631,8 @@ function info(port) {
     task: taskId || null,
     theme: themeHint || null,
     demo: DEMO,
+    observer,
+    exec: execMode,
     startedAt: SERVER_STARTED_AT,
   };
 }
@@ -1580,7 +1650,7 @@ async function handler(req, res) {
       if (p === "/info") return json(res, 200, info(listeningPort));
       if (p === "/history") return json(res, 200, readHistory());
       if (p === "/state") {
-        return json(res, 200, { info: info(listeningPort), tracker, turn: snapshotTurn(turn), seq, now: Date.now() });
+        return json(res, 200, { info: info(listeningPort), tracker, turn: snapshotTurn(turn), seq, observer, exec: execMode, now: Date.now() });
       }
       if (p === "/events") {
         res.writeHead(200, {
@@ -1614,6 +1684,15 @@ async function handler(req, res) {
         if (turn && turn.status === "running") {
           return json(res, 409, { error: "Ya hay una respuesta en curso. Esperá a que termine o detenela.", turnId: turn.id });
         }
+        // Modo observador: la corrida del dispatcher está activa sobre esta
+        // sesión; dos procesos se pisarían. Se puede MIRAR, no preguntar.
+        if (observer) {
+          return json(res, 409, {
+            error:
+              "La corrida del agente está ACTIVA: el chat está en modo observador (ves el razonamiento en vivo). Cuando termine vas a poder preguntar.",
+            observer: true,
+          });
+        }
         let question = "";
         try {
           question = String(JSON.parse(await readBody(req)).q || "")
@@ -1622,10 +1701,22 @@ async function handler(req, res) {
             .slice(0, 6000);
         } catch {}
         if (!question) return json(res, 400, { error: "La pregunta está vacía." });
-        log(`pregunta: ${question.slice(0, 140).replace(/\n/g, " ")}`);
+        log(`pregunta${execMode ? " [EJECUCIÓN]" : ""}: ${question.slice(0, 140).replace(/\n/g, " ")}`);
         const t = newTurn(question);
         runTurn(t);
         return json(res, 202, { turnId: t.id, question: t.question, startedAt: t.startedAt });
+      }
+      if (p === "/mode") {
+        // Modo ejecución (riendas): toggle explícito de Cris. La UI pide
+        // confirmación antes de activarlo; acá solo se refleja el estado.
+        let exec = true;
+        try {
+          exec = Boolean(JSON.parse(await readBody(req)).exec);
+        } catch {}
+        execMode = exec;
+        emit("mode", { exec: execMode });
+        log(`modo ${execMode ? "EJECUCIÓN (riendas)" : "consulta (solo lectura)"}`);
+        return json(res, 200, { exec: execMode });
       }
       if (p === "/cancel") {
         const ok = cancelTurn();
@@ -1654,6 +1745,7 @@ function shutdown() {
   try {
     if (turn?.child) turn.child.kill();
   } catch {}
+  if (observerPoller) clearInterval(observerPoller);
   try {
     trackerClient?.close();
   } catch {}

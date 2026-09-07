@@ -17,7 +17,6 @@ import {
   Eye,
   Check,
   MessageCircle,
-  Zap,
   Clock3,
   ChevronDown,
   ExternalLink,
@@ -30,32 +29,50 @@ import { useAuth } from "../hooks/useAuth";
 import {
   AGENT_STATE_META,
   TASK_TYPE_META,
+  EXECUTOR_META,
+  isDelegatedExecutor,
   type AgentState,
   type TaskType,
   type Area,
 } from "../lib/constants";
-import { cn, formatAgo, formatRelative } from "../lib/utils";
+import { cn, formatAgo, formatRelative, agentModelLabel } from "../lib/utils";
 import { AgentRunsPanel } from "./AgentRunsPanel";
 import { AgentContractSection } from "./AgentContractSection";
 
 type OverviewTask = Doc<"tasks">;
 
-/** Chip de identidad del agente que corre la tarea (ZCode + modelo). */
-function AgentIdentity({ model, pulse }: { model?: string; pulse?: boolean }) {
+/**
+ * Chip de identidad del agente que corre la tarea: ZCode o Claude Code con su
+ * modelo (label bonito, ej. "Claude Code · Sonnet 5 High").
+ */
+function AgentIdentity({
+  executor,
+  model,
+  pulse,
+}: {
+  executor?: string;
+  model?: string;
+  pulse?: boolean;
+}) {
+  const delegated = isDelegatedExecutor(executor);
+  const meta = delegated ? EXECUTOR_META[executor] : EXECUTOR_META.zcode;
+  const modelLabel = agentModelLabel(model);
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 rounded-full border-el px-1.5 py-0.5 text-[10px] font-semibold text-fuchsia-600 dark:text-fuchsia-400",
+        "inline-flex items-center gap-1 rounded-full border-el px-1.5 py-0.5 text-[10px] font-semibold",
+        meta.color,
         pulse && "animate-pulse",
       )}
       style={{
         borderColor: "color-mix(in srgb, var(--status-en-curso) 40%, transparent)",
         background: "color-mix(in srgb, var(--status-en-curso) 8%, transparent)",
       }}
-      title="Agente ZCode"
+      title={`Agente ${meta.label}${modelLabel ? ` · ${modelLabel}` : ""}`}
     >
-      <Zap className="h-3 w-3" />
-      ZCode{model ? ` · ${model.split("/").pop()}` : ""}
+      <meta.Icon className="h-3 w-3" />
+      {meta.label}
+      {modelLabel ? ` · ${modelLabel}` : ""}
     </span>
   );
 }
@@ -139,7 +156,7 @@ function AgentCard({
           <meta.Icon className="h-4 w-4" />
           {meta?.label}
         </span>
-        <AgentIdentity model={task.model ?? undefined} pulse={working} />
+        <AgentIdentity executor={task.executor} model={task.model ?? undefined} pulse={working} />
         <span className="ml-auto text-[10px] text-faint" title={new Date(task.updatedAt).toLocaleString("es-CL")}>
           {formatAgo(task.updatedAt)}
         </span>
@@ -417,6 +434,8 @@ function HistoryRow({
   const clickupHref =
     task.clickupUrl ??
     (task.clickupId ? `https://app.clickup.com/t/${task.clickupId}` : undefined);
+  const agentShort = isDelegatedExecutor(task.executor) ? EXECUTOR_META[task.executor].label : "";
+  const modelLabel = agentModelLabel(task.model);
   return (
     <div
       role="button"
@@ -428,7 +447,7 @@ function HistoryRow({
           onOpen();
         }
       }}
-      title={`${meta?.label ?? ""} — tocar para ver las corridas${task.model ? ` · ${task.model.split("/").pop()}` : ""}`}
+      title={`${meta?.label ?? ""}${agentShort ? ` · ${agentShort}` : ""}${modelLabel ? ` · ${modelLabel}` : ""} — tocar para ver las corridas`}
       className={cn(
         "grid w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-xs transition-colors hover:bg-panel2",
         zebra && "bg-panel/40",
@@ -455,7 +474,11 @@ function HistoryRow({
         <a
           href={`hermesagent://${task.executor === "claude" ? "claude" : "zcode"}?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}&task=${encodeURIComponent(task._id)}&st=${encodeURIComponent(task.status ?? "")}&ag=${encodeURIComponent(task.agentState ?? "")}`}
           onClick={(e) => e.stopPropagation()}
-          title="Chatear con el agente: abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, con todo su contexto, razonamiento en vivo y el plan actualizado en tiempo real. Tildá 'Siempre permitir' en el diálogo del navegador la primera vez."
+          title={
+            ["despachada", "trabajando"].includes(task.agentState ?? "")
+              ? "Ver razonamiento en vivo: el chat abre en modo observador contra la sesión EXACTA de esta tarea mientras corre."
+              : "Chatear con el agente: abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, con todo su contexto, razonamiento en vivo y el plan actualizado en tiempo real. Tildá 'Siempre permitir' en el diálogo del navegador la primera vez."
+          }
           className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"
         >
           <MessageCircle className="h-3.5 w-3.5" />

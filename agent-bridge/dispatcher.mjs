@@ -275,6 +275,9 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
       const child = spawn(spawnSpec.exe, spawnSpec.args, spawnSpec.options);
       run.kill = () => child.kill();
       run.tailer = adapter.startTailer(run, liveApi);
+      // Bind temprano de la sesión (chat disponible mid-run): zcode la busca
+      // en db.sqlite por título; claude ya la bindeó vía system/init.
+      run.sessionWatch = adapter.watchSession?.(run, liveApi) ?? null;
 
       let stdout = "";
       let buf = "";
@@ -355,6 +358,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   } finally {
     if (run.nudge) clearInterval(run.nudge);
     if (run.tailer) clearInterval(run.tailer);
+    if (run.sessionWatch) clearInterval(run.sessionWatch);
     if (restore) restore();
   }
 }
@@ -483,6 +487,7 @@ async function main() {
     for (const run of activeRuns.values()) {
       if (run.nudge) clearInterval(run.nudge);
       if (run.tailer) clearInterval(run.tailer);
+      if (run.sessionWatch) clearInterval(run.sessionWatch);
       if (run.kill) run.kill();
     }
     client.close();

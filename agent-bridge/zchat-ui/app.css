@@ -1479,3 +1479,56 @@ textarea:disabled {
     transition-duration: 0.001s !important;
   }
 }
+
+/* ===== Identidad del agente (header) y modos del composer ===== */
+.identity {
+  margin: 2px 0 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  width: fit-content;
+}
+.identity.exec {
+  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+  color: #b45309;
+}
+[data-theme="dark"] .identity.exec,
+[data-theme="console"] .identity.exec {
+  color: #fbbf24;
+}
+.identity.hidden {
+  display: none;
+}
+.hint.hint-exec {
+  color: #b45309;
+}
+[data-theme="dark"] .hint.hint-exec,
+[data-theme="console"] .hint.hint-exec {
+  color: #fbbf24;
+}
+.composer .box.box-exec {
+  border-color: color-mix(in srgb, #f59e0b 60%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, #f59e0b 35%, transparent);
+}
+#mode.mode-exec {
+  color: #b45309;
+  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+  background: color-mix(in srgb, #f59e0b 12%, transparent);
+  font-weight: 700;
+}
+[data-theme="dark"] #mode.mode-exec,
+[data-theme="console"] #mode.mode-exec {
+  color: #fbbf24;
+}
+.dim {
+  color: var(--ink-3);
+  font-weight: 400;
+}
