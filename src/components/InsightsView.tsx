@@ -130,13 +130,28 @@ export function InsightsView() {
   const [period, setPeriod] = useState<Period>("30");
   const [areaFilter, setAreaFilter] = useState<AreaFilter>("all");
 
+  // Áreas ocultas (el mismo setting que oculta chips/columnas en el tablero):
+  // ocultar un área la saca de Insights también — de los botones del filtro
+  // y de las métricas (el backend las excluye del dataset).
+  const clickupState = useQuery(
+    api.settings.getClickupState,
+    token ? { sessionToken: token } : "skip",
+  );
+  const hiddenAreas = useMemo(
+    () => new Set((clickupState?.hiddenAreas ?? []) as string[]),
+    [clickupState],
+  );
+  const areaButtons = AREA_FILTERS.filter((a) => !hiddenAreas.has(a.id));
+  // Si el área seleccionada termina oculta, la vista cae a "Todas".
+  const effectiveArea: AreaFilter = hiddenAreas.has(areaFilter) ? "all" : areaFilter;
+
   const to = startOfDay(addDays(new Date(), 1)).getTime();
   const from =
     period === "all" ? 0 : startOfDay(addDays(new Date(), -(Number(period) - 1))).getTime();
 
   const data = useQuery(
     api.insights.dataset,
-    token ? { sessionToken: token, from, to, area: areaFilter } : "skip",
+    token ? { sessionToken: token, from, to, area: effectiveArea } : "skip",
   );
 
   const taskById = useMemo(() => {
@@ -176,7 +191,7 @@ export function InsightsView() {
             ))}
           </div>
           <div className="flex rounded-el border-el border-line bg-panel2 p-0.5">
-            {AREA_FILTERS.map((a) => (
+            {areaButtons.map((a) => (
               <button
                 key={a.id}
                 onClick={() => setAreaFilter(a.id)}

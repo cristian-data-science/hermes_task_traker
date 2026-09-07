@@ -21,9 +21,10 @@
  * al backend; hoy no lo justifica.
  */
 
-import { query } from "./_generated/server";
+import { query, type QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import { requireAuth } from "./authGuard";
+import { SETTINGS_KEY_HIDDEN_AREAS } from "./clickupConfig";
 
 const sessionArg = { sessionToken: v.string() };
 
@@ -35,6 +36,27 @@ const FLOW_KINDS = new Set([
   "reopened",
   "deleted",
 ]);
+
+/**
+ * Lee las áreas ocultas (`ui.hiddenAreas`, el mismo setting que oculta
+ * chips/columnas en el tablero). Ocultar un área tiene que ocultarla DE
+ * TODOS LADOS — Insights incluido (pedido explícito de Cris).
+ */
+async function getHiddenAreas(ctx: QueryCtx): Promise<Set<string>> {
+  const row = await ctx.db
+    .query("settings")
+    .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_HIDDEN_AREAS))
+    .first();
+  if (!row?.value) return new Set();
+  try {
+    const parsed: unknown = JSON.parse(row.value);
+    return new Set(
+      Array.isArray(parsed) ? parsed.filter((a): a is string => typeof a === "string") : [],
+    );
+  } catch {
+    return new Set();
+  }
+}
 
 export const dataset = query({
   args: {
@@ -53,11 +75,15 @@ export const dataset = query({
   },
   handler: async (ctx, { sessionToken, from, to, area }) => {
     await requireAuth(ctx, sessionToken);
+    const hidden = await getHiddenAreas(ctx);
 
     // ---- Tareas: todas las activas + las borradas dentro del rango ------
     // (las borradas antes del rango no aportan nada a las métricas).
+    // Las áreas OCULTAS se excluyen siempre: ocultar un área tiene que
+    // ocultarla de Insights también (pedido explícito de Cris).
     const allTasks = await ctx.db.query("tasks").collect();
     const tasks = allTasks
+      .filter((t) => !hidden.has(t.area))
       .filter((t) => area === "all" || t.area === area)
       .filter(
         // Vive, o murió/nació dentro del rango: la tarea que se completó
