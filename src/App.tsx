@@ -16,6 +16,7 @@ import { CalendarView } from "./components/CalendarView";
 import { CatchupView } from "./components/CatchupView";
 import { TaskModal } from "./components/TaskModal";
 import { AgentView } from "./components/AgentView";
+import { InsightsView } from "./components/InsightsView";
 import { AssignedInboxModal } from "./components/AssignedInboxModal";
 import { ClickUpSettings } from "./components/ClickUpSettings";
 import { ClickUpSyncPage } from "./components/ClickUpSyncPage";
@@ -198,6 +199,11 @@ function Dashboard({
               // Centro de mando de la delegación (solo web): consulta su propia
               // data (agentOverview) y no conversa con los filtros del tablero.
               <AgentView />
+            ) : view === "insights" ? (
+              // Dashboard de análisis global: trae su propio dataset (todas
+              // las áreas + events + imprevistos + corridas) y tiene filtros
+              // propios de período/área independientes de los del tablero.
+              <InsightsView />
             ) : (
               // El catch-up NO recibe `filteredTasks`: su ventana temporal y su
               // alcance de área los define él mismo. Filtrar el tablero por
@@ -210,7 +216,10 @@ function Dashboard({
         </AnimatePresence>
 
         {/* Estado vacío (no aplica al catch-up ni a la vista agente) */}
-        {filteredTasks.length === 0 && view !== "catchup" && view !== "agente" && (
+        {filteredTasks.length === 0 &&
+          view !== "catchup" &&
+          view !== "agente" &&
+          view !== "insights" && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}

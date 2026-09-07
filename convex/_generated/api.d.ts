@@ -27,6 +27,7 @@ import type * as hoy from "../hoy.js";
 import type * as http from "../http.js";
 import type * as imprevistos from "../imprevistos.js";
 import type * as imprevistosSync from "../imprevistosSync.js";
+import type * as insights from "../insights.js";
 import type * as seed from "../seed.js";
 import type * as settings from "../settings.js";
 import type * as songs from "../songs.js";
@@ -59,6 +60,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   imprevistos: typeof imprevistos;
   imprevistosSync: typeof imprevistosSync;
+  insights: typeof insights;
   seed: typeof seed;
   settings: typeof settings;
   songs: typeof songs;
