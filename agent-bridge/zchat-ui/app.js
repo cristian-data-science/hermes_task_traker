@@ -994,10 +994,11 @@
     const task = tr?.task || {};
     const run = tr?.run || null;
     const info = S.info || {};
+    const agentLabel = info.agentLabel || (info.agent === "claude" ? "Claude Code" : "ZCode");
     const title = task.title || info.title || "";
     if (title) {
-      $("title").textContent = title;
-      document.title = `${title} — chat con el agente`;
+      $("title").textContent = `${title}`;
+      document.title = `${title} — chat con ${agentLabel}`;
     }
     const sm = STATE_META[task.agentState] || null;
     const parts = [];
@@ -1073,7 +1074,7 @@
     parts.push(
       `<div class="sec"><h2>Sesión</h2><div class="kv"><span class="k">Carpeta</span><span class="v"><span>${esc(folder)}</span>${
         folder ? `<a href="hermesagent://open?path=${encodeURIComponent(folder)}" title="Abrir en el Explorador">abrir</a>` : ""
-      }</span></div><div class="kv"><span class="k">Sesión ZCode</span><span class="v"><span>${esc(info.session || "")}</span><button type="button" data-copy-text="${esc(
+      }</span></div><div class="kv"><span class="k">Sesión ${esc(agentLabel)}</span><span class="v"><span>${esc(info.session || "")}</span><button type="button" data-copy-text="${esc(
         info.session || "",
       )}" title="Copiar el id para /resume en el desktop">copiar</button></span></div>${
         modelName ? `<div class="kv"><span class="k">Modelo</span><span class="v">${esc(modelName)}</span></div>` : ""
@@ -1085,7 +1086,11 @@
     inner.querySelectorAll(".bar i[data-w]").forEach((b) => {
       b.style.width = `${b.dataset.w}%`;
     });
-    const sub = [folder ? folder.split(/[\\/]/).filter(Boolean).pop() : "", info.demo ? "modo demo" : "respuesta en vivo con todo el contexto de la sesión"]
+    const sub = [
+      agentLabel,
+      folder ? folder.split(/[\\/]/).filter(Boolean).pop() : "",
+      info.demo ? "modo demo" : "respuesta en vivo con todo el contexto de la sesión",
+    ]
       .filter(Boolean)
       .join(" · ");
     $("subtitle").textContent = sub;

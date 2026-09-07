@@ -453,7 +453,7 @@ function HistoryRow({
       </span>
       {task.agentSessionId && task.workspacePath ? (
         <a
-          href={`hermesagent://zcode?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}&task=${encodeURIComponent(task._id)}&st=${encodeURIComponent(task.status ?? "")}&ag=${encodeURIComponent(task.agentState ?? "")}`}
+          href={`hermesagent://${task.executor === "claude" ? "claude" : "zcode"}?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}&task=${encodeURIComponent(task._id)}&st=${encodeURIComponent(task.status ?? "")}&ag=${encodeURIComponent(task.agentState ?? "")}`}
           onClick={(e) => e.stopPropagation()}
           title="Chatear con el agente: abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, con todo su contexto, razonamiento en vivo y el plan actualizado en tiempo real. Tildá 'Siempre permitir' en el diálogo del navegador la primera vez."
           className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"

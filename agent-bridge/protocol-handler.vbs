@@ -1,5 +1,5 @@
 ' Handler del protocolo hermesagent:// — abre carpeta, archivo, el .md más
-' reciente de una carpeta, o la sesión de ZCode de una tarea, en el PC de Cris.
+' reciente de una carpeta, o la sesión del agente (ZCode/Claude) de una tarea.
 '   hermesagent://open?path=<carpeta>              → Explorador
 '   hermesagent://file?path=<archivo>              → Bloc de notas
 '   hermesagent://md?path=<carpeta>                → el .md modificado más
@@ -8,12 +8,15 @@
 '                                                    node_modules/backups; si
 '                                                    no hay, abre la carpeta)
 '   hermesagent://zcode?path=<carpeta>&session=<sess_..>[&task=<id>&p64=..&st=..&ag=..&th=..]
+'   hermesagent://claude?path=<carpeta>&session=<uuid>[&task=<id>&...]
 '                                                  → chat WEB local (zchat-server)
 '                                                    contra la sesión EXACTA del
 '                                                    agente que hizo la tarea:
 '                                                    historial, respuesta en vivo
 '                                                    y panel de misión en vivo
-'                                                    (task → Convex).
+'                                                    (task → Convex). El host
+'                                                    decide el motor (zcode |
+'                                                    claude).
 ' La web no puede abrir rutas locales por seguridad; este puente de Windows sí.
 '
 ' IMPORTANTE (bug sufrido): Windows NO siempre entrega la URL tal cual — puede
@@ -40,8 +43,9 @@ On Error Resume Next
 
 ' ===== Detectar el modo por el HOST del protocolo =====
 ' body = lo que sigue al esquema (con o sin "//"); host = hasta el "?".
-Dim body, hostPart, qs
+Dim body, hostPart, qs, agentKind
 mode = "open"
+agentKind = "zcode"
 body = raw
 If InStr(body, "://") > 0 Then
   body = Mid(body, InStr(body, "://") + 3)
@@ -62,6 +66,10 @@ ElseIf hostPart = "md" Then
   mode = "md"
 ElseIf hostPart = "zcode" Then
   mode = "zcode"
+  agentKind = "zcode"
+ElseIf hostPart = "claude" Then
+  mode = "zcode"
+  agentKind = "claude"
 End If
 
 ' ===== Parsear el query string (key=value separado por &) =====
@@ -121,8 +129,9 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
       If ag = "" Or Not IsSafeToken(ag) Then ag = "-"
       If tk = "" Or Not IsSafeToken(tk) Then tk = "-"
       If th = "" Or Not IsSafeToken(th) Then th = "-"
+      ' 8º argumento = agente (zcode | claude): el servidor elige adaptador.
       CreateObject("WScript.Shell").Run _
-        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """ " & p64 & " " & st & " " & ag & " " & tk & " " & th, _
+        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """ " & p64 & " " & st & " " & ag & " " & tk & " " & th & " " & agentKind, _
         0, False
     End If
   Else

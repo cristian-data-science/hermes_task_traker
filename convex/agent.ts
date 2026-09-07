@@ -70,8 +70,9 @@ const FOLLOWUP_MAX = 3000;
 
 /**
  * Catálogo de modelos de respaldo: lo muestra el picker mientras el puente
- * no ha sincronizado el catálogo real de la instalación de ZCode
- * (settings `agent.models`). Si aparece un modelo nuevo, la sync lo agrega.
+ * no ha sincronizado el catálogo real de la instalación local de cada agente
+ * (settings `agent.models[.<agente>]`). Si aparece un modelo nuevo, la sync
+ * lo agrega.
  */
 export const FALLBACK_MODELS = [
   { id: "builtin:zai-coding-plan/GLM-5.3", label: "GLM-5.3" },
@@ -79,6 +80,18 @@ export const FALLBACK_MODELS = [
   { id: "builtin:zai-coding-plan/glm-5.1-highspeed", label: "GLM-5.1 Highspeed (rápido)" },
   { id: "builtin:zai-coding-plan/glm-4.7-flash", label: "GLM-4.7 Flash (económico)" },
 ];
+
+/** Respaldo Claude Code: ids internos que el adaptador mapea a --model/--effort. */
+export const FALLBACK_MODELS_CLAUDE = [
+  { id: "claude/sonnet-5-high", label: "Sonnet 5 High" },
+  { id: "claude/opus-5-high", label: "Opus 5 High" },
+];
+
+/** Ejecutores que el puente despacha (todo lo que no sea cris/claw). */
+export const isDelegatedExecutor = (
+  executor: string | undefined,
+): executor is "zcode" | "claude" =>
+  executor === "zcode" || executor === "claude";
 
 /** Carpetas por defecto del sembrado inicial (curadas; editables en la UI). */
 const DEFAULT_WORKSPACES: Array<{
@@ -336,7 +349,7 @@ export const agentOverview = query({
     const delegated = all.filter(
       (t) =>
         t.deletedAt === undefined &&
-        t.executor === "zcode" &&
+        isDelegatedExecutor(t.executor) &&
         t.agentState !== undefined,
     );
     const cut = since ?? Date.now() - 24 * 60 * 60 * 1000;
@@ -409,12 +422,15 @@ export const listWorkspaces = query({
   },
 });
 
-/** Catálogo de modelos (sync del puente) con fallback estático. */
+/** Catálogo de modelos de un agente (sync del puente) con fallback estático. */
 export const listModels = query({
-  args: sessionArg,
-  handler: async (ctx, { sessionToken }) => {
+  args: { ...sessionArg, agent: v.optional(v.string()) },
+  handler: async (ctx, { sessionToken, agent }) => {
     await requireAuth(ctx, sessionToken);
-    const raw = await getSetting(ctx, "agent.models");
+    // ZCode usa la key histórica `agent.models`; los demás, `agent.models.<agente>`.
+    const key = agent && agent !== "zcode" ? `agent.models.${agent}` : "agent.models";
+    const fallback = agent === "claude" ? FALLBACK_MODELS_CLAUDE : FALLBACK_MODELS;
+    const raw = await getSetting(ctx, key);
     if (raw) {
       try {
         const parsed = JSON.parse(raw) as {
@@ -429,7 +445,7 @@ export const listModels = query({
         // JSON viejo/corrupto: cae al fallback.
       }
     }
-    return { models: FALLBACK_MODELS, default: undefined, syncedAt: undefined };
+    return { models: fallback, default: undefined, syncedAt: undefined };
   },
 });
 
@@ -497,9 +513,9 @@ export const DEFAULT_CONTRACT = {
 const CONTRACT_SETTINGS_KEY = "agent.contract";
 
 /**
- * Seed de una tarea DELEGADA (executor=zcode, encolada) sin pasar por la UI.
- * Interna sin auth: para pruebas end-to-end del puente (los "TEST … (se
- * borra)" del smoke), invocada con `npx convex run`. Valida la combinación
+ * Seed de una tarea DELEGADA (executor zcode/claude, encolada) sin pasar por
+ * la UI. Interna sin auth: para pruebas end-to-end del puente (los "TEST …
+ * (se borra)" del smoke), invocada con `npx convex run`. Valida la combinación
  * carpeta/tipo igual que el flujo real.
  */
 export const _seedDelegatedTask = internalMutation({
@@ -524,6 +540,8 @@ export const _seedDelegatedTask = internalMutation({
     ),
     workspacePath: v.string(),
     notes: v.optional(v.string()),
+    executor: v.optional(v.union(v.literal("zcode"), v.literal("claude"))),
+    model: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Resolver la carpeta del registro para validar la combinación tipo/vcs
@@ -543,10 +561,11 @@ export const _seedDelegatedTask = internalMutation({
       area: args.area,
       status: "pendiente",
       notes: args.notes,
-      executor: "zcode",
+      executor: args.executor ?? "zcode",
       taskType: args.taskType,
       autonomy: args.autonomy,
       workspacePath: args.workspacePath,
+      model: args.model,
       agentState: "encolada",
       order: 0,
       createdAt: now,
@@ -693,18 +712,21 @@ export const runActivity = mutation({
   },
 });
 
-/** Sync del catálogo de modelos de la instalación local de ZCode. */
+/** Sync del catálogo de modelos de la instalación local de un agente. */
 export const syncModels = mutation({
   args: {
     ...sessionArg,
     models: v.array(v.object({ id: v.string(), label: v.string() })),
     default: v.optional(v.string()),
+    /** Agente cuyo catálogo se sincroniza (default zcode, key histórica). */
+    agent: v.optional(v.string()),
   },
-  handler: async (ctx, { sessionToken, models, default: defaultModel }) => {
+  handler: async (ctx, { sessionToken, models, default: defaultModel, agent }) => {
     await requireAuth(ctx, sessionToken);
+    const key = agent && agent !== "zcode" ? `agent.models.${agent}` : "agent.models";
     await setSetting(
       ctx,
-      "agent.models",
+      key,
       JSON.stringify({ models, default: defaultModel, syncedAt: Date.now() }),
     );
   },
@@ -741,6 +763,7 @@ export const claimTask = mutation({
     const followUp = task.agentFollowUp;
     const runId = await ctx.db.insert("agentRuns", {
       taskId,
+      agent: isDelegatedExecutor(task.executor) ? task.executor : "zcode",
       state: "despachada",
       resumed: resumed ?? false,
       autonomy: task.autonomy,
@@ -784,7 +807,7 @@ export const redirectAgent = mutation({
     if (!task || task.deletedAt !== undefined)
       throw new Error("Tarea no encontrada");
     if (
-      task.executor !== "zcode" ||
+      !isDelegatedExecutor(task.executor) ||
       !task.agentState ||
       !["despachada", "trabajando", "pregunta"].includes(task.agentState)
     )
@@ -838,7 +861,7 @@ export const agentReport = mutation({
     // Tarea borrada mientras la corrida vivía (p.ej. Cris la eliminó con el
     // agente corriendo): no es error — los watchdogs quedan en silencio.
     if (!task || task.deletedAt !== undefined) return { ok: true, deleted: true };
-    if (task.executor !== "zcode")
+    if (!isDelegatedExecutor(task.executor))
       throw new Error("La tarea no está delegada al agente");
     if (args.state === "pregunta" && !args.question)
       throw new Error("Estado pregunta sin pregunta");
@@ -1051,7 +1074,7 @@ export const askHistory = mutation({
     const task = await ctx.db.get(taskId);
     if (!task || task.deletedAt !== undefined)
       throw new Error("Tarea no encontrada");
-    if (task.executor !== "zcode" || !task.agentState)
+    if (!isDelegatedExecutor(task.executor) || !task.agentState)
       throw new Error("La tarea no está delegada al agente");
     if (!["hecho", "cancelada", "error", "para-revision"].includes(task.agentState))
       throw new Error(
@@ -1059,7 +1082,7 @@ export const askHistory = mutation({
       );
     if (!task.agentSessionId)
       throw new Error(
-        "Esta tarea no tiene sesión de ZCode guardada — no hay contexto que retomar",
+        "Esta tarea no tiene sesión del agente guardada — no hay contexto que retomar",
       );
     const wrapped =
       `PREGUNTA DE CRIS sobre el trabajo ya entregado (no rehagas nada ni ` +

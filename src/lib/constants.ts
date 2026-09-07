@@ -14,6 +14,7 @@ import {
   UserRound,
   Bot,
   Sparkles,
+  BrainCircuit,
   ChartColumn,
   GitBranch,
   Search,
@@ -37,9 +38,21 @@ import { EnCursoIcon } from "../components/EnCursoIcon";
 export const AREAS = ["patagonia", "datacef", "personal"] as const;
 export type Area = (typeof AREAS)[number];
 
-/** Ejecutores disponibles: Cris (tú), Claw (agente Hermes) o ZCode (agente de código). */
-export const EXECUTORS = ["cris", "claw", "zcode"] as const;
+/**
+ * Ejecutores disponibles: Cris (tú), Claw (agente Hermes), ZCode y Claude Code
+ * (agentes de código despachables por el puente).
+ */
+export const EXECUTORS = ["cris", "claw", "zcode", "claude"] as const;
 export type Executor = (typeof EXECUTORS)[number];
+
+/** Ejecutores que el puente agent-bridge sabe despachar (delegables). */
+export const DELEGATED_EXECUTORS = ["zcode", "claude"] as const;
+export type DelegatedExecutor = (typeof DELEGATED_EXECUTORS)[number];
+
+export const isDelegatedExecutor = (
+  executor: string | undefined,
+): executor is DelegatedExecutor =>
+  executor === "zcode" || executor === "claude";
 
 export const EXECUTOR_META: Record<
   Executor,
@@ -59,6 +72,11 @@ export const EXECUTOR_META: Record<
     label: "ZCode",
     Icon: Sparkles,
     color: "text-fuchsia-600 dark:text-fuchsia-400",
+  },
+  claude: {
+    label: "Claude Code",
+    Icon: BrainCircuit,
+    color: "text-orange-600 dark:text-orange-400",
   },
 };
 

@@ -78,6 +78,31 @@ export const ZCODE_MODEL_PROVIDERS_DIR = path.join(
   "model-providers",
 );
 
+/** CLI de Claude Code (binario nativo del paquete npm global). */
+function resolveClaudeCli() {
+  if (process.env.CLAUDE_CLI) return process.env.CLAUDE_CLI;
+  const cand = path.join(
+    os.homedir(),
+    "AppData",
+    "Roaming",
+    "npm",
+    "node_modules",
+    "@anthropic-ai",
+    "claude-code",
+    "bin",
+    "claude.exe",
+  );
+  return existsSync(cand) ? cand : "claude";
+}
+export const CLAUDE_CLI = resolveClaudeCli();
+
+/** Home de Claude Code (sesiones, settings, hooks). */
+export const CLAUDE_HOME = path.join(os.homedir(), ".claude");
+/** Proyectos = una carpeta por cwd con los <session-uuid>.jsonl de historial. */
+export const CLAUDE_PROJECTS_DIR = path.join(CLAUDE_HOME, "projects");
+/** Settings de usuario (acá se registran los hooks del puente). */
+export const CLAUDE_SETTINGS = path.join(CLAUDE_HOME, "settings.json");
+
 /** CLI de Hermes (gateway WhatsApp ya conectado). */
 function resolveHermesCli() {
   if (process.env.HERMES_CLI) return process.env.HERMES_CLI;
@@ -116,6 +141,9 @@ export const MODEL_BACKUP = path.join(BRIDGE_DIR, ".model-backup.json");
  * (bypass). Los límites reales son: el contrato del prompt (conductual,
  * reforzado por tipo y por autonomía en prompts.mjs) y el timeout de corrida.
  *
+ * Claude Code: mismo problema sin TTY → las tres autonomías mapean a
+ * --permission-mode bypassPermissions (ver agents/claude.mjs).
+ *
  * OJO: --disallowed-tools con specs "Bash(...)" elimina la herramienta Bash
  * ENTERA en 0.16.5 (no solo el patrón), así que NO se usa hasta que el CLI
  * arregle el matcher. Las reglas de git push / cero-git-en-reportes viven en
@@ -133,6 +161,13 @@ export const NUDGE_MS = 10 * 60 * 1000;
 /** Concurrencia: una tarea a la vez (el swap de modelo lo exige). */
 export const MAX_CONCURRENT = 1;
 
+/**
+ * Corridas Claude en paralelo: el modelo va por flag (--model/--effort), no
+ * hay swap global, así que el límite es solo cortesía con la cuenta
+ * Enterprise (y con la máquina).
+ */
+export const MAX_PARALLEL_CLAUDE = Number(process.env.MAX_PARALLEL_CLAUDE || 1);
+
 export function assertConfig() {
   const problems = [];
   if (!CONVEX_URL) problems.push("Falta CONVEX_URL (env o .env.local VITE_CONVEX_URL)");
@@ -140,4 +175,12 @@ export function assertConfig() {
   if (!existsSync(ZCODE_CLI)) problems.push(`No existe el CLI de ZCode: ${ZCODE_CLI}`);
   if (!existsSync(ZCODE_CONFIG)) problems.push(`No existe el config de ZCode: ${ZCODE_CONFIG}`);
   return problems;
+}
+
+/** Claude es opcional: avisa (no tumba el puente) si no está instalado. */
+export function claudeWarnings() {
+  const warns = [];
+  if (CLAUDE_CLI === "claude" || !existsSync(CLAUDE_CLI))
+    warns.push(`CLI de Claude Code no encontrado (se usa "${CLAUDE_CLI}"): instalalo con npm i -g @anthropic-ai/claude-code o seteá CLAUDE_CLI`);
+  return warns;
 }

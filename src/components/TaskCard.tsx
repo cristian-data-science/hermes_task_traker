@@ -18,7 +18,7 @@ import { api } from "~/convex/_generated/api";
 import { AreaBadge, StatusBadge } from "./Badges";
 import { CompleteButton } from "./CompleteButton";
 import { CatchupPinButton } from "./CatchupPinButton";
-import { EXECUTOR_META, AGENT_STATE_META, type AgentState } from "../lib/constants";
+import { EXECUTOR_META, AGENT_STATE_META, isDelegatedExecutor, type AgentState } from "../lib/constants";
 import { cn, statusTone, formatRelative, formatAgo, isSuperUrgent, AGENT_UI_ENABLED } from "../lib/utils";
 import { useAuth } from "../hooks/useAuth";
 
@@ -210,9 +210,9 @@ export function TaskCard({
       {/* Footer: metadatos */}
       <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-1.5 text-[11px] text-mute">
         {/* Chip del ciclo de delegación (solo web): el estado del agente es la
-            fuente de verdad mientras la tarea esté delegada a ZCode. */}
+            fuente de verdad mientras la tarea esté delegada a un agente. */}
         {AGENT_UI_ENABLED &&
-          task.executor === "zcode" &&
+          isDelegatedExecutor(task.executor) &&
           task.agentState &&
           (() => {
             const st = AGENT_STATE_META[task.agentState as AgentState];
@@ -241,7 +241,7 @@ export function TaskCard({
             la actividad detectada del transcript, una línea, con antigüedad.
             Con plan declarado: "Paso N de M · <acción>". */}
         {AGENT_UI_ENABLED &&
-          task.executor === "zcode" &&
+          isDelegatedExecutor(task.executor) &&
           task.agentLastStep &&
           ["despachada", "trabajando", "pregunta"].includes(
             task.agentState ?? "",
