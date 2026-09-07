@@ -38,6 +38,24 @@ type DayBucket = {
   planeadasHechas: number;
 };
 
+/**
+ * Sábados y domingos ruedan al lunes: el visor cuenta en días hábiles
+ * (pedido de Cris — los fines de semana no se muestran ni se cuentan como
+ * día propio). Es solo visual/estadística: el `day` guardado no se toca.
+ */
+function diaHabil(ts: number): number {
+  const d = new Date(ts);
+  const wd = d.getDay();
+  if (wd === 6) return startOfDay(addDays(d, 2)).getTime(); // sábado → lunes
+  if (wd === 0) return startOfDay(addDays(d, 1)).getTime(); // domingo → lunes
+  return startOfDay(ts).getTime();
+}
+
+function esFinDeSemana(ts: number): boolean {
+  const wd = new Date(ts).getDay();
+  return wd === 0 || wd === 6;
+}
+
 interface InsightsDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -99,7 +117,7 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
       return b;
     };
     for (const imp of imprevistos) {
-      const b = bucketOf(imp.day);
+      const b = bucketOf(diaHabil(imp.day));
       b.surgidos++;
 
       // Un promovido cuya tarea ya se completó ES trabajo terminado: cuenta
@@ -132,26 +150,28 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
     for (const item of dayItems) {
       const task = taskById.get(item.taskId);
       if (!task || task.deletedAt !== undefined) continue;
-      const b = bucketOf(item.day);
+      const b = bucketOf(diaHabil(item.day));
       b.planeadas++;
       if (task.status === "completado") b.planeadasHechas++;
     }
-    // TODOS los días del rango entran a la grilla (también los ceros):
-    // pedidos de Cris — ver el calendario completo con su conteo, no solo
-    // los días con actividad.
+    // TODOS los días HÁBILES del rango entran a la grilla (también los
+    // ceros): calendario lunes a viernes, sin sábados ni domingos.
     for (let i = rangeDays - 1; i >= 0; i--) {
-      bucketOf(startOfDay(addDays(new Date(), -i)).getTime());
+      const d = startOfDay(addDays(new Date(), -i)).getTime();
+      if (!esFinDeSemana(d)) bucketOf(d);
     }
     return [...byKey.values()].sort((a, b) => a.day - b.day);
   }, [imprevistos, dayItems, taskById, rangeDays]);
 
-  /** Los imprevistos de cada día, para desplegar la fila al clickearla. */
+  /** Los imprevistos de cada día (ruedan al lunes si cayeron en fin de
+      semana), para desplegar la fila al clickearla. */
   const imprevistosByDay = useMemo(() => {
     const m = new Map<number, ImprevistoStat[]>();
     for (const imp of imprevistos) {
-      const list = m.get(imp.day) ?? [];
+      const key = diaHabil(imp.day);
+      const list = m.get(key) ?? [];
       list.push(imp);
-      m.set(imp.day, list);
+      m.set(key, list);
     }
     return m;
   }, [imprevistos]);
@@ -280,10 +300,11 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
               {/* ===== Por día (clickeable: despliega los imprevistos del día) ===== */}
               <section>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-mute">
-                  Por día (últimos {rangeDays})
+                  Por día (últimos {rangeDays} · lunes a viernes)
                 </h3>
                 <p className="mb-2 text-[10px] text-faint">
-                  Tocá un día para ver sus imprevistos.
+                  Tocá un día para ver sus imprevistos. Lo que surge sábado o
+                  domingo cuenta como lunes.
                 </p>
                 <ul className="flex flex-col gap-1.5">
                   {[...buckets].reverse().map((b) => {
