@@ -927,6 +927,10 @@ export const agentReport = mutation({
           .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     }
     // Conteo de pasos tras este reporte (para el "Paso N de M" en la tarjeta).
+    // El plan PREVIO viaja al return: report.mjs lo usa para distinguir el
+    // plan inicial de un RE-plan (el WhatsApp de re-plan es compacto, con el
+    // diff del nuevo rumbo — no otro volcado completo).
+    const previousPlan = run?.plan ?? null;
     let stepCount: number | undefined;
     if (run) {
       // Protocolo --plan: el roadmap que el agente INTENTA seguir (≤10 × 120).
@@ -1005,6 +1009,8 @@ export const agentReport = mutation({
       ok: true,
       // Redirección pendiente de Cris: report.mjs se la muestra al agente.
       pendingInstruction: task.agentRedirect ?? undefined,
+      // Plan que la corrida tenía ANTES de este reporte (null si no tenía).
+      previousPlan,
     };
   },
 });
@@ -1045,14 +1051,25 @@ export const taskForNotify = query({
     await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(taskId);
     if (!task) return null;
+    // Última corrida (para el aviso final: duración, pasos y si fue reanudada).
+    const runs = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
+      .collect();
+    const last = [...runs].sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     return {
       title: task.title,
+      executor: task.executor ?? null,
       notifyWhatsapp: task.notifyWhatsapp ?? "off",
       agentState: task.agentState ?? null,
       // Posición en el plan para el WhatsApp de una línea ("▸ 3/7 · paso").
       agentStepIndex: task.agentStepIndex,
       agentPlanTotal: task.agentPlanTotal,
       workspacePath: task.workspacePath,
+      // Corrida más reciente: arranque (duración del aviso final) y corridas
+      // totales (para explicar renumeraciones tras interrupciones).
+      runStartedAt: last?.startedAt ?? null,
+      runsCount: runs.length,
     };
   },
 });

@@ -133,35 +133,47 @@ async function main() {
     );
   }
 
-  // WhatsApp ORDENADO: el PLAN es el primer mensaje; cada paso es UN renglón
-  // con posición (3/7); el final es el resumen compacto. Sin metadata repetida
-  // (taskId/carpeta/modelo viven en la app, no en el chat).
+  // WhatsApp ORDENADO: plan inicial completo (una sola vez), RE-plan compacto
+  // con el diff del nuevo rumbo, cada paso UN renglón con posición, y el final
+  // legible (estado en español + duración/pasos). Sin metadata repetida.
   try {
     const info = await q("agent:taskForNotify", { taskId: task });
     if (info) {
+      const base = {
+        title: info.title,
+        executor: info.executor ?? undefined,
+      };
       if (isPlanOnly) {
-        await notifyAgent(info.notifyWhatsapp, "plan", {
-          title: info.title,
-          plan: plan
-            ? String(plan)
-                .split(/\s*[|\n]+\s*/)
-                .map((s) => s.replace(/^\s*\d+[.)]\s*/, "").trim())
-                .filter(Boolean)
-            : [],
+        const planList = plan
+          ? String(plan)
+              .split(/\s*[|\n]+\s*/)
+              .map((s) => s.replace(/^\s*\d+[.)]\s*/, "").trim())
+              .filter(Boolean)
+          : [];
+        // ¿Ya había plan en la corrida? → RE-plan: una línea con lo NUEVO.
+        const isReplan = Array.isArray(res?.previousPlan) && res.previousPlan.length > 0;
+        await notifyAgent(info.notifyWhatsapp, isReplan ? "replan" : "plan", {
+          ...base,
+          plan: planList,
+          previousPlan: res?.previousPlan ?? [],
         });
       } else if (isStepOnly) {
         await notifyAgent(info.notifyWhatsapp, "paso", {
-          title: info.title,
+          ...base,
           step,
           stepIndex: info.agentStepIndex,
           planTotal: info.agentPlanTotal,
         });
       } else if (isFinalState) {
         await notifyAgent(info.notifyWhatsapp, "final", {
-          title: info.title,
+          ...base,
           state,
           summary: args.summary,
           question: args.question,
+          error: args.error,
+          stepIndex: info.agentStepIndex,
+          runStartedAt: info.runStartedAt ?? undefined,
+          runsCount: info.runsCount ?? 1,
           taskId: task,
         });
       }

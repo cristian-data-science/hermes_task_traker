@@ -38,6 +38,7 @@ import {
 import { getToken, q, m } from "./auth.mjs";
 import { restoreOrphanSwap } from "./models.mjs";
 import { buildPrompt, buildRedirectPrompt } from "./prompts.mjs";
+import { notifyAgent } from "./notify.mjs";
 import { adapterFor } from "./agents/index.mjs";
 
 const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000);
@@ -221,6 +222,15 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     return;
   }
   run.runId = runId;
+
+  // Corrida REANUDADA (interrumpión/reinicio/redirección previa): avisar una
+  // sola vez para que la renumeración de pasos del WhatsApp no confunda.
+  if (sessAlive && notifyMode === "periodica") {
+    notifyAgent(notifyMode, "reanudada", {
+      title: task.title,
+      executor: task.executor,
+    }).catch(() => {});
+  }
 
   const prompt = buildPrompt({
     task,
