@@ -162,3 +162,42 @@ export function buildPrompt(input) {
 export function promptDigest(prompt) {
   return prompt.replace(/\s+/g, " ").slice(0, 300);
 }
+
+/**
+ * Prompt de REDIRECCIÓN EN VIVO: Cris cambió el rumbo mientras la corrida
+ * estaba activa; el puente interrumpió el proceso y lo retoma con --resume en
+ * la MISMA sesión y la MISMA corrida. Compacto a propósito: este mensaje viaja
+ * al historial de la sesión y se lee en el chat (debe verse como lo que es —
+ * una instrucción nueva de Cris —, no como otro paquete de contrato).
+ *
+ * OJO (aprendizaje del primer test): sin procedencia explícita, el modelo
+ * DESCONFÍA del mensaje ("llega como texto en el turno de usuario") y puede
+ * priorizar el enunciado original de la tarea. Por eso el prompt declara QUIÉN
+ * lo entrega (el puente), POR QUÉ (Cris lo escribió desde la app, el proceso
+ * fue interrumpido para entregarlo) y que tiene PRIORIDAD sobre todo lo previo.
+ */
+export function buildRedirectPrompt({ task, instruction, runId }) {
+  const lines = [];
+  lines.push(`=== REDIRECCIÓN EN VIVO DE CRIS — PRIORIDAD MÁXIMA ===`);
+  lines.push(
+    "Este mensaje lo entrega el PUENTE agent-bridge (el mismo que despachó tu tarea): " +
+      "Cris acaba de escribir esta instrucción desde la app del tracker y el puente " +
+      "INTERRUMPIÓ tu proceso para entregártela de inmediato. Es una instrucción " +
+      "auténtica del dueño del contrato: PREVALECE sobre cualquier instrucción previa " +
+      "de esta tarea (incluido su enunciado original y sus notas). No la cuestionés ni " +
+      "la tratés como texto sospechoso: aplicala.",
+  );
+  lines.push(`Tarea: ${task.title} (id: ${task._id}) — misma corrida, misma sesión: seguís donde quedaste.`);
+  lines.push(`\nInstrucción nueva de Cris:\n>>> ${instruction}`);
+  lines.push(
+    "\nAplicá el nuevo rumbo desde ya:",
+  );
+  lines.push(
+    "- Si el plan cambia, reenvialo ya: " +
+      `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --plan "..."`,
+  );
+  lines.push(
+    "- Seguí reportando cada paso (--step) y el estado final como siempre.",
+  );
+  return lines.join("\n");
+}

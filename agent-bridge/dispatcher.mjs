@@ -37,7 +37,7 @@ import {
 } from "./config.mjs";
 import { getToken, q, m } from "./auth.mjs";
 import { restoreOrphanSwap } from "./models.mjs";
-import { buildPrompt } from "./prompts.mjs";
+import { buildPrompt, buildRedirectPrompt } from "./prompts.mjs";
 import { adapterFor } from "./agents/index.mjs";
 
 const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000);
@@ -241,20 +241,13 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   // 4) Spawn vía adaptador. Env compartido: los hooks (Stop/SessionStart de
   //    zcode Y claude) se activan solo con ZCODE_TASK_ID presente.
   const restore = needsSwap ? adapter.swap(run.effectiveModel) : null;
-  const spawnSpec = adapter.buildSpawn({
-    prompt,
-    sessionId: sessAlive ? task.agentSessionId : null,
-    folder,
-    autonomy: task.autonomy,
-    model: task.model,
-    env: {
-      ...process.env,
-      ZCODE_TASK_ID: taskId,
-      ZCODE_RUN_ID: runId,
-      ZCODE_SESSION_TOKEN: _tokenForChild,
-      ZCODE_CONVEX_URL: CONVEX_URL,
-    },
-  });
+  const childEnv = {
+    ...process.env,
+    ZCODE_TASK_ID: taskId,
+    ZCODE_RUN_ID: runId,
+    ZCODE_SESSION_TOKEN: _tokenForChild,
+    ZCODE_CONVEX_URL: CONVEX_URL,
+  };
 
   // API que usan los adaptadores para reportar en vivo.
   const liveApi = {
@@ -270,13 +263,32 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     },
   };
 
-  try {
-    const res = await new Promise((resolve) => {
-      const child = spawn(spawnSpec.exe, spawnSpec.args, spawnSpec.options);
+  /**
+   * Un proceso de la corrida. Devuelve {code, err, stdout}. El bucle exterior
+   * lo relanza cuando llega una REDIRECCIÓN EN VIVO: mismo runId, misma
+   * sesión (--resume), nuevo rumbo (ver handleRedirects).
+   */
+  const launch = (promptText, resumeId) =>
+    new Promise((resolve) => {
+      const spec = adapter.buildSpawn({
+        prompt: promptText,
+        sessionId: resumeId,
+        folder,
+        autonomy: task.autonomy,
+        model: task.model,
+        env: childEnv,
+      });
+      const child = spawn(spec.exe, spec.args, spec.options);
       run.kill = () => child.kill();
+      run.childAlive = true;
+      // ¿Quedó una redirección encolada mientras no había proceso vivo?
+      // Revisar ahora que hay alguien a quien interrumpir.
+      void handleRedirects().catch(() => {});
+      if (run.tailer) clearInterval(run.tailer);
       run.tailer = adapter.startTailer(run, liveApi);
       // Bind temprano de la sesión (chat disponible mid-run): zcode la busca
       // en db.sqlite por título; claude ya la bindeó vía system/init.
+      if (run.sessionWatch) clearInterval(run.sessionWatch);
       run.sessionWatch = adapter.watchSession?.(run, liveApi) ?? null;
 
       let stdout = "";
@@ -303,14 +315,37 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
 
       child.on("error", (err) => {
         clearTimeout(timeout);
+        run.childAlive = false;
         resolve({ code: -1, err: String(err), stdout });
       });
       child.on("close", (code) => {
         clearTimeout(timeout);
+        run.childAlive = false;
         if (buf.trim()) adapter.onStdoutLine(run, buf, liveApi);
         resolve({ code, stdout });
       });
     });
+
+  try {
+    let promptText = prompt;
+    let resumeId = sessAlive ? task.agentSessionId : null;
+    let res;
+    for (;;) {
+      res = await launch(promptText, resumeId);
+      // ¿Llegó una redirección en vivo mientras este proceso corría? Retomar
+      // la MISMA sesión/corrida con el nuevo rumbo (handleRedirects mató el
+      // proceso y dejó la instrucción en run.pendingRedirect).
+      if (run.redirected && run.sessionId) {
+        const instruction = run.pendingRedirect;
+        run.pendingRedirect = "";
+        run.redirected = false;
+        log(`♻ retomando corrida ${runId} con la redirección en vivo (--resume ${run.sessionId.slice(0, 12)}…)`);
+        promptText = buildRedirectPrompt({ task, instruction, runId });
+        resumeId = run.sessionId;
+        continue;
+      }
+      break;
+    }
 
     // 5) Vincular sesión + watchdog si el agente no reportó.
     const sessionId = adapter.extractSessionId(run, res.stdout);
@@ -386,6 +421,47 @@ async function pump() {
     void dispatchTask(entry)
       .catch((e) => log("dispatch:", e.message))
       .finally(() => reserving.delete(id));
+  }
+}
+
+/**
+ * Redirecciones EN VIVO: Cris cambió el rumbo de una corrida activa y no puede
+ * esperar a que termine (el camino viejo la entregaba en el próximo reporte).
+ * Suscripción reactiva a agent:redirectQueue: por cada instrucción sobre una
+ * corrida VIVA (proceso arriba + sesión ya bindeada para retomar):
+ *   1. La consume (agentReport limpia agentRedirect, fail-once) dejando el
+ *      paso "🔄 redirección en vivo: …" en la checklist (visible en el tablero
+ *      y en el chat vía tracker).
+ *   2. Mata el proceso; el loop de dispatchTaskInner lo detecta y RETOMA la
+ *      MISMA sesión (--resume) y la MISMA corrida (mismo runId → report.mjs
+ *      sigue alimentando la misma fila) con la instrucción como prompt.
+ * Si no hay corrida viva (pregunta/encolada), la instrucción queda para el
+ * mecanismo clásico (followUp del próximo despacho).
+ */
+async function handleRedirects() {
+  let items;
+  try {
+    items = await q("agent:redirectQueue");
+  } catch (e) {
+    log("redirectQueue falló:", e.message);
+    return;
+  }
+  for (const it of items ?? []) {
+    const run = activeRuns.get(it.taskId);
+    if (!run || !run.runId) continue;
+    if (run.pendingRedirect) continue; // ya hay una en camino
+    if (!run.sessionId || !run.childAlive) continue; // nada vivo que interrumpir
+    run.pendingRedirect = it.redirect;
+    run.lastActivityAt = Date.now();
+    log(`🔄 redirección en vivo para "${run.title}": ${it.redirect.slice(0, 90)}`);
+    await m("agent:agentReport", {
+      taskId: it.taskId,
+      runId: run.runId,
+      state: "trabajando",
+      step: `🔄 redirección en vivo: ${it.redirect.slice(0, 100)}`,
+    }).catch((e) => log("report redirección falló:", e.message));
+    run.redirected = true;
+    run.kill?.();
   }
 }
 
@@ -466,6 +542,16 @@ async function main() {
     { sessionToken: _tokenForChild },
     () => {
       pump().catch((e) => log("pump:", e.message));
+    },
+  );
+
+  // Redirecciones en vivo: cada instrucción de Cris sobre una corrida activa
+  // se entrega AL INSTANTE (interrumpir + retomar con --resume).
+  client.onUpdate(
+    "agent:redirectQueue",
+    { sessionToken: _tokenForChild },
+    () => {
+      handleRedirects().catch((e) => log("redirects:", e.message));
     },
   );
 

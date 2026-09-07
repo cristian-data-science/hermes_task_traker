@@ -827,9 +827,12 @@ export const claimTask = mutation({
 });
 
 /**
- * Redirección EN VIVO: Cris cambia el rumbo de una corrida ACTIVA sin matarla.
- * La instrucción queda guardada y se entrega al agente en su próximo reporte
- * (report.mjs se la devuelve en stdout — el agente la lee y adapta el plan).
+ * Redirección EN VIVO: Cris cambia el rumbo de una corrida ACTIVA.
+ * La instrucción queda guardada y el puente la entrega AL INSTANTE: se
+ * suscribe a redirectQueue, interrumpe el proceso y lo retoma en la MISMA
+ * sesión (--resume) con esta instrucción como prompt (mismo runId). El camino
+ * viejo —entregarla en el stdout del próximo report.mjs— queda de respaldo
+ * para cuando no hay proceso vivo que interrumpir.
  */
 export const redirectAgent = mutation({
   args: { ...sessionArg, taskId: v.id("tasks"), message: v.string() },

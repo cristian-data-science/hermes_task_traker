@@ -459,7 +459,7 @@ export function AgentRunsPanel({
                 </div>
               )}
 
-              {/* Redirección en vivo: cambiar el rumbo SIN matar la corrida */}
+              {/* Redirección en vivo: cambia el rumbo YA — interrumpe y retoma */}
               {canRedirect && (
                 <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
                   <label className="label flex items-center gap-1.5">
@@ -468,7 +468,7 @@ export function AgentRunsPanel({
                   </label>
                   {t.agentRedirect ? (
                     <p className="rounded-el bg-amber-500/10 p-2 text-[11px] text-amber-700 dark:text-amber-400">
-                      <span className="font-semibold">Instrucción en cola de entrega:</span>{" "}
+                      <span className="font-semibold">Entregando la instrucción…</span>{" "}
                       {t.agentRedirect}
                     </p>
                   ) : (
@@ -495,9 +495,10 @@ export function AgentRunsPanel({
                         Enviar redirección
                       </button>
                       <p className="mt-1.5 text-[10px] text-faint">
-                        Se entrega al agente en su próximo reporte (los pasos
-                        suelen llegar cada pocos minutos); verás su adaptación
-                        en la actividad en vivo.
+                        Se entrega AL INSTANTE: el puente interrumpe la corrida y
+                        la retoma en la misma sesión con este nuevo rumbo (el
+                        agente reenvía su plan si cambió). También la ves llegar
+                        en el chat.
                       </p>
                     </>
                   )}
