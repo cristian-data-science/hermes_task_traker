@@ -96,6 +96,58 @@ function describeLine(line) {
   return null;
 }
 
+/**
+ * Bind TEMPRANO de la sesión: busca en db.sqlite la sesión nueva de esta
+ * corrida por título (el prompt arranca con "agente- <título>…", que ZCode
+ * usa como título de sesión) y la reporta apenas aparece — así el 💬 del chat
+ * está disponible DURANTE la corrida y no solo al terminar.
+ *
+ * Devuelve el timer del poll (3 s, hasta 10 min) o null si no pudo abrir la
+ * DB. Defensivo: si la tabla no tiene columna de tiempo, matchea por título
+ * y orden de inserción (rowid DESC).
+ */
+function watchSessionDb(run, api) {
+  let stopped = false;
+  const titlePrefix = `agente- ${run.title}`.slice(0, 60);
+  const timer = setInterval(() => {
+    if (stopped || run.sessionId) return;
+    let row = null;
+    try {
+      const db = new DatabaseSync(
+        path.join(os.homedir(), ".zcode", "cli", "db", "db.sqlite"),
+        { readOnly: true },
+      );
+      try {
+        row = db
+          .prepare(
+            "SELECT id FROM session WHERE title LIKE ? AND time_created >= ? ORDER BY time_created DESC LIMIT 1",
+          )
+          .get(`${titlePrefix}%`, (run.spawnedAt - 60_000) / 1000);
+      } catch {
+        // Sin columna time_created (schema viejo): por título, la más nueva.
+        row = db
+          .prepare("SELECT id FROM session WHERE title LIKE ? ORDER BY rowid DESC LIMIT 1")
+          .get(`${titlePrefix}%`);
+      }
+      db.close();
+    } catch {
+      return; // DB ocupada/inexistente: reintenta en el próximo tick
+    }
+    if (row?.id) {
+      run.sessionId = row.id;
+      api.bindSession(row.id);
+      clearInterval(timer);
+    }
+  }, 3000);
+  // Tope: dejar de buscar a los 10 min (sesiones que tardan en aparecer no
+  // van a aparecer; el bind final del stdout cubre el resto).
+  setTimeout(() => {
+    stopped = true;
+    clearInterval(timer);
+  }, 10 * 60 * 1000).unref?.();
+  return timer;
+}
+
 // Wrappers sync mínimos para lecturas posicionales sin cargar el archivo entero.
 function openSyncSafe(file) {
   try {
@@ -202,6 +254,9 @@ export const zcodeAdapter = {
   },
 
   sessionAlive: sessionAliveInDb,
+
+  /** Bind temprano: apenas la sesión aparece en db.sqlite (para el chat mid-run). */
+  watchSession: watchSessionDb,
 
   /** Catálogo: models.mjs (desktop config + fallback estático). */
   modelCatalog: readModelCatalog,

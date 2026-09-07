@@ -180,6 +180,10 @@ export const claudeAdapter = {
   sessionAlive: sessionAliveInFs,
   /** Ruta del JSONL de la sesión (la usa el chat para el historial). */
   sessionFile,
+  /** Bind temprano: no hace falta — el session_id llega en system/init. */
+  watchSession() {
+    return null;
+  },
 
   modelCatalog: readClaudeCatalog,
 

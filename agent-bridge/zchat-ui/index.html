@@ -34,6 +34,7 @@
           <div class="brand-text">
             <h1 id="title">Chat con el agente</h1>
             <p id="subtitle">conectando con la sesión…</p>
+            <p id="identity" class="identity hidden"></p>
           </div>
         </div>
         <div class="top-actions">
@@ -56,8 +57,9 @@
             <div class="box">
               <textarea id="q" rows="1" placeholder="Preguntale al agente… (Enter envía · Shift+Enter salto de línea)" aria-label="Tu pregunta"></textarea>
               <div class="composer-actions">
-                <span class="hint" id="hint">Responde con todo el contexto de su sesión · solo consulta, no ejecuta cambios</span>
+                <span class="hint" id="hint">Responde con todo el contexto de su sesión</span>
                 <div class="composer-buttons">
+                  <button type="button" id="mode" class="ghost small mode-readonly" title="Solo consulta: el agente responde pero no ejecuta cambios (respeta el contrato de la tarea)">👁 solo consulta</button>
                   <button type="button" id="cancel" class="ghost small hidden" title="Detiene la respuesta en curso">Detener</button>
                   <button type="button" id="send" class="send" title="Enviar (Enter)" aria-label="Enviar">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>

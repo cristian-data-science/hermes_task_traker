@@ -18,11 +18,13 @@ import {
   AGENT_STATE_META,
   AUTONOMY_META,
   TASK_TYPE_META,
+  EXECUTOR_META,
+  isDelegatedExecutor,
   type AgentState,
   type Autonomy,
   type TaskType,
 } from "../lib/constants";
-import { cn, formatRelative, formatAgo } from "../lib/utils";
+import { cn, formatRelative, formatAgo, agentModelLabel } from "../lib/utils";
 
 function RunStateChip({ state }: { state: string }) {
   const meta = AGENT_STATE_META[state as AgentState];
@@ -118,9 +120,16 @@ function ArtifactsBlock({
               window.location.href = `hermesagent://${host}?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
             }}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
-            title="Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Tildá 'Siempre permitir' la primera vez."
+            title={
+              ["despachada", "trabajando"].includes(task.agentState ?? "")
+                ? "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, EN MODO OBSERVADOR mientras la corrida está activa: historial y razonamiento en vivo. Tildá 'Siempre permitir' la primera vez."
+                : "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Tildá 'Siempre permitir' la primera vez."
+            }
           >
-            <MessageCircle className="h-3.5 w-3.5" /> Chatear con el agente
+            <MessageCircle className="h-3.5 w-3.5" />
+            {["despachada", "trabajando"].includes(task.agentState ?? "")
+              ? "Ver razonamiento en vivo"
+              : "Chatear con el agente"}
           </button>
         )}
         {isReporte ? (
@@ -300,6 +309,11 @@ export function AgentRunsPanel({
   const state = (t.agentState ?? null) as AgentState | null;
   const typeMeta = t.taskType ? TASK_TYPE_META[t.taskType as TaskType] : null;
   const autoMeta = t.autonomy ? AUTONOMY_META[t.autonomy as Autonomy] : null;
+  // Identidad de la delegación: agente (por executor) + modelo con label bonito.
+  const agentMeta = isDelegatedExecutor(t.executor)
+    ? EXECUTOR_META[t.executor]
+    : null;
+  const modelLabel = agentModelLabel(t.model);
   // Link a ClickUp: visible siempre que la tarea esté vinculada (cualquier
   // estado de la delegación). Desvinculada = ya no le pertenece a ClickUp.
   const clickupHref =
@@ -396,11 +410,21 @@ export function AgentRunsPanel({
                 </h2>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-mute">
                   {state && <RunStateChip state={state} />}
+                  {agentMeta && (
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 font-semibold",
+                        agentMeta.color,
+                      )}
+                      title={`Agente ${agentMeta.label}`}
+                    >
+                      <agentMeta.Icon className="h-3 w-3" />
+                      {agentMeta.label}
+                    </span>
+                  )}
                   {typeMeta && <span>{typeMeta.label}</span>}
                   {autoMeta && <span>· {autoMeta.label}</span>}
-                  {task.model && (
-                    <span className="font-mono">· {task.model.split("/").pop()}</span>
-                  )}
+                  {modelLabel && <span>· {modelLabel}</span>}
                   {clickupHref && !t.clickupDetached && (
                     <a
                       href={clickupHref}
@@ -683,18 +707,33 @@ export function AgentRunsPanel({
                   >
                     <div className="flex flex-wrap items-center gap-2 text-[11px] text-mute">
                       <RunStateChip state={run.state} />
+                      {(() => {
+                        // Agente de ESTA corrida (vacío en corridas viejas = zcode).
+                        const rm = run.agent && run.agent !== "zcode" ? EXECUTOR_META[run.agent] : EXECUTOR_META.zcode;
+                        return (
+                          <span
+                            className={cn("inline-flex items-center gap-1 font-semibold", rm.color)}
+                            title={`Corrida ejecutada por ${rm.label}`}
+                          >
+                            <rm.Icon className="h-3 w-3" />
+                            {rm.label.replace(" Code", "")}
+                          </span>
+                        );
+                      })()}
                       <span title={new Date(run.startedAt).toLocaleString("es-CL")}>
                         {formatRelative(run.startedAt)}
                       </span>
-                      {run.model && (
-                        <span className="font-mono">{run.model.split("/").pop()}</span>
+                      {run.model && agentModelLabel(run.model) && (
+                        <span>{agentModelLabel(run.model)}</span>
                       )}
                       {run.resumed && <span>· seguimiento</span>}
                       {run.sessionId && (
-                      <span
-                        className="inline-flex items-center gap-1"
-                        title="La lista de sesiones del desktop se refresca al reiniciarlo o cambiar de workspace; para abrirla ya mismo, /resume con este id"
-                      >
+                        <span
+                          className="inline-flex items-center gap-1"
+                          title={`La lista de sesiones del desktop se refresca al reiniciarlo o cambiar de workspace; para abrirla ya mismo, reanudá con este id${
+                            run.agent === "claude" ? " (claude --resume <id>)" : " (/resume <id> en ZCode)"
+                          }`}
+                        >
                         <span className="truncate font-mono text-[10px] text-faint">
                           {run.sessionId.slice(0, 18)}…
                         </span>
@@ -704,12 +743,18 @@ export function AgentRunsPanel({
                               .writeText(run.sessionId!)
                               .then(() =>
                                 toast.success(
-                                  "sessionId copiado — en ZCode: /resume <id>",
+                                  run.agent === "claude"
+                                    ? "sessionId copiado — claude --resume <id>"
+                                    : "sessionId copiado — en ZCode: /resume <id>",
                                 ),
                               );
                           }}
                           className="rounded p-0.5 text-faint transition-colors hover:bg-panel hover:text-ink"
-                          title="Copiar sessionId (para /resume en ZCode)"
+                          title={
+                            run.agent === "claude"
+                              ? "Copiar sessionId (para claude --resume)"
+                              : "Copiar sessionId (para /resume en ZCode)"
+                          }
                         >
                           <Copy className="h-3 w-3" />
                         </button>
