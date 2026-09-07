@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuery } from "convex/react";
-import { BarChart3, X } from "lucide-react";
+import { BarChart3, ChevronDown, Maximize2, Minimize2, X } from "lucide-react";
 import {
   addDays,
   differenceInCalendarDays,
@@ -55,7 +55,10 @@ interface InsightsDrawerProps {
  */
 export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
   const { token } = useAuth();
-  const [rangeDays, setRangeDays] = useState<7 | 30>(7);
+  const [rangeDays, setRangeDays] = useState<7 | 14 | 30>(7);
+  // Drawer agrandable (para leer imprevistos largos) + día desplegado.
+  const [wide, setWide] = useState(false);
+  const [expandedDay, setExpandedDay] = useState<number | null>(null);
 
   const today = startOfDay(new Date()).getTime();
   const from = startOfDay(addDays(new Date(), -(rangeDays - 1))).getTime();
@@ -133,8 +136,25 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
       b.planeadas++;
       if (task.status === "completado") b.planeadasHechas++;
     }
+    // TODOS los días del rango entran a la grilla (también los ceros):
+    // pedidos de Cris — ver el calendario completo con su conteo, no solo
+    // los días con actividad.
+    for (let i = rangeDays - 1; i >= 0; i--) {
+      bucketOf(startOfDay(addDays(new Date(), -i)).getTime());
+    }
     return [...byKey.values()].sort((a, b) => a.day - b.day);
-  }, [imprevistos, dayItems, taskById]);
+  }, [imprevistos, dayItems, taskById, rangeDays]);
+
+  /** Los imprevistos de cada día, para desplegar la fila al clickearla. */
+  const imprevistosByDay = useMemo(() => {
+    const m = new Map<number, ImprevistoStat[]>();
+    for (const imp of imprevistos) {
+      const list = m.get(imp.day) ?? [];
+      list.push(imp);
+      m.set(imp.day, list);
+    }
+    return m;
+  }, [imprevistos]);
 
   const totals = useMemo(() => {
     const surgidos = imprevistos.length;
@@ -197,7 +217,10 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 60 }}
             transition={{ type: "spring", stiffness: 340, damping: 30 }}
-            className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col border-l border-line bg-panel shadow-el-lg"
+            className={cn(
+              "fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-line bg-panel shadow-el-lg transition-[max-width]",
+              wide ? "max-w-3xl" : "max-w-md",
+            )}
           >
             {/* ===== Header ===== */}
             <div className="flex items-center gap-2 border-b border-line px-4 py-3">
@@ -206,7 +229,7 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
                 Insights de imprevistos
               </h2>
               <div className="flex rounded-el border-el border-line bg-panel2 p-0.5">
-                {([7, 30] as const).map((n) => (
+                {([7, 14, 30] as const).map((n) => (
                   <button
                     key={n}
                     onClick={() => setRangeDays(n)}
@@ -219,6 +242,13 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
                   </button>
                 ))}
               </div>
+              <button
+                onClick={() => setWide((v) => !v)}
+                title={wide ? "Volver al ancho normal" : "Agrandar para leer mejor"}
+                className="rounded-el p-1 text-faint transition-colors hover:bg-panel2 hover:text-ink"
+              >
+                {wide ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </button>
               <button
                 onClick={onClose}
                 title="Cerrar"
@@ -247,65 +277,134 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
                 />
               </div>
 
-              {/* ===== Por día ===== */}
+              {/* ===== Por día (clickeable: despliega los imprevistos del día) ===== */}
               <section>
                 <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-mute">
                   Por día (últimos {rangeDays})
                 </h3>
-                {buckets.length === 0 && (
-                  <p className="text-xs text-faint">
-                    Todavía no hay imprevistos ni planeadas en este rango.
-                  </p>
-                )}
+                <p className="mb-2 text-[10px] text-faint">
+                  Tocá un día para ver sus imprevistos.
+                </p>
                 <ul className="flex flex-col gap-1.5">
-                  {[...buckets].reverse().map((b) => (
-                    <li
-                      key={b.day}
-                      className="flex items-center gap-3 rounded-el border-el border-line bg-panel2 px-3 py-2"
-                    >
-                      <span className="w-24 shrink-0 text-xs capitalize text-mute">
-                        {format(new Date(b.day), "EEE d MMM", { locale: es })}
-                      </span>
-                      {/* Barra de imprevistos: largo relativo al peor día */}
-                      <span className="flex h-4 flex-1 items-center gap-1">
-                        <span
-                          className="h-2 rounded-full bg-[#d97706]"
-                          style={{ width: `${(b.surgidos / maxSurgidos) * 100}%` }}
-                          title={`${b.surgidos} imprevistos`}
-                        />
-                      </span>
-                      <span className="shrink-0 text-xs text-mute" title="imprevistos surgidos">
-                        <b className="text-ink">{b.surgidos}</b> imp
-                      </span>
-                      <span className="shrink-0 text-xs text-mute" title="resueltos el mismo día">
-                        {b.mismoDia} al día
-                      </span>
-                      {b.abiertos > 0 && (
-                        <span
-                          className="shrink-0 text-xs font-medium text-[#d97706]"
-                          title="quedaron abiertos"
-                        >
-                          {b.abiertos} abiertos
-                        </span>
-                      )}
-                      {b.promovidos > 0 && (
-                        <span className="shrink-0 text-xs text-accent" title="promovidos a tarea">
-                          {b.promovidos} prom
-                        </span>
-                      )}
-                      {b.planeadas > 0 && (
-                        <span
+                  {[...buckets].reverse().map((b) => {
+                    const isOpen = expandedDay === b.day;
+                    const delDia = imprevistosByDay.get(b.day) ?? [];
+                    return (
+                      <li key={b.day}>
+                        <button
+                          onClick={() => setExpandedDay(isOpen ? null : b.day)}
+                          title={isOpen ? "Plegar el día" : "Ver los imprevistos del día"}
                           className={cn(
-                            "shrink-0 text-xs",
-                            b.planeadasHechas < b.planeadas ? "text-faint" : "text-[var(--status-completado)]",
+                            "flex w-full items-center gap-3 rounded-el border-el px-3 py-2 text-left transition-colors",
+                            isOpen
+                              ? "border-accent/40 bg-panel2"
+                              : "border-line bg-panel2 hover:border-accent/30",
                           )}
-                          title="planeadas completadas ese día"
                         >
-                          {b.planeadasHechas}/{b.planeadas} plan
-                        </span>
-                      )}
-                    </li>
-                  ))}
+                          <ChevronDown
+                            className={cn(
+                              "h-3.5 w-3.5 shrink-0 text-faint transition-transform",
+                              isOpen && "rotate-180",
+                            )}
+                          />
+                          <span className="w-24 shrink-0 text-xs capitalize text-mute">
+                            {format(new Date(b.day), "EEE d MMM", { locale: es })}
+                          </span>
+                          {/* Barra de imprevistos: largo relativo al peor día */}
+                          <span className="flex h-4 min-w-0 flex-1 items-center">
+                            <span
+                              className={cn(
+                                "h-2 rounded-full",
+                                b.surgidos > 0 ? "bg-[#d97706]" : "bg-line",
+                              )}
+                              style={{ width: `${Math.max(4, (b.surgidos / maxSurgidos) * 100)}%` }}
+                              title={`${b.surgidos} imprevistos`}
+                            />
+                          </span>
+                          <span className="shrink-0 text-xs text-mute" title="imprevistos surgidos">
+                            <b className={cn(b.surgidos > 0 ? "text-ink" : "text-faint")}>{b.surgidos}</b> imp
+                          </span>
+                          {b.mismoDia > 0 && (
+                            <span className="shrink-0 text-xs text-mute" title="resueltos el mismo día">
+                              {b.mismoDia} al día
+                            </span>
+                          )}
+                          {b.abiertos > 0 && (
+                            <span
+                              className="shrink-0 text-xs font-medium text-[#d97706]"
+                              title="quedaron abiertos"
+                            >
+                              {b.abiertos} abiertos
+                            </span>
+                          )}
+                          {b.promovidos > 0 && (
+                            <span className="shrink-0 text-xs text-accent" title="promovidos a tarea">
+                              {b.promovidos} prom
+                            </span>
+                          )}
+                          {b.planeadas > 0 && (
+                            <span
+                              className={cn(
+                                "shrink-0 text-xs",
+                                b.planeadasHechas < b.planeadas ? "text-faint" : "text-[var(--status-completado)]",
+                              )}
+                              title="planeadas completadas ese día"
+                            >
+                              {b.planeadasHechas}/{b.planeadas} plan
+                            </span>
+                          )}
+                        </button>
+                        {isOpen && (
+                          <div className="mt-1 rounded-el border-el border-line bg-panel px-3 py-2">
+                            {delDia.length === 0 && (
+                              <p className="py-1 text-xs text-faint">
+                                Sin imprevistos ese día.
+                                {b.planeadas > 0 &&
+                                  ` (planeadas ${b.planeadasHechas}/${b.planeadas} completadas)`}
+                              </p>
+                            )}
+                            <ul className="flex flex-col gap-1.5">
+                              {delDia.map((imp) => {
+                                const promotedTask = imp.promotedTaskId
+                                  ? taskById.get(imp.promotedTaskId)
+                                  : undefined;
+                                const doneAt =
+                                  imp.promotedAt !== null && promotedTask?.status === "completado"
+                                    ? (promotedTask.completedAt ?? null)
+                                    : imp.resolvedAt;
+                                const estado = imp.promotedAt !== null
+                                  ? doneAt !== null
+                                    ? { label: "promovido ✓", cls: "text-[var(--status-completado)]" }
+                                    : { label: "promovido (en curso)", cls: "text-accent" }
+                                  : doneAt !== null
+                                    ? isSameDay(new Date(doneAt), new Date(imp.day))
+                                      ? { label: "resuelto al día", cls: "text-[var(--status-completado)]" }
+                                      : { label: "resuelto tarde", cls: "text-faint" }
+                                    : { label: "abierto", cls: "text-[#d97706]" };
+                                return (
+                                  <li key={imp._id} className="border-b border-line py-1.5 last:border-b-0">
+                                    <p className={cn("break-words text-sm leading-snug text-ink", doneAt !== null || imp.open === false ? "" : "")}>
+                                      {imp.title}
+                                    </p>
+                                    <p className="mt-0.5 flex items-center gap-2 text-[10px]">
+                                      <span className={cn("font-semibold", estado.cls)}>{estado.label}</span>
+                                      <span className="text-faint">
+                                        {doneAt !== null
+                                          ? `· resuelto ${format(new Date(doneAt), "d MMM HH:mm", { locale: es })}`
+                                          : imp.promotedAt !== null
+                                            ? `· promovido ${format(new Date(imp.promotedAt), "d MMM HH:mm", { locale: es })}`
+                                            : "· sin resolver"}
+                                      </span>
+                                    </p>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
 
