@@ -504,9 +504,16 @@ let observer = false;
 let observerPoller = null;
 let historyIds = new Set();
 
+/**
+ * Ventana móvil del poll observador. El set de ids conocidos se REEMPLAZA por
+ * los ids de esta ventana en cada tick (nunca crece): lo que ya salió de la
+ * ventana no vuelve a aparecer, así que no hace falta recordarlo.
+ */
+const OBSERVER_WINDOW = 120;
+
 /** (Re)inicializa el set de mensajes conocidos sin emitir nada. */
 function seedHistoryIds() {
-  historyIds = new Set(readHistory(500).messages.map((m) => m.id));
+  historyIds = new Set(readHistory(OBSERVER_WINDOW).messages.map((m) => m.id));
 }
 
 /**
@@ -520,13 +527,12 @@ function syncObserver(runOpen) {
   emit("observer", { observer });
   if (observer) {
     seedHistoryIds();
-    emit("phase", { text: "Corrida del dispatcher activa — modo observador" });
     if (!observerPoller) {
       observerPoller = setInterval(() => {
         try {
-          const { messages } = readHistory(120);
+          const { messages } = readHistory(OBSERVER_WINDOW);
           const fresh = messages.filter((m) => !historyIds.has(m.id));
-          for (const m of messages) historyIds.add(m.id);
+          historyIds = new Set(messages.map((m) => m.id));
           if (fresh.length) {
             // El usuario está mirando: cuenta como actividad (no auto-apagar).
             lastActivity = Date.now();
@@ -554,7 +560,8 @@ function syncObserver(runOpen) {
 let execMode = false;
 
 async function startTracker() {
-  if (!taskId) return;  try {
+  if (!taskId) return;
+  try {
     const [{ ConvexClient }, { getToken }, { CONVEX_URL }] = await Promise.all([
       import("convex/browser"),
       import("./auth.mjs"),
@@ -1709,10 +1716,15 @@ async function handler(req, res) {
       if (p === "/mode") {
         // Modo ejecución (riendas): toggle explícito de Cris. La UI pide
         // confirmación antes de activarlo; acá solo se refleja el estado.
-        let exec = true;
+        // Es un modo peligroso: se exige un booleano estricto y ante cualquier
+        // duda (body roto, "false", ausente) NO se activa nada.
+        let exec = null;
         try {
-          exec = Boolean(JSON.parse(await readBody(req)).exec);
+          const body = JSON.parse(await readBody(req));
+          if (typeof body?.exec === "boolean") exec = body.exec;
         } catch {}
+        if (exec === null)
+          return json(res, 400, { error: "Falta 'exec' booleano.", exec: execMode });
         execMode = exec;
         emit("mode", { exec: execMode });
         log(`modo ${execMode ? "EJECUCIÓN (riendas)" : "consulta (solo lectura)"}`);

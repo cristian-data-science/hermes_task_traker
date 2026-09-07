@@ -51,14 +51,17 @@ function sessionAliveInFs(sessionId) {
  * Id interno del tracker → flags del CLI.
  * "claude/sonnet-5-high" → { model: "sonnet", effort: "high" }
  * "claude/opus-5-high"   → { model: "opus",   effort: "high" }
- * Cualquier otro valor pasa verbatim como --model (permite ids custom).
+ * Cualquier otro valor pasa verbatim como --model (permite ids custom); si
+ * trae el prefijo "claude/" se lo saca antes, porque el CLI no lo entiende.
  */
 export function claudeModelFlags(model) {
   if (!model) return {};
   if (!model.startsWith("claude/")) return { model };
   const rest = model.slice("claude/".length);
   const m = rest.match(/^(sonnet|opus|haiku)(?:-[\d.]+)?(?:-(low|medium|high|xhigh|max))?$/);
-  if (!m) return {};
+  // Id custom bajo el prefijo (p. ej. "claude/claude-opus-5"): va tal cual al
+  // CLI sin el prefijo interno del tracker.
+  if (!m) return rest ? { model: rest } : {};
   return { model: m[1], ...(m[2] ? { effort: m[2] } : {}) };
 }
 

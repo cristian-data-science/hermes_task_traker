@@ -177,10 +177,26 @@ export function assertConfig() {
   return problems;
 }
 
+/**
+ * ¿Hay un ejecutable `name` en el PATH? (fallback de `resolveClaudeCli`: si no
+ * está el binario del npm global, el spawn confía en la búsqueda por PATH.)
+ */
+function existsInPath(name) {
+  const exts = process.platform === "win32" ? ["", ".exe", ".cmd", ".bat"] : [""];
+  for (const dir of (process.env.PATH || "").split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) if (existsSync(path.join(dir, name + ext))) return true;
+  }
+  return false;
+}
+
 /** Claude es opcional: avisa (no tumba el puente) si no está instalado. */
 export function claudeWarnings() {
   const warns = [];
-  if (CLAUDE_CLI === "claude" || !existsSync(CLAUDE_CLI))
+  // Ruta concreta (env o npm global): el aviso solo aplica si NO existe.
+  // Nombre pelado ("claude"): se resuelve por PATH, así que se busca ahí.
+  const found = CLAUDE_CLI === "claude" ? existsInPath("claude") : existsSync(CLAUDE_CLI);
+  if (!found)
     warns.push(`CLI de Claude Code no encontrado (se usa "${CLAUDE_CLI}"): instalalo con npm i -g @anthropic-ai/claude-code o seteá CLAUDE_CLI`);
   return warns;
 }

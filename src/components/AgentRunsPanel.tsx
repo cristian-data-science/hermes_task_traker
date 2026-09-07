@@ -723,9 +723,10 @@ export function AgentRunsPanel({
                       <span title={new Date(run.startedAt).toLocaleString("es-CL")}>
                         {formatRelative(run.startedAt)}
                       </span>
-                      {run.model && agentModelLabel(run.model) && (
-                        <span>{agentModelLabel(run.model)}</span>
-                      )}
+                      {(() => {
+                        const label = run.model ? agentModelLabel(run.model) : "";
+                        return label ? <span>{label}</span> : null;
+                      })()}
                       {run.resumed && <span>· seguimiento</span>}
                       {run.sessionId && (
                         <span

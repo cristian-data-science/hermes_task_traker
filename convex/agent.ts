@@ -23,6 +23,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
+import { isDelegatedExecutor } from "./schema";
 import { logEvent, logStatusChange } from "./events";
 import { internal } from "./_generated/api";
 
@@ -87,11 +88,12 @@ export const FALLBACK_MODELS_CLAUDE = [
   { id: "claude/opus-5-high", label: "Opus 5 High" },
 ];
 
-/** Ejecutores que el puente despacha (todo lo que no sea cris/claw). */
-export const isDelegatedExecutor = (
-  executor: string | undefined,
-): executor is "zcode" | "claude" =>
-  executor === "zcode" || executor === "claude";
+/**
+ * Ejecutores que el puente despacha (todo lo que no sea cris/claw).
+ * Definición única en `schema.ts`; acá se reexporta para no duplicar la lista
+ * (varios módulos —tasks.ts— ya lo importan desde este archivo).
+ */
+export { isDelegatedExecutor };
 
 /** Carpetas por defecto del sembrado inicial (curadas; editables en la UI). */
 const DEFAULT_WORKSPACES: Array<{
@@ -337,6 +339,36 @@ export const agentQueue = query({
           : null,
       })),
     );
+  },
+});
+
+/**
+ * Redirecciones vivas: instrucciones de Cris para corridas ACTIVAS
+ * (despachada/trabajando/pregunta). El puente se suscribe reactivamente y las
+ * entrega EN VIVO: interrumpe el proceso y lo retoma con --resume + el nuevo
+ * rumbo (el camino viejo —entregarla en el próximo report.mjs— queda de
+ * respaldo para cuando no hay corrida que interrumpir).
+ */
+export const redirectQueue = query({
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    const tasks = await ctx.db.query("tasks").collect();
+    return tasks
+      .filter(
+        (t) =>
+          t.deletedAt === undefined &&
+          t.agentRedirect !== undefined &&
+          (t.agentState === "despachada" ||
+            t.agentState === "trabajando" ||
+            t.agentState === "pregunta"),
+      )
+      .map((t) => ({
+        taskId: t._id,
+        executor: t.executor,
+        redirect: t.agentRedirect!,
+        redirectAt: t.agentRedirectAt ?? 0,
+      }));
   },
 });
 
