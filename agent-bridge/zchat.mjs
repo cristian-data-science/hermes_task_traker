@@ -92,7 +92,7 @@ while (stdinAbierto) {
       [
         ZCODE_CLI,
         "-p",
-        `Consulta de Cris sobre el trabajo ya entregado (solo respondé; no ejecutes cambios): ${question}`,
+        `Consulta de Cris sobre el trabajo ya entregado (solo responde; no ejecutes cambios): ${question}`,
         "--resume",
         sessionId,
         "--cwd",

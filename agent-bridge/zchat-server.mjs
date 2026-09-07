@@ -133,7 +133,7 @@ const sessionTitle =
     : safeQuery((d) => d.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title, "") ?? "";
 
 // Prefijos que este chat agrega a cada pregunta (se limpian al mostrar).
-const ASK_PREFIX = "Consulta de Cris sobre el trabajo ya entregado (solo respondé; no ejecutes cambios): ";
+const ASK_PREFIX = "Consulta de Cris sobre el trabajo ya entregado (solo responde; no ejecutes cambios): ";
 const ASK_PREFIX_RE = /^Consulta de Cris sobre el trabajo ya entregado \([^)]*\):\s*/;
 // Modo ejecución (riendas): Cris conduce — sus instrucciones prevalecen sobre
 // el contrato de la tarea y el agente PUEDE ejecutar (bypass/yolo).
@@ -550,7 +550,7 @@ function syncObserver(runOpen) {
     }
     emit("notice", {
       level: "info",
-      text: "La corrida terminó — ya podés preguntarle al agente.",
+      text: "La corrida terminó — ya puedes preguntarle al agente.",
     });
   }
 }
@@ -1392,7 +1392,7 @@ function contextoTracker() {
     extra.push(`plan de ${tracker.run.plan.length} pasos, ${tracker.run.doneCount} reportados`);
   }
   if (tracker.task?.question && ag === "pregunta") extra.push(`pregunta abierta: "${tracker.task.question.slice(0, 160)}"`);
-  return `[CONTEXTO ACTUALIZADO DEL TRACKER HERMES — priorizá esto sobre tus recuerdos: la tarea está en estado '${st || "?"}'${
+  return `[CONTEXTO ACTUALIZADO DEL TRACKER HERMES — prioriza esto sobre tus recuerdos: la tarea está en estado '${st || "?"}'${
     ag ? `, delegación '${ag}'` : ""
   }${extra.length ? ` (${extra.join("; ")})` : ""} a las ${hora}.]\n`;
 }
@@ -1401,7 +1401,7 @@ function runTurn(t) {
   if (DEMO) return simulateTurn(t);
   // Prefijo según modo: consulta (read-only) o riendas (ejecución real).
   const prefix = execMode
-    ? `${EXEC_PREFIX}ejecutá lo que Cris pida y contale qué hiciste (con evidencia: archivos, comandos, números). Esto NO es una corrida del dispatcher: no reportes por report.mjs. `
+    ? `${EXEC_PREFIX}ejecuta lo que Cris pida y cuéntale qué hiciste (con evidencia: archivos, comandos, números). Esto NO es una corrida del dispatcher: no reportes por report.mjs. `
     : ASK_PREFIX;
   const prompt = `${prefix}${contextoTracker()}${t.question}`;
   let child;
@@ -1696,7 +1696,7 @@ async function handler(req, res) {
         if (observer) {
           return json(res, 409, {
             error:
-              "La corrida del agente está ACTIVA: el chat está en modo observador (ves el razonamiento en vivo). Cuando termine vas a poder preguntar.",
+              "La corrida del agente está ACTIVA: el chat está en modo observador (ves el razonamiento en vivo). Cuando termine podrás preguntar.",
             observer: true,
           });
         }

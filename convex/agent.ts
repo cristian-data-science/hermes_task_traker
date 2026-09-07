@@ -529,6 +529,7 @@ export const DEFAULT_CONTRACT = {
     "Toda acción deja rastro en la tarea (estado + evidencia).",
     "En reportes: backup antes de cambio riesgoso, CAMBIOS.md siempre al día, nada se borra (a backups/).",
     "En repos: jamás pushear master/main; el agente trabaja en rama agent/<slug>.",
+    "Escribe SIEMPRE en español neutro con \"tú\" (resúmenes, pasos, chat, PR): sin voseo argentino — nada de \"vos/tenés/hacé/respondé/revisá\".",
   ],
   typeRecipes: {
     reporte:

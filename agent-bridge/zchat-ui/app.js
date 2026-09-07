@@ -589,7 +589,7 @@
     const w = el("div", { class: "welcome" });
     w.append(
       el("h3", { text: "Esta sesión todavía no tiene conversación" }),
-      el("p", { text: "El agente tiene todo el contexto de lo que hizo en la tarea. Preguntale lo que quieras." }),
+      el("p", { text: "El agente tiene todo el contexto de lo que hizo en la tarea. Pregúntale lo que quieras." }),
     );
     const sugg = el("div", { class: "sugg" });
     for (const s of ["¿Qué cambiaste exactamente y dónde?", "¿Cómo verificaste el resultado?", "Resumime en 3 líneas qué quedó hecho", "¿Qué quedó pendiente o con riesgo?"]) {
@@ -874,7 +874,7 @@
         if (S.turns.has(st.turn.id) || st.turn.status === "running") hydrateTurn(st.turn);
       }
       if (S.current && S.current.status === "running" && (!st.turn || st.turn.id !== S.current.id)) {
-        S.current.fail("El servidor del chat perdió este turno (se reinició). Volvé a preguntar.");
+        S.current.fail("El servidor del chat perdió este turno (se reinició). Vuelve a preguntar.");
       }
       if (st.info && (!S.info || st.info.pid !== S.info.pid)) {
         // Servidor nuevo: los seq arrancan de cero → reconectar el SSE.
@@ -960,14 +960,14 @@
       );
       q.disabled = true;
       sendBtn.disabled = true;
-      q.placeholder = "Corrida activa — mirando el razonamiento en vivo (podés preguntar cuando termine)…";
+      q.placeholder = "Corrida activa — mirando el razonamiento en vivo (puedes preguntar cuando termine)…";
       stick(true);
     } else {
       q.disabled = false;
       sendBtn.disabled = !q.value.trim();
       q.placeholder = S.exec
-        ? "Pedí lo que quieras — se ejecuta de verdad (modo ejecución)…"
-        : "Preguntale al agente… (Enter envía · Shift+Enter salto de línea)";
+        ? "Pide lo que quieras — se ejecuta de verdad (modo ejecución)…"
+        : "Pregúntale al agente… (Enter envía · Shift+Enter salto de línea)";
       q.focus();
     }
   }
@@ -978,16 +978,16 @@
     modeBtn.classList.toggle("mode-exec", on);
     modeBtn.classList.toggle("mode-readonly", !on);
     modeBtn.title = on
-      ? "MODO EJECUCIÓN ACTIVO: lo que pidas se ejecuta de verdad (edita archivos, corre comandos). Tocá para volver a solo consulta."
-      : "Solo consulta: el agente responde pero no ejecuta cambios (respeta el contrato de la tarea). Tocá para tomar las riendas.";
+      ? "MODO EJECUCIÓN ACTIVO: lo que pidas se ejecuta de verdad (edita archivos, corre comandos). Toca para volver a solo consulta."
+      : "Solo consulta: el agente responde pero no ejecuta cambios (respeta el contrato de la tarea). Toca para tomar las riendas.";
     const hint = $("hint");
     hint.textContent = on
       ? "Tus instrucciones prevalecen sobre el contrato — el agente ejecuta de verdad"
       : "Responde con todo el contexto de su sesión";
     hint.classList.toggle("hint-exec", on);
     q.placeholder = on
-      ? "Pedí lo que quieras — se ejecuta de verdad (Enter envía)…"
-      : "Preguntale al agente… (Enter envía · Shift+Enter salto de línea)";
+      ? "Pide lo que quieras — se ejecuta de verdad (Enter envía)…"
+      : "Pregúntale al agente… (Enter envía · Shift+Enter salto de línea)";
     document.querySelector(".composer .box")?.classList.toggle("box-exec", on);
     renderIdentity();
     if (!silent) toast(on ? "⚡ Modo ejecución activo: lo que pidas se ejecuta." : "Modo solo consulta restaurado.");
@@ -1290,7 +1290,7 @@
         "⚡ Modo ejecución (tomar las riendas)\n\n" +
           "El contrato de la tarea queda subordinado a TUS instrucciones de este chat: " +
           "el agente va a editar archivos, correr comandos y hacer git si se lo pedís.\n\n" +
-          "Solo vos podés revertirlo (mismo botón). ¿Activar?",
+          "Solo tú puedes revertirlo (mismo botón). ¿Activar?",
       );
       if (!ok) return;
       try {
@@ -1339,7 +1339,7 @@
       ov.append(
         el("div", { class: "card" }, [
           el("h3", { text: "Chat cerrado" }),
-          el("p", { text: `El servidor local se apagó. Ya podés cerrar esta pestaña; la conversación queda guardada en la sesión de ${S.info?.agentLabel || "el agente"}.` }),
+          el("p", { text: `El servidor local se apagó. Ya puedes cerrar esta pestaña; la conversación queda guardada en la sesión de ${S.info?.agentLabel || "el agente"}.` }),
         ]),
       );
       document.body.append(ov);

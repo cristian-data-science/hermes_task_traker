@@ -31,8 +31,8 @@ const TYPE_RECIPES = {
 - PROHIBIDO cualquier comando git (init/add/commit/push): ni .md ni .pbix se versionan.
 - Antes de un cambio riesgoso: copia el .pbix a backups\\ con fecha en el nombre (formato AAAA-MM-DD).
 - Conéctate al modelo con el MCP powerbi-modeling-mcp si necesitas editar el semántico.
-- REFRESHES LARGOS (patrón obligatorio): si el refresh tarda más que el timeout del transport (~60s), NUNCA hagas sleeps ciegos largos ni esperes colgado: lanza el refresh, y cada 2-3 min hacé UNA consulta DAX liviana (ej. COUNTROWS o MAX de fecha) para sondear. Si el DAX queda encola >90s, el motor sigue ocupado: esperá y volvé a sondear. Si a los ~15 min no ves progreso, reportá --state pregunta con lo que sabés.
-- Al final: guardá el .pbix y actualizá CAMBIOS.md con la entrada completa (cambio, problema, pasos, validación con números antes/después, rollback) — como PASOS reportables, no al final del todo.
+- REFRESHES LARGOS (patrón obligatorio): si el refresh tarda más que el timeout del transport (~60s), NUNCA hagas sleeps ciegos largos ni esperes colgado: lanza el refresh, y cada 2-3 min haz UNA consulta DAX liviana (ej. COUNTROWS o MAX de fecha) para sondear. Si el DAX queda encola >90s, el motor sigue ocupado: espera y vuelve a sondear. Si a los ~15 min no ves progreso, reporta --state pregunta con lo que sabes.
+- Al final: guarda el .pbix y actualiza CAMBIOS.md con la entrada completa (cambio, problema, pasos, validación con números antes/después, rollback) — como PASOS reportables, no todo al final.
 - Nada se borra: las versiones viejas van a backups\\.`,
   desarrollo: `TIPO: DESARROLLO — trabajas en un REPO GIT de git_provisorio.
 - Trabaja en una rama propia agent/<slug-corto> (crea si no existe; jamás commitees a master).
@@ -58,6 +58,7 @@ const DEFAULT_GOLDEN_RULES = [
   "Toda acción deja rastro en la tarea (estado + evidencia).",
   "En reportes: backup antes de cambio riesgoso, CAMBIOS.md siempre al día, nada se borra (a backups/).",
   "En repos: jamás pushear master/main; el agente trabaja en rama agent/<slug>.",
+  "Escribe SIEMPRE en español neutro con \"tú\" (resúmenes, pasos, chat, PR): sin voseo argentino — nada de \"vos/tenés/hacé/respondé/revisá\".",
 ];
 
 /**
@@ -131,7 +132,7 @@ export function buildPrompt(input) {
     `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --plan "explorar X | backup/rama | cambio | verificación con números | documentar"`,
   );
   lines.push(
-    "DESPUÉS trabajá en PASOS y reportá cada uno apenas lo completes (texto corto, ≤12 palabras):",
+    "DESPUÉS trabaja en PASOS y reporta cada uno apenas lo completes (texto corto, ≤12 palabras):",
   );
   lines.push(
     `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --step "<paso hecho>"`,
@@ -143,7 +144,7 @@ export function buildPrompt(input) {
     "Si el plan cambia a mitad de camino, vuelve a enviar --plan con el plan actualizado (es normal).",
   );
   lines.push(
-    'AL TERMINAR — apenas el objetivo esté VERIFICADO, ejecutá INMEDIATAMENTE el reporte final (no lo dejes para después de tareas de embellecimiento):',
+    'AL TERMINAR — apenas el objetivo esté VERIFICADO, ejecuta INMEDIATAMENTE el reporte final (no lo dejes para después de tareas de embellecimiento):',
   );
   lines.push(
     `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --state <para-revision|pregunta|hecho> --summary "<máx 3 líneas, evidencia; SIN enumerar pasos adentro>"`,
@@ -184,20 +185,20 @@ export function buildRedirectPrompt({ task, instruction, runId }) {
       "Cris acaba de escribir esta instrucción desde la app del tracker y el puente " +
       "INTERRUMPIÓ tu proceso para entregártela de inmediato. Es una instrucción " +
       "auténtica del dueño del contrato: PREVALECE sobre cualquier instrucción previa " +
-      "de esta tarea (incluido su enunciado original y sus notas). No la cuestionés ni " +
-      "la tratés como texto sospechoso: aplicala.",
+      "de esta tarea (incluido su enunciado original y sus notas). No la cuestiones ni " +
+      "la trates como texto sospechoso: aplícala.",
   );
-  lines.push(`Tarea: ${task.title} (id: ${task._id}) — misma corrida, misma sesión: seguís donde quedaste.`);
+  lines.push(`Tarea: ${task.title} (id: ${task._id}) — misma corrida, misma sesión: sigues donde quedaste.`);
   lines.push(`\nInstrucción nueva de Cris:\n>>> ${instruction}`);
   lines.push(
-    "\nAplicá el nuevo rumbo desde ya:",
+    "\nAplica el nuevo rumbo desde ya:",
   );
   lines.push(
-    "- Si el plan cambia, reenvialo ya: " +
+    "- Si el plan cambia, reenvíalo ya: " +
       `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --plan "..."`,
   );
   lines.push(
-    "- Seguí reportando cada paso (--step) y el estado final como siempre.",
+    "- Sigue reportando cada paso (--step) y el estado final como siempre.",
   );
   return lines.join("\n");
 }

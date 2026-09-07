@@ -116,9 +116,9 @@ export function formatNotification(kind, payload) {
   if (payload.runsCount > 1) bits.push(`${payload.runsCount} corridas`);
   const body =
     payload.state === "pregunta"
-      ? `${payload.question ?? ""}\n\n👉 Respondé en la app para que continúe.`
+      ? `${payload.question ?? ""}\n\n👉 Responde en la app para que continúe.`
       : payload.state === "error"
-        ? `${(payload.error || payload.summary || "").split("\n")[0].slice(0, 300)}\n\n👉 Revisá la corrida en la app y respondé para reintentar.`
+        ? `${(payload.error || payload.summary || "").split("\n")[0].slice(0, 300)}\n\n👉 Revisa la corrida en la app y responde para reintentar.`
         : (payload.summary ?? "").split("\n").slice(0, 3).join("\n");
   return {
     subject: `[${tag}] ${label} · ${st}`,
