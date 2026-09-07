@@ -64,6 +64,7 @@ const DEFAULT_GOLDEN_RULES = [
  * Arma el prompt completo de despacho (o seguimiento, si hay followUp).
  * `contract` = contrato operativo guardado en Convex (getContract):
  * { goldenRules: string[], typeRecipes: {reporte, desarrollo, analisis, ops, otro} }.
+ * `agentLabel` = nombre del motor (ZCode / Claude Code): solo cosmético.
  */
 export function buildPrompt(input) {
   const {
@@ -73,6 +74,7 @@ export function buildPrompt(input) {
     followUp,
     resumed,
     contract,
+    agentLabel = "ZCODE",
   } = input;
 
   const goldenRules =
@@ -90,7 +92,7 @@ export function buildPrompt(input) {
   // "agente-" la distingue de las conversaciones propias de Cris (pedido
   // explícito): en el sidebar/palette del desktop se filtra de un vistazo.
   lines.push(`agente- ${task.title} [${task.taskType ?? "otro"}/${task.autonomy ?? "supervisado"}]`);
-  lines.push("=== HERMES TASK TRACKER — TAREA DELEGADA A ZCODE ===");
+  lines.push(`=== HERMES TASK TRACKER — TAREA DELEGADA A ${agentLabel.toUpperCase()} ===`);
   lines.push(`Tarea: ${task.title} (id: ${task._id})`);
   lines.push(`Área: ${task.area} · Tipo: ${task.taskType ?? "otro"} · Autonomía: ${task.autonomy ?? "supervisado"}`);
   if (task.model) lines.push(`Modelo elegido por Cris: ${task.model}`);

@@ -702,7 +702,13 @@ export const syncTask = internalAction({
      */
     const postCompletionNote = async (): Promise<void> => {
       if (!finalClickupId) return;
-      if (task.status !== "completado" || task.executor !== "zcode") return;
+      // Nota de cierre para tareas completadas por cualquier agente despachable.
+      if (task.status !== "completado") return;
+      if (
+        task.executor !== "zcode" &&
+        task.executor !== "claude"
+      )
+        return;
       if (!task.completedAt) return;
       if (
         task.clickupCommentedAt !== undefined &&

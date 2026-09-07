@@ -1,13 +1,41 @@
-# agent-bridge — el puente Hermes Task Tracker ⇄ ZCode
+# agent-bridge — el puente Hermes Task Tracker ⇄ agentes de código
 
 Daemon local que convierte la app web en centro de mando: las tareas con
-ejecutor **ZCode** se despachan a los pocos segundos a una sesión headless de
-ZCode en la carpeta correcta, con contexto empaquetado, modelo y autonomía
-elegidos, y el resultado vuelve a la tarea (estado + resumen + evidencia).
-Las notificaciones llegan por **WhatsApp vía Hermes** (`hermes send`, sin LLM).
+ejecutor **ZCode** o **Claude Code** se despachan a los pocos segundos a una
+sesión headless del agente en la carpeta correcta, con contexto empaquetado,
+modelo y autonomía elegidos, y el resultado vuelve a la tarea (estado +
+resumen + evidencia). Las notificaciones llegan por **WhatsApp vía Hermes**
+(`hermes send`, sin LLM).
 
 El contrato completo (ciclo de vida, autonomía, Git vs archivos) vive en
 [`../CONTRATO_AGENTE.md`](../CONTRATO_AGENTE.md).
+
+## Multi-agente (ZCode + Claude Code)
+
+El ejecutor de la tarea decide el motor; cada uno vive en un adaptador de
+`agents/` (`zcode.mjs`, `claude.mjs`) con la misma interfaz: spawn headless,
+sesión, actividad en vivo, historial y modelos.
+
+| | ZCode | Claude Code |
+|---|---|---|
+| Spawn | `node zcode.cjs -p … --cwd <carpeta> --mode yolo --json` | `claude.exe -p … --permission-mode bypassPermissions --output-format stream-json --verbose` (cwd = carpeta) |
+| Sesión / resume | `sess_…` en `~/.zcode/cli/db/db.sqlite` | uuid; `<uuid>.jsonl` en `~/.claude/projects/<cwd>/` |
+| Modelo | swap global del config (exclusivo) | **por flag**: `claude/sonnet-5-high` → `--model sonnet --effort high` (sin swap, paralelizan) |
+| Actividad en vivo | tailer del rollout JSONL | eventos stream-json del propio stdout |
+| Auth | la que ya tiene el CLI | cuenta Enterprise del CLI (nada que configurar) |
+
+Lane de concurrencia por agente: zcode mantiene la regla del swap (default
+paraleliza ×2, modelo distinto exclusivo); claude corre hasta
+`MAX_PARALLEL_CLAUDE=1` sin exclusividad — tareas zcode y claude conviven.
+
+Hooks: `register-hooks.mjs` registra los mismos Stop/SessionStart en
+`~/.zcode/cli/config.json` Y `~/.claude/settings.json` (no-op salvo corridas
+del puente, por `ZCODE_TASK_ID` en el env). Claude además persiste
+`session_id` en el stdin del hook — el protocolo ya lo leía.
+
+Chat: `hermesagent://zcode?…` y `hermesagent://claude?…` abren el mismo
+`zchat-server` con el adaptador del agente dueño de la sesión (historial del
+JSONL, streaming, tools, tracker — ver abajo).
 
 ## Arranque
 
@@ -48,15 +76,20 @@ Variables opcionales (env; defaults ya apuntan a las rutas de esta máquina):
 | `CONVEX_URL` | `VITE_CONVEX_URL` de `.env.local` | deployment Convex (mismo que la app) |
 | `HERMES_RSA_KEY` | `keys/rsa_key.p8` | clave privada del login del tracker |
 | `ZCODE_CLI` | `…/Programs/ZCode/resources/glm/zcode.cjs` | CLI headless |
+| `CLAUDE_CLI` | `…/npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe` | CLI de Claude Code (npm global) |
 | `HERMES_CLI` | `…/hermes/venv/Scripts/hermes.exe` | CLI de Hermes |
 | `HERMES_WHATSAPP_TARGET` | `whatsapp:Criss` | target de `hermes send` |
 | `AGENT_RUN_TIMEOUT_MS` | `3600000` | mata corridas colgadas |
+| `MAX_PARALLEL_CLAUDE` | `1` | corridas Claude simultáneas |
 
 ## Piezas
 
 | Archivo | Rol |
 |---|---|
-| `dispatcher.mjs` | daemon: suscripción reactiva a la cola (`agent:agentQueue`), spawn `zcode -p` con `--cwd` carpeta, **paralelismo seguro** (corridas al modelo default corren hasta `MAX_PARALLEL_DEFAULT=2` en paralelo; modelo distinto al default es exclusivo por el swap), **tailer en vivo** del transcript (actividad visible en la app cada 5 s), watchdog de atascos (`AGENT_STALL_MS`, default 10 min) y post-exit, heartbeat con estado (qué corre + cola), lockfile de instancia única |
+| `agents/index.mjs` | registro de adaptadores: el dispatcher/chat eligen por executor |
+| `agents/zcode.mjs` | adaptador ZCode: spawn `--mode yolo --json`, tailer del rollout, swap de modelo |
+| `agents/claude.mjs` | adaptador Claude: spawn stream-json, sesión desde `system/init`, historial JSONL, `--model`/`--effort` por corrida |
+| `dispatcher.mjs` | daemon: suscripción reactiva a la cola (`agent:agentQueue`), spawn vía adaptador, **lanes de paralelismo por agente** (zcode: corridas al modelo default hasta `MAX_PARALLEL_DEFAULT=2`, modelo distinto exclusivo por swap · claude: hasta `MAX_PARALLEL_CLAUDE`), **actividad en vivo** (tailer zcode / stream claude), watchdog de atascos (`AGENT_STALL_MS`, default 10 min) y post-exit, heartbeat con estado (qué corre + cola), lockfile de instancia única |
 | `daemon.mjs` | wrapper con auto-restart (backoff 2s→30s) |
 | `report.mjs` | canal del agente: **`--step "paso"`** (checklist en vivo) y `--state <estado> --summary "≤3 líneas"` (final inmediato tras verificar); dispara WhatsApp según el modo de la tarea |
 | `prompts.mjs` | prompt empaquetado: datos + reglas del contrato + receta por tipo (incluye patrón de polling para refreshes largos de Power BI) + protocolo de pasos |

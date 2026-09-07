@@ -105,6 +105,7 @@ const EXECUTOR_LABEL: Record<string, string> = {
   cris: "Cris",
   claw: "Claw",
   zcode: "ZCode",
+  claude: "Claude Code",
 };
 
 /** Estilo compartido de tooltips recharts con los tokens del tema. */
@@ -641,7 +642,9 @@ function computeMetrics(data: Dataset | undefined, taskById: Map<string, TaskRow
   // ---- Completadas / creadas del rango ------------------------------------
   const completadas = tasks.filter((t) => t.completedAt !== null && inRange(t.completedAt));
   const creadas = tasks.filter((t) => inRange(t.createdAt));
-  const byAgent = completadas.filter((t) => t.executor === "zcode");
+  const byAgent = completadas.filter(
+    (t) => t.executor === "zcode" || t.executor === "claude",
+  );
   const pctAgent = completadas.length > 0 ? Math.round((byAgent.length / completadas.length) * 100) : null;
 
   // ---- Cycle time (created → completed) -----------------------------------
@@ -757,8 +760,13 @@ function computeMetrics(data: Dataset | undefined, taskById: Map<string, TaskRow
   const sinTipo = completadas.filter((t) => !t.taskType).length;
   if (sinTipo > 0) byType.push({ label: "Sin tipo", valor: sinTipo, color: "var(--border-strong)" });
 
-  const EXECS = ["cris", "claw", "zcode"];
-  const execColors = ["var(--accent)", "var(--status-programado)", "var(--status-en-curso)"];
+  const EXECS = ["cris", "claw", "zcode", "claude"];
+  const execColors = [
+    "var(--accent)",
+    "var(--status-programado)",
+    "var(--status-en-curso)",
+    "#f97316",
+  ];
   const byExecutor = donut(
     EXECS.map((x, i) => ({
       label: EXECUTOR_LABEL[x],

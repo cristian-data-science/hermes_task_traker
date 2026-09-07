@@ -67,6 +67,18 @@ export const agentStates = [
 ] as const;
 export type AgentState = (typeof agentStates)[number];
 
+/**
+ * Ejecutores que el puente agent-bridge sabe despachar (tarea → corrida).
+ * `claw` queda como label sin dispatch.
+ */
+export const delegatedExecutors = ["zcode", "claude"] as const;
+export type DelegatedExecutor = (typeof delegatedExecutors)[number];
+
+export const isDelegatedExecutor = (
+  executor: string | undefined,
+): executor is DelegatedExecutor =>
+  executor === "zcode" || executor === "claude";
+
 /** Notificaciones WhatsApp vía Hermes (`hermes send`): off | final | periódica. */
 export const notifyModes = ["off", "final", "periodica"] as const;
 export type NotifyMode = (typeof notifyModes)[number];
@@ -97,11 +109,16 @@ export default defineSchema({
     ),
     notes: v.optional(v.string()),
     /**
-     * Ejecutor responsable: Cris (tú), Claw (agente Hermes) o ZCode
-     * (agente de código despachado por el puente agent-bridge).
+     * Ejecutor responsable: Cris (tú), Claw (agente Hermes), ZCode o Claude
+     * Code (agentes de código despachados por el puente agent-bridge).
      */
     executor: v.optional(
-      v.union(v.literal("cris"), v.literal("claw"), v.literal("zcode")),
+      v.union(
+        v.literal("cris"),
+        v.literal("claw"),
+        v.literal("zcode"),
+        v.literal("claude"),
+      ),
     ),
     /**
      * Responsable original en ClickUp (primer nombre del assignee). Se preserva
@@ -256,9 +273,9 @@ export default defineSchema({
       ),
     ),
     /**
-     * Sesión de ZCode de la última corrida (sess_...). Los seguimientos
-     * (respuesta a pregunta, re-despacho) retoman esta sesión con --resume
-     * para no perder contexto. Compartida con el desktop de ZCode.
+     * Sesión del agente de la última corrida (sess_... para ZCode, uuid para
+     * Claude Code). Los seguimientos (respuesta a pregunta, re-despacho)
+     * retoman esta sesión con --resume para no perder contexto.
      */
     agentSessionId: v.optional(v.string()),
     /** Pregunta abierta del agente a Cris (estado pregunta). */
@@ -287,7 +304,12 @@ export default defineSchema({
      */
     agentRedirect: v.optional(v.string()),
     agentRedirectAt: v.optional(v.number()),
-    /** Modelo ZCode elegido para la corrida (id, p.ej. builtin:zai-coding-plan/GLM-5.3). */
+    /**
+     * Modelo elegido para la corrida, según el agente:
+     * ZCode → id del catálogo (p.ej. builtin:zai-coding-plan/GLM-5.3);
+     * Claude → id interno (claude/sonnet-5-high, claude/opus-5-high).
+     * Vacío → default de la instalación/cuenta.
+     */
     model: v.optional(v.string()),
     /** Notificaciones WhatsApp vía Hermes para esta tarea. */
     notifyWhatsapp: v.optional(
@@ -565,15 +587,17 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_token", ["token"]),
 
-  // ===== Capa agente: corridas de ZCode =====
+  // ===== Capa agente: corridas (ZCode / Claude Code) =====
   /**
    * Una fila por corrida del agente sobre una tarea (incluye re-despachos y
-   * seguimientos con --resume). Es la evidencia cronológica: qué modelo, en
-   * qué carpeta, con qué autonomía, qué resumen dejó y cómo terminó.
+   * seguimientos con --resume). Es la evidencia cronológica: qué agente, qué
+   * modelo, en qué carpeta, con qué autonomía, qué resumen dejó y cómo terminó.
    */
   agentRuns: defineTable({
     taskId: v.id("tasks"),
-    /** Sesión ZCode de esta corrida (sess_...); vacía si el spawn falló. */
+    /** Qué agente ejecutó esta corrida. Vacío = zcode (corridas previas). */
+    agent: v.optional(v.union(v.literal("zcode"), v.literal("claude"))),
+    /** Sesión del agente de esta corrida (sess_.../uuid); vacía si el spawn falló. */
     sessionId: v.optional(v.string()),
     /** true si esta corrida retomó la sesión anterior (--resume). */
     resumed: v.optional(v.boolean()),

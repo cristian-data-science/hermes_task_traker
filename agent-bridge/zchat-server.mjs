@@ -1,30 +1,26 @@
 #!/usr/bin/env node
 /**
- * zchat-server — chat WEB local con la sesión de ZCode de una tarea (v3).
+ * zchat-server — chat WEB local con la sesión del agente de una tarea (v4).
  *
- *   node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState] [taskId] [theme]
+ *   node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState] [taskId] [theme] [agent]
  *   (un "-" en cualquier posicional equivale a vacío; así el .vbs puede pasar
- *   los argumentos siempre en el mismo orden)
+ *   los argumentos siempre en el mismo orden; agent: zcode|claude, default zcode)
  *
  * Servidor en 127.0.0.1 (puerto 43110+) que sirve la UI de agent-bridge/zchat-ui
  * y expone:
  *
- *  - /history   Conversación completa de la sesión (db.sqlite: message+part) en
- *               forma estructurada: texto, razonamiento y herramientas por
- *               mensaje. Oculta los mensajes sintéticos (recordatorios internos
- *               del CLI) y limpia los prefijos que este chat inyecta.
- *  - /ask       Lanza un turno: `zcode -p --resume <sess>` y devuelve el id del
- *               turno de inmediato. El progreso viaja por /events.
+ *  - /history   Conversación completa de la sesión en forma estructurada:
+ *               texto, razonamiento y herramientas por mensaje. ZCode: db.sqlite
+ *               (message+part). Claude: el <session>.jsonl de ~/.claude/projects
+ *               (correlacionando tool_use ↔ tool_result). Oculta los mensajes
+ *               sintéticos/ocultos y limpia los prefijos que este chat inyecta.
+ *  - /ask       Lanza un turno (`zcode|claude -p --resume <sess>`) y devuelve el
+ *               id del turno de inmediato. El progreso viaja por /events.
  *  - /events    SSE con TODO el turno en vivo. Fuente primaria: el CLI corre
  *               con `--output-format stream-json` y escribe en stdout un
  *               evento por token (razonamiento y texto), por herramienta
- *               (inicio, resultado) y al final (respuesta + tokens). Es la
- *               única forma de ver el razonamiento EN VIVO en headless:
- *               verificado que la DB de sesiones (la que lee el desktop) se
- *               persiste al cerrar cada paso, no token a token — de ahí que la
- *               versión anterior mostrara todo de golpe al final. Si el CLI no
- *               emite eventos, cae al poll de la DB (respaldo).
- *               Cada evento lleva `id:` → el navegador reconecta solo con
+ *               (inicio, resultado) y al final (respuesta + tokens). Cada
+ *               evento lleva `id:` → el navegador reconecta solo con
  *               Last-Event-ID y el servidor le re-envía lo que se perdió.
  *  - /state     Foto completa (turno en curso con sus bloques, tracker, seq):
  *               recargar la página a mitad de una respuesta no pierde nada.
@@ -33,10 +29,13 @@
  *               plan, el paso actual, la actividad y el estado EN VIVO. Ese
  *               estado fresco también se inyecta en cada pregunta.
  *
+ * Multi-agente: mismo protocolo de eventos para la UI; el adaptador traduce
+ * (zcode: model.streaming/tool.updated · claude: stream_event/assistant/user
+ * tool_result). Ambos chatean en modo read-only (zcode --mode plan ·
+ * claude --permission-mode plan).
+ *
  * Robustez: un turno a la vez con timeout (15 min) y /cancel; instancia única
  * por sesión (si ya hay un servidor para esta sesión, abre esa pestaña y sale);
- * los mensajes del turno se correlacionan por anchor.turnId, así una corrida
- * concurrente del desktop sobre la misma sesión NO se mezcla en la respuesta;
  * auto-apagado tras 30 min sin uso (nunca con un turno corriendo).
  *
  * Variables: ZCHAT_POLL_MS (200) · ZCHAT_TURN_TIMEOUT_MS (900000) ·
@@ -50,8 +49,9 @@ import path from "node:path";
 import os from "node:os";
 import { existsSync, appendFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { adapterFor } from "./agents/index.mjs";
 
-const VERSION = "3.0.0";
+const VERSION = "4.0.0";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(HERE, "zchat-ui");
 const LOG = path.join(HERE, "zchat-server.log");
@@ -77,12 +77,14 @@ const log = (m) => {
 
 // ---- Argumentos ----
 const argv = process.argv.slice(2).map((a) => (a === "-" ? "" : a));
-const [sessionId, workspacePath, planB64 = "", statusArg = "", stateArg = "", taskIdArg = "", themeArg = ""] = argv;
+const [sessionId, workspacePath, planB64 = "", statusArg = "", stateArg = "", taskIdArg = "", themeArg = "", agentArg = ""] = argv;
 if (!sessionId || !workspacePath) {
-  console.error("uso: node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState] [taskId] [theme]");
+  console.error("uso: node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState] [taskId] [theme] [agent]");
   process.exit(1);
 }
-if (!DEMO && !existsSync(ZCODE_CLI)) {
+const AGENT = agentArg === "claude" ? "claude" : "zcode";
+const adapter = adapterFor(AGENT);
+if (!DEMO && AGENT === "zcode" && !existsSync(ZCODE_CLI)) {
   console.error(`No encuentro el CLI de ZCode: ${ZCODE_CLI}`);
   process.exit(1);
 }
@@ -126,7 +128,9 @@ function safeQuery(fn, fallback) {
 }
 
 const sessionTitle =
-  safeQuery((d) => d.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title, "") ?? "";
+  AGENT === "claude"
+    ? "" // Claude no titula sesiones; la UI muestra la tarea del tracker.
+    : safeQuery((d) => d.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title, "") ?? "";
 
 // Prefijos que este chat agrega a cada pregunta (se limpian al mostrar).
 const ASK_PREFIX = "Consulta de Cris sobre el trabajo ya entregado (solo respondé; no ejecutes cambios): ";
@@ -216,6 +220,7 @@ function addTokens(acc, t) {
 
 /** Conversación completa estructurada (últimos `limit` mensajes visibles). */
 function readHistory(limit = 80) {
+  if (AGENT === "claude") return readClaudeHistory(limit);
   return safeQuery(
     (d) => {
       const msgs = d
@@ -271,6 +276,122 @@ function readHistory(limit = 80) {
     },
     { total: 0, messages: [] },
   );
+}
+
+/**
+ * Historial Claude: lee el <session>.jsonl de ~/.claude/projects/<cwd>/ y lo
+ * convierte a la MISMA forma que el historial de ZCode (role + blocks
+ * text/reasoning/tool + tokens). Los tool_use se correlacionan con el
+ * tool_result del mensaje user siguiente (así el bloque muestra su salida).
+ */
+function readClaudeHistory(limit = 80) {
+  const file = adapter.sessionFile?.(sessionId, workspacePath);
+  if (!file) return { total: 0, messages: [] };
+  let text;
+  try {
+    text = readFileSync(file, "utf8");
+  } catch {
+    return { total: 0, messages: [] };
+  }
+  const out = [];
+  const toolBlocks = new Map(); // tool_use_id → bloque (para el resultado)
+  for (const line of text.split("\n")) {
+    if (!line.trim().startsWith("{")) continue;
+    let j;
+    try {
+      j = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (j.isSidechain || j.isMeta || j.type === "summary") continue;
+    const at = Date.parse(j.timestamp || "") || 0;
+    if (j.type === "user") {
+      const content = j.message?.content;
+      const texts = [];
+      if (Array.isArray(content)) {
+        for (const c of content) {
+          if (c?.type === "tool_result" && c.tool_use_id) {
+            const blk = toolBlocks.get(c.tool_use_id);
+            if (blk) {
+              const res = typeof c.content === "string"
+                ? c.content
+                : Array.isArray(c.content)
+                  ? c.content.map((x) => x?.text ?? "").join("\n")
+                  : "";
+              if (c.is_error) {
+                blk.status = "error";
+                blk.error = String(res).slice(0, 800) || "la herramienta falló";
+              } else {
+                blk.status = "completed";
+                blk.output = String(res).slice(0, 1500);
+              }
+            }
+          } else if (c?.type === "text") {
+            texts.push(c.text ?? "");
+          }
+        }
+      } else if (typeof content === "string") {
+        texts.push(content);
+      }
+      const txt = stripWrappers(texts.join("\n"));
+      if (txt) {
+        out.push({
+          id: j.uuid || `u${out.length}`,
+          role: "user",
+          at,
+          blocks: [{ id: `${j.uuid ?? out.length}:0`, order: 0, at, kind: "text", text: txt }],
+        });
+      }
+      continue;
+    }
+    if (j.type !== "assistant") continue;
+    const msg = j.message || {};
+    const blocks = [];
+    let order = 0;
+    for (const c of msg.content ?? []) {
+      if (c?.type === "text" && (c.text ?? "").trim()) {
+        blocks.push({ id: `${j.uuid}:${order}`, order: order++, at, kind: "text", text: c.text });
+      } else if (c?.type === "thinking" && (c.thinking ?? "").trim()) {
+        blocks.push({ id: `${j.uuid}:${order}`, order: order++, at, kind: "reasoning", text: c.thinking });
+      } else if (c?.type === "tool_use") {
+        const blk = {
+          id: `tool:${c.id}`,
+          order: order++,
+          at,
+          kind: "tool",
+          tool: c.name || "herramienta",
+          label: toolLabel(c.name),
+          status: "running",
+          summary: summarizeTool(c.name, c.input),
+          title: "",
+          output: "",
+          error: "",
+        };
+        blocks.push(blk);
+        toolBlocks.set(c.id, blk);
+      }
+    }
+    const u = msg.usage;
+    const tokens = u
+      ? {
+          input: u.input_tokens || 0,
+          output: u.output_tokens || 0,
+          total: (u.input_tokens || 0) + (u.output_tokens || 0),
+          cacheRead: u.cache_read_input_tokens || 0,
+        }
+      : null;
+    if (blocks.length) {
+      out.push({ id: j.uuid, role: "assistant", at, model: msg.model, tokens: tokens ?? undefined, blocks });
+    }
+  }
+  // Tool sin resultado visible (corrida cortada): cerrarlo como completado.
+  for (const blk of toolBlocks.values()) {
+    if (blk.status === "running") {
+      blk.status = "completed";
+      blk.output = "";
+    }
+  }
+  return { total: out.length, messages: out.slice(-limit) };
 }
 
 // ---- Eventos (SSE con ring buffer para replay) ----
@@ -476,6 +597,7 @@ function newTurn(question) {
     // Fuente primaria: eventos stream-json del CLI (token a token). La DB
     // queda como respaldo si el CLI no emite eventos (versión vieja, etc.).
     streamSeen: false,
+    partialSeen: false, // claude: llegaron deltas parciales (stream_event)
     lineBuf: "",
     nextOrder: 1,
     openBlock: new Map(), // assistantMessageId → id del bloque text/reasoning abierto
@@ -748,12 +870,210 @@ function feedStream(t, chunk) {
       continue;
     }
     try {
-      handleStreamEvent(t, ev);
+      if (AGENT === "claude") handleClaudeStreamEvent(t, ev);
+      else handleStreamEvent(t, ev);
     } catch (e) {
       log(`stream event: ${e?.message ?? e}`);
     }
   }
   if (t.lineBuf.length > 4_000_000) t.lineBuf = t.lineBuf.slice(-1_000_000);
+}
+
+/**
+ * Un evento del stream-json de Claude Code (CLI 2.1.263). Traduce al mismo
+ * protocolo de partes que la UI ya consume para ZCode:
+ *   system/init {session_id, model} · stream_event (envuelve eventos de la
+ *   API: message_start, content_block_start/delta/stop con text, thinking o
+ *   tool_use; input_json_delta arma el input de la tool) · assistant
+ *   {message completo + usage} · user {tool_result de cada herramienta} ·
+ *   result {result, usage, is_error}.
+ */
+function handleClaudeStreamEvent(t, ev) {
+  const type = ev.type;
+
+  if (type === "system" && ev.subtype === "init") {
+    t.streamSeen = true;
+    if (ev.model) t.model = ev.model;
+    setPhase(t, `Sesión de Claude lista${ev.model ? ` (${ev.model})` : ""}…`);
+    return;
+  }
+
+  if (type === "stream_event") {
+    t.partialSeen = true;
+    t.streamSeen = true;
+    const e = ev.event || {};
+    if (e.type === "message_start") {
+      const m = e.message?.model;
+      if (m) t.model = m;
+      setPhase(t, "El modelo empezó a responder…");
+      return;
+    }
+    if (e.type === "content_block_start") {
+      const cb = e.content_block || {};
+      if (cb.type === "text" || cb.type === "thinking") {
+        const kind = cb.type === "thinking" ? "reasoning" : "text";
+        const id = `cb${e.index}`;
+        addStreamPart(t, id, { kind, text: cb.text || cb.thinking || "", start: Date.now() });
+        t.openBlock.set("m", id);
+        setPhase(t, kind === "reasoning" ? "Razonando…" : "Escribiendo la respuesta…");
+      } else if (cb.type === "tool_use") {
+        const id = `tool:${cb.id}`;
+        if (!t.parts.get(id)) {
+          addStreamPart(t, id, {
+            kind: "tool",
+            tool: cb.name || "herramienta",
+            label: toolLabel(cb.name),
+            status: "pending",
+            summary: "",
+            title: "",
+            output: "",
+            error: "",
+          });
+        }
+        t.toolInput.set(`idx:${e.index}`, cb.id);
+        t.toolInput.set(`json:${cb.id}`, "");
+        setPhase(t, `Preparando ${toolLabel(cb.name)}…`);
+      }
+      return;
+    }
+    if (e.type === "content_block_delta") {
+      const d = e.delta || {};
+      if (d.type === "text_delta" || d.type === "thinking_delta") {
+        const kind = d.type === "thinking_delta" ? "reasoning" : "text";
+        let id = t.openBlock.get("m");
+        let part = id ? t.parts.get(id) : null;
+        if (!part || part.kind !== kind) {
+          id = `cb${e.index}`;
+          part = t.parts.get(id);
+          if (!part) part = addStreamPart(t, id, { kind, text: "", start: Date.now() });
+          t.openBlock.set("m", id);
+        }
+        if (d.text) {
+          part.text += d.text;
+          emit("delta", { turnId: t.id, id, delta: d.text, end: null });
+        }
+      } else if (d.type === "input_json_delta") {
+        const callId = t.toolInput.get(`idx:${e.index}`);
+        if (callId) t.toolInput.set(`json:${callId}`, (t.toolInput.get(`json:${callId}`) || "") + (d.partial_json || ""));
+      }
+      return;
+    }
+    if (e.type === "content_block_stop") {
+      const callId = t.toolInput.get(`idx:${e.index}`);
+      if (callId) {
+        const raw = t.toolInput.get(`json:${callId}`);
+        const part = t.parts.get(`tool:${callId}`);
+        if (raw && part) {
+          try {
+            part.summary = summarizeTool(part.tool, JSON.parse(raw));
+          } catch {
+            part.summary = raw.slice(0, 140);
+          }
+          part.status = "running";
+          part.start = part.start || Date.now();
+          emit("part", { turnId: t.id, part: publicPart(part) });
+          setPhase(t, `${part.label}: ${part.summary || "ejecutando"}…`);
+        }
+        return;
+      }
+      const openId = t.openBlock.get("m");
+      const op = openId ? t.parts.get(openId) : null;
+      if (op && !op.end) {
+        op.end = Date.now();
+        emit("part_end", { turnId: t.id, id: openId, end: op.end });
+      }
+    }
+    return;
+  }
+
+  if (type === "assistant") {
+    t.streamSeen = true;
+    const msg = ev.message || {};
+    if (msg.model) t.model = msg.model;
+    if (msg.usage) {
+      const u = msg.usage;
+      const tk = {
+        input: u.input_tokens || 0,
+        output: u.output_tokens || 0,
+        total: (u.input_tokens || 0) + (u.output_tokens || 0),
+        cacheRead: u.cache_read_input_tokens || 0,
+      };
+      t.tokens = t.tokens ? addTokens(t.tokens, tk) : tk;
+    }
+    // Sin deltas parciales (CLI sin --include-partial-messages): las partes
+    // completas del mensaje llegan acá — alta con granularidad por bloque.
+    if (!t.partialSeen) {
+      let order = 0;
+      for (const c of msg.content ?? []) {
+        if (c?.type === "text" && (c.text ?? "").trim()) {
+          addStreamPart(t, `${ev.uuid || "a"}:t${order}`, { kind: "text", text: c.text });
+        } else if (c?.type === "thinking" && (c.thinking ?? "").trim()) {
+          addStreamPart(t, `${ev.uuid || "a"}:r${order}`, { kind: "reasoning", text: c.thinking });
+        } else if (c?.type === "tool_use") {
+          addStreamPart(t, `tool:${c.id}`, {
+            kind: "tool",
+            tool: c.name || "herramienta",
+            label: toolLabel(c.name),
+            status: "running",
+            summary: summarizeTool(c.name, c.input),
+            title: "",
+            output: "",
+            error: "",
+          });
+        }
+        order++;
+      }
+    }
+    return;
+  }
+
+  if (type === "user") {
+    // tool_result → cierra el bloque de la herramienta con su salida.
+    const content = ev.message?.content;
+    if (!Array.isArray(content)) return;
+    for (const c of content) {
+      if (c?.type !== "tool_result" || !c.tool_use_id) continue;
+      const part = t.parts.get(`tool:${c.tool_use_id}`);
+      if (!part) continue;
+      const res = typeof c.content === "string"
+        ? c.content
+        : Array.isArray(c.content)
+          ? c.content.map((x) => x?.text ?? "").join("\n")
+          : "";
+      part.end = Date.now();
+      if (c.is_error) {
+        part.status = "error";
+        part.error = String(res).slice(0, 800) || "la herramienta falló";
+      } else {
+        part.status = "completed";
+        part.output = String(res).slice(0, 1500);
+      }
+      emit("part", { turnId: t.id, part: publicPart(part) });
+      setPhase(t, `${part.label} ${part.status === "error" ? "falló" : "lista"} · el modelo continúa…`);
+    }
+    return;
+  }
+
+  if (type === "result") {
+    t.streamSeen = true;
+    if (typeof ev.result === "string") t.streamResponse = ev.result;
+    if (ev.usage) {
+      const u = ev.usage;
+      t.tokens = t.tokens || {
+        input: 0,
+        output: 0,
+        total: 0,
+        cacheRead: 0,
+      };
+      t.tokens.input += u.input_tokens || 0;
+      t.tokens.output += u.output_tokens || 0;
+      t.tokens.total += (u.input_tokens || 0) + (u.output_tokens || 0);
+      t.tokens.cacheRead += u.cache_read_input_tokens || 0;
+    }
+    if (ev.is_error && !t.streamError) {
+      t.streamError = typeof ev.result === "string" && ev.result ? ev.result : "el turno falló";
+    }
+  }
 }
 
 /**
@@ -765,6 +1085,10 @@ function feedStream(t, chunk) {
  */
 function pollTurn(t) {
   if (t.streamSeen) return;
+  // Claude: el stream-json SIEMPRE emite (assistant/result completos aunque no
+  // haya parciales) — el respaldo por DB no aplica; el texto final sale del
+  // evento result del stdout.
+  if (AGENT === "claude") return;
   safeQuery((d) => {
     const since = t.startedAt - 5000;
     const msgs = d
@@ -929,11 +1253,15 @@ function finishTurn(t, { code = null, error = null } = {}) {
   const fromDb = t.streamResponse?.trim() || streamed;
   let fromStdout = null;
   if (!t.streamSeen) {
-    try {
-      const j = JSON.parse(t.stdout);
-      if (typeof j.response === "string") fromStdout = j.response;
-      if (j.error && !error) error = typeof j.error === "string" ? j.error : JSON.stringify(j.error).slice(0, 400);
-    } catch {}
+    if (AGENT === "claude") {
+      fromStdout = adapter.extractResponse(t.stdout);
+    } else {
+      try {
+        const j = JSON.parse(t.stdout);
+        if (typeof j.response === "string") fromStdout = j.response;
+        if (j.error && !error) error = typeof j.error === "string" ? j.error : JSON.stringify(j.error).slice(0, 400);
+      } catch {}
+    }
   }
   if (t.streamError && !error && !fromDb) error = t.streamError;
   const durationMs = t.endedAt - t.startedAt;
@@ -960,7 +1288,7 @@ function finishTurn(t, { code = null, error = null } = {}) {
   } else if (error || (code !== 0 && !fromDb && !fromStdout)) {
     t.status = "error";
     const tail = t.stderrTail.trim().slice(-300);
-    t.error = error || `ZCode terminó con código ${code}${tail ? ` — ${tail}` : ""}`;
+    t.error = error || `${adapter.label} terminó con código ${code}${tail ? ` — ${tail}` : ""}`;
     emit("turn_error", { turnId: t.id, error: t.error, partialText: fromDb, endedAt: t.endedAt, durationMs });
     log(`turno ${t.id} error: ${t.error}`);
   } else {
@@ -1002,32 +1330,59 @@ function contextoTracker() {
 function runTurn(t) {
   if (DEMO) return simulateTurn(t);
   const prompt = `${ASK_PREFIX}${contextoTracker()}${t.question}`;
-  // --output-format stream-json: el CLI escribe en stdout un evento NDJSON por
-  // token (model.streaming), por herramienta (tool.updated) y al final
-  // (turn.completed + result). Es la única forma de ver el razonamiento EN
-  // VIVO en headless: la DB solo se persiste al cerrar cada paso.
-  const args = [
-    ZCODE_CLI,
-    "-p",
-    prompt,
-    "--resume",
-    sessionId,
-    "--cwd",
-    workspacePath,
-    "--mode",
-    "plan",
-    "--output-format",
-    "stream-json",
-  ];
   let child;
-  try {
-    child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-  } catch (e) {
-    finishTurn(t, { error: `no pude lanzar ZCode: ${e?.message ?? e}` });
-    return;
+  if (AGENT === "claude") {
+    // Claude: read-only igual que zcode --mode plan; cwd = carpeta de trabajo
+    // (no existe --cwd). stream-json + parciales = razonamiento token a token.
+    const args = [
+      "-p",
+      prompt,
+      "--resume",
+      sessionId,
+      "--permission-mode",
+      "plan",
+      "--output-format",
+      "stream-json",
+      "--verbose",
+      "--include-partial-messages",
+    ];
+    try {
+      child = spawn(adapter.exe, args, {
+        cwd: workspacePath,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch (e) {
+      finishTurn(t, { error: `no pude lanzar Claude Code: ${e?.message ?? e}` });
+      return;
+    }
+  } else {
+    // --output-format stream-json: el CLI escribe en stdout un evento NDJSON por
+    // token (model.streaming), por herramienta (tool.updated) y al final
+    // (turn.completed + result). Es la única forma de ver el razonamiento EN
+    // VIVO en headless: la DB solo se persiste al cerrar cada paso.
+    const args = [
+      ZCODE_CLI,
+      "-p",
+      prompt,
+      "--resume",
+      sessionId,
+      "--cwd",
+      workspacePath,
+      "--mode",
+      "plan",
+      "--output-format",
+      "stream-json",
+    ];
+    try {
+      child = spawn(process.execPath, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    } catch (e) {
+      finishTurn(t, { error: `no pude lanzar ZCode: ${e?.message ?? e}` });
+      return;
+    }
   }
   t.child = child;
-  setPhase(t, "Lanzando ZCode y retomando la sesión…");
+  setPhase(t, `Lanzando ${adapter.label} y retomando la sesión…`);
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (d) => {
     // Copia cruda acotada (diagnóstico / fallback --json) + parser NDJSON.
@@ -1048,7 +1403,7 @@ function runTurn(t) {
       child.kill();
     } catch {}
   }, TURN_TIMEOUT_MS);
-  child.on("error", (e) => finishTurn(t, { error: `no pude lanzar ZCode: ${e?.message ?? e}` }));
+  child.on("error", (e) => finishTurn(t, { error: `no pude lanzar ${adapter.label}: ${e?.message ?? e}` }));
   child.on("close", (code) => {
     // Pequeña espera: el CLI cierra el proceso justo después de persistir.
     setTimeout(() => finishTurn(t, { code }), 350);
@@ -1200,6 +1555,8 @@ function info(port) {
     version: VERSION,
     pid: process.pid,
     port,
+    agent: AGENT,
+    agentLabel: adapter.label,
     session: sessionId,
     title: sessionTitle,
     folder: workspacePath,

@@ -43,6 +43,7 @@ import {
   type Area,
   type Status,
   type Executor,
+  isDelegatedExecutor,
 } from "../lib/constants";
 import { cn } from "../lib/utils";
 import { SUPER_URGENT_ENABLED, AGENT_UI_ENABLED } from "../lib/utils";
@@ -223,7 +224,7 @@ export function TaskModal({
       return;
     }
     // Capa agente: los tipos con mundo de trabajo definido exigen carpeta.
-    if (executor === "zcode" && AGENT_UI_ENABLED) {
+    if (isDelegatedExecutor(executor) && AGENT_UI_ENABLED) {
       const t = agentCfg.taskType;
       const needsFolder = t ? TASK_TYPE_META[t]?.vcs : null;
       if (needsFolder && !agentCfg.workspaceId) {
@@ -286,9 +287,9 @@ export function TaskModal({
             ? // Si salió de Patagonia, limpiar el destino ClickUp.
               { clickupParentId: "", clickupListId: "" }
             : {}),
-        // Capa agente: solo cuando el ejecutor es ZCode (la validación
-        // tipo↔vcs la repite el backend).
-        ...(executor === "zcode"
+        // Capa agente: solo cuando el ejecutor es despachable por el puente
+        // (la validación tipo↔vcs la repite el backend).
+        ...(isDelegatedExecutor(executor)
           ? {
               taskType: agentCfg.taskType || undefined,
               workspaceId: (agentCfg.workspaceId ||
@@ -609,7 +610,15 @@ export function TaskModal({
                     })()}
                     <select
                       value={executor}
-                      onChange={(e) => setExecutor(e.target.value as Executor)}
+                      onChange={(e) => {
+                        const next = e.target.value as Executor;
+                        if (next !== executor) {
+                          setExecutor(next);
+                          // Catálogos por agente: al cambiar de agente (o a
+                          // cris/claw) el modelo elegido ya no aplica.
+                          setAgentCfg((prev) => ({ ...prev, model: "" }));
+                        }
+                      }}
                       className="input pl-9"
                     >
                       {EXECUTORS.map((ex) => (
@@ -622,9 +631,10 @@ export function TaskModal({
                 </div>
               </div>
 
-              {/* Delegación a ZCode: tipo → carpeta → autonomía → modelo →
-                  WhatsApp. Solo con ejecutor ZCode y en la web. */}
-              {executor === "zcode" && AGENT_UI_ENABLED && (
+              {/* Delegación al agente (ZCode/Claude): tipo → carpeta →
+                  autonomía → modelo → WhatsApp. Solo con ejecutor despachable
+                  y en la web. */}
+              {isDelegatedExecutor(executor) && AGENT_UI_ENABLED && (
                 <>
                   {isEdit && task?.agentState && (
                     <button
@@ -651,6 +661,7 @@ export function TaskModal({
                     value={agentCfg}
                     onChange={setAgentCfg}
                     area={area}
+                    executor={executor}
                   />
                 </>
               )}
@@ -1016,7 +1027,7 @@ export function TaskModal({
       )}
 
       {/* Panel de corridas del agente: por encima del modal (misma capa z). */}
-      {isEdit && task && task.executor === "zcode" && AGENT_UI_ENABLED && (
+      {isEdit && task && isDelegatedExecutor(task.executor) && AGENT_UI_ENABLED && (
         <AgentRunsPanel task={task} open={runsOpen} onClose={() => setRunsOpen(false)} />
       )}
     </AnimatePresence>

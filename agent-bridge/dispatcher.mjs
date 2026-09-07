@@ -1,62 +1,50 @@
 #!/usr/bin/env node
 /**
- * agent-bridge — puente local: la app web despacha, ZCode ejecuta.
+ * agent-bridge — puente local multi-agente: la app web despacha, el agente
+ * (ZCode o Claude Code) ejecuta.
  *
  * Daemon suscrito REACTIVAMENTE a la cola de Convex (WebSocket). Cuando Cris
- * crea una tarea con ejecutor ZCode:
+ * crea una tarea con ejecutor despachable (zcode/claude):
  *   1. Valida la carpeta destino.
  *   2. Reclama la tarea (claimTask → abre corrida) y arma el prompt empaquetado.
- *   3. Lanza `zcode -p` headless con --cwd carpeta y --mode por autonomía.
- *   4. TAILER EN VIVO: lee el transcript de la sesión (rollout JSONL) cada 5s
- *      y reporta la última acción a la app → Cris ve qué hace en tiempo real.
- *   5. Watchdog: corrida sin actividad >STALL_MS → "posible atasco" (+WhatsApp
- *      si periodica); proceso terminado sin reporte → reporta el despachador.
+ *   3. Lanza el CLI headless del agente (agents/<agente>.mjs decide cómo).
+ *   4. Actividad EN VIVO → la app muestra qué hace en tiempo real (tailer del
+ *      rollout en zcode; eventos stream-json en claude).
+ *   5. Watchdog: corrida sin actividad >STALL_MS → "posible atasco"; proceso
+ *      terminado sin reporte → reporta el despachador.
  *   6. Al terminar: vincula la sesión (resume para seguimientos) y libera slot.
  *
- * Concurrencia: corridas con modelo EFECTIVO = default del config corren hasta
- * MAX_PARALLEL_DEFAULT en paralelo (no necesitan swap de config); modelo
- * distinto al default es EXCLUSIVO (necesita swap global).
+ * Concurrencia por AGENTE (lanes independientes):
+ *  - zcode: modelo default del config → hasta MAX_PARALLEL_DEFAULT en paralelo;
+ *    modelo distinto exige swap global → exclusivo entre corridas zcode.
+ *  - claude: modelo por flag → hasta MAX_PARALLEL_CLAUDE, sin swap.
+ *  Corridas zcode y claude conviven sin pisarse.
  * Instancia única por lockfile (.bridge.lock).
  *
  * Arranque: npm run agent-bridge  ·  con auto-restart: npm run agent-bridge:daemon
  */
 import { spawn } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
-import {
-  existsSync,
-  openSync,
-  readSync,
-  closeSync,
-  readdirSync,
-  readFileSync,
-  statSync,
-  writeFileSync,
-  unlinkSync,
-} from "node:fs";
-import os from "node:os";
+import { existsSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ConvexClient } from "convex/browser";
 import {
   CONVEX_URL,
-  ZCODE_CLI,
-  AUTONOMY_MODE,
-  MAX_CONCURRENT,
+  MAX_PARALLEL_CLAUDE,
   NUDGE_MS,
   assertConfig,
+  claudeWarnings,
 } from "./config.mjs";
 import { getToken, q, m } from "./auth.mjs";
-import { readModelCatalog, swapModel, restoreOrphanSwap } from "./models.mjs";
+import { restoreOrphanSwap } from "./models.mjs";
 import { buildPrompt } from "./prompts.mjs";
-import { notifyAgent } from "./notify.mjs";
+import { adapterFor } from "./agents/index.mjs";
 
 const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000);
 const MAX_PARALLEL_DEFAULT = Number(process.env.MAX_PARALLEL_DEFAULT || 2);
 const STALL_MS = Number(process.env.AGENT_STALL_MS || 10 * 60 * 1000);
-const TAIL_MS = 5000;
 const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const LOCK_FILE = path.join(BRIDGE_DIR, ".bridge.lock");
-const ROLLOUT_DIR = path.join(os.homedir(), ".zcode", "cli", "rollout");
 
 /** Corridas activas en este proceso: taskId → info de la corrida. */
 const activeRuns = new Map();
@@ -66,30 +54,6 @@ let defaultModel = "";
 let queueDepth = 0;
 /** Token de sesión para el env de las corridas (se renueva a diario). */
 let _tokenForChild = "";
-
-/**
- * ¿La sesión de esta tarea existe en la DB de ZCode? Las sesiones viven
- * para siempre en db.sqlite (la app desktop las tiene abiertas en modo
- * compartido: abrir read-only no molesta). Si la DB no se puede leer por
- * cualquier motivo, devolvemos true — intentar resume es siempre el mejor
- * esfuerzo; el peor caso es un error rápido del CLI.
- */
-function sessionAliveInDb(sessionId) {
-  try {
-    const db = new DatabaseSync(
-      path.join(os.homedir(), ".zcode", "cli", "db", "db.sqlite"),
-      { readOnly: true },
-    );
-    const row = db
-      .prepare("SELECT 1 FROM session WHERE id = ?")
-      .get(sessionId);
-    db.close();
-    return !!row;
-  } catch (e) {
-    log("  [resume] no pude leer la DB de sesiones:", e?.message ?? e);
-    return true;
-  }
-}
 
 function log(...a) {  console.log(`[${new Date().toLocaleTimeString()}]`, ...a);
 }
@@ -123,23 +87,23 @@ function releaseLock() {
   }
 }
 
-/** Modelo efectivo de una tarea: el elegido, o el default del config. */
-function effectiveModel(task) {
-  return task.model || defaultModel || "";
-}
-
 /**
- * ¿Puede arrancar otra corrida ahora? Regla del swap global: si hay corridas
- * activas, todas deben ser del default y la nueva también (hasta el tope);
- * un modelo distinto exige exclusividad total.
+ * ¿Puede arrancar otra corrida de este agente ahora? Por lane:
+ *  - claude: tope MAX_PARALLEL_CLAUDE (sin swap, sin exclusividad).
+ *  - zcode: la regla del swap global — si hay corridas zcode activas, todas
+ *    deben ser del default y la nueva también (hasta el tope); un modelo
+ *    distinto exige exclusividad total DENTRO de la lane zcode.
  */
-function canDispatch(effective) {
-  if (activeRuns.size === 0) return true;
+function canDispatch(task, adapter) {
+  const lane = [...activeRuns.values()].filter((r) => r.agent === adapter.id);
+  if (adapter.id === "claude") {
+    return lane.length < MAX_PARALLEL_CLAUDE;
+  }
+  const effective = adapter.effectiveModel(task, defaultModel);
+  if (lane.length === 0) return true;
   if (effective !== defaultModel) return false;
-  const allDefault = [...activeRuns.values()].every(
-    (r) => r.effectiveModel === defaultModel,
-  );
-  return allDefault && activeRuns.size < MAX_PARALLEL_DEFAULT;
+  const allDefault = lane.every((r) => r.effectiveModel === defaultModel);
+  return allDefault && lane.length < MAX_PARALLEL_DEFAULT;
 }
 
 /**
@@ -170,131 +134,17 @@ async function recoverStuck() {
   }
 }
 
-/** Sincroniza el catálogo de modelos de la instalación → picker de la app. */
+/** Sincroniza el catálogo de modelos de cada agente → picker de la app. */
 async function syncModels() {
-  const { models, default: def } = readModelCatalog();
-  if (!models.length) return;
-  await m("agent:syncModels", { models, default: def });
-  log(`modelos sincronizados: ${models.length} (default ${def})`);
-}
-
-// ===== TAILER EN VIVO: transcript de la sesión → actividad en la app =====
-
-/**
- * Encuentra el rollout JSONL de la corrida: archivo nuevo (mtime posterior al
- * spawn) cuyo contenido mencione el taskId. OJO: el taskId vive en el prompt
- * del usuario, que va DESPUÉS del system prompt (~40KB+) — hay que mirar
- * hondo (1MB), con 8KB nunca matcheaba y el tailer quedaba mudo.
- */
-function findRolloutFile(sinceMs, taskId) {
-  try {
-    const cands = readdirSync(ROLLOUT_DIR)
-      .filter((f) => f.startsWith("model-io-") && f.endsWith(".jsonl"))
-      .map((f) => path.join(ROLLOUT_DIR, f))
-      .filter((f) => statSync(f).mtimeMs >= sinceMs - 10_000)
-      .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
-    for (const f of cands) {
-      try {
-        const size = statSync(f).size;
-        const fd = openSync(f, "r");
-        const buf = Buffer.alloc(Math.min(size, 1_000_000));
-        readSync(fd, buf, 0, buf.length, 0);
-        closeSync(fd);
-        if (buf.toString("utf8").includes(taskId)) return f;
-      } catch {
-        continue;
-      }
-    }
-  } catch {
-    // rollout dir inexistente en este arranque
-  }
-  return null;
-}
-
-/** Extrae una descripción corta de la última acción dentro de una línea JSONL. */
-function describeLine(line) {
-  // Última tool_use de la línea: nombre + primer campo del input abreviado.
-  const tools = [
-    ...line.matchAll(
-      /"name":"([A-Za-z_]+)","input":\{"([a-z_]+)":"((?:[^"\\]|\\.){0,70})/g,
-    ),
-  ];
-  if (tools.length) {
-    const [, name, key, val] = tools[tools.length - 1];
-    const v = val.replace(/\\n/g, " ").replace(/\\"/g, '"').trim();
-    return `${name}: ${key}=${v}`.slice(0, 160);
-  }
-  // Si no, último texto del asistente.
-  const texts = [...line.matchAll(/"type":"text","text":"((?:[^"\\]|\\.){10,240})"/g)];
-  if (texts.length) {
-    const t = texts[texts.length - 1][1].replace(/\\n/g, " ").trim();
-    return t.slice(0, 160);
-  }
-  return null;
-}
-
-/** Observa el rollout de una corrida y reporta actividad nueva cada TAIL_MS. */
-function startTailer(run) {
-  let fileSize = 0;
-  let lastText = "";
-  let file = null;
-  const timer = setInterval(() => {
+  for (const adapter of new Set([adapterFor("zcode"), adapterFor("claude")])) {
     try {
-      if (!file) {
-        file = findRolloutFile(run.spawnedAt, run.taskId);
-        if (!file) return;
-      }
-      const size = statSync(file).size;
-      if (size <= fileSize) return;
-      // Leemos solo el agregado (con margen para cortar a línea completa).
-      const fd = openSyncSafe(file);
-      if (!fd) return;
-      const start = fileSize > 0 ? Math.max(0, fileSize - 1) : Math.max(0, size - 200_000);
-      const buf = Buffer.alloc(size - start);
-      readFd(fd, buf, start);
-      closeSyncSafe(fd);
-      fileSize = size;
-      const text = buf.toString("utf8");
-      const lines = text.split("\n").filter((l) => l.trim().startsWith("{"));
-      for (const line of lines) {
-        const desc = describeLine(line);
-        if (desc && desc !== lastText) lastText = desc;
-      }
-      if (lastText) {
-        run.lastActivityAt = Date.now();
-        m("agent:runActivity", {
-          taskId: run.taskId,
-          runId: run.runId,
-          activity: lastText,
-        }).catch(() => {});
-      }
-    } catch {
-      // transcript puede rotar/desaparecer: el tailer es best-effort
+      const { models, default: def } = adapter.modelCatalog();
+      if (!models.length && !def) continue;
+      await m("agent:syncModels", { models, default: def, agent: adapter.id });
+      log(`modelos ${adapter.id} sincronizados: ${models.length} (default ${def})`);
+    } catch (e) {
+      log(`syncModels ${adapter.id}:`, e.message);
     }
-  }, TAIL_MS);
-  return timer;
-}
-
-// Wrappers sync mínimos para lecturas posicionales sin cargar el archivo entero.
-function openSyncSafe(file) {
-  try {
-    return openSync(file, "r");
-  } catch {
-    return null;
-  }
-}
-function readFd(fd, buf, position) {
-  try {
-    readSync(fd, buf, 0, buf.length, position);
-  } catch {
-    // lectura parcial: el siguiente tick reintenta
-  }
-}
-function closeSyncSafe(fd) {
-  try {
-    closeSync(fd);
-  } catch {
-    // ya cerrado
   }
 }
 
@@ -302,17 +152,19 @@ function closeSyncSafe(fd) {
 
 async function dispatchTask(entry) {
   const taskId = entry.task._id;
+  const adapter = adapterFor(entry.task.executor);
   const run = {
     taskId,
+    agent: adapter.id,
     title: entry.task.title,
-    effectiveModel: effectiveModel(entry.task),
+    effectiveModel: adapter.effectiveModel(entry.task, defaultModel),
     spawnedAt: Date.now(),
     lastActivityAt: Date.now(),
     stalledNotified: false,
   };
   activeRuns.set(taskId, run);
   try {
-    await dispatchTaskInner(entry, run);
+    await dispatchTaskInner(entry, run, adapter);
   } finally {
     activeRuns.delete(taskId);
     // Un slot liberado puede habilitar tareas en cola.
@@ -320,7 +172,7 @@ async function dispatchTask(entry) {
   }
 }
 
-async function dispatchTaskInner({ task, workspace }, run) {
+async function dispatchTaskInner({ task, workspace }, run, adapter) {
   const taskId = task._id;
   const folder = task.workspacePath || workspace?.path || "";
   const notifyMode = task.notifyWhatsapp ?? "off";
@@ -343,15 +195,14 @@ async function dispatchTaskInner({ task, workspace }, run) {
     return;
   }
 
-  // 2) Resume REAL de la sesión del agente: las sesiones viven PARA SIEMPRE en
-  //    ~/.zcode/cli/db/db.sqlite (nunca se borran — verificado: 305 sesiones),
-  //    así que si la tarea tiene agentSessionId el agente retoma TODO su
-  //    contexto (seguir trabajo o responder preguntas sobre lo hecho). El
-  //    chequeo es contra la DB y no contra los logs model-io de rollout/ (esos
-  //    SÍ rotan). Va ANTES del claim: el claim también lo usa, y declararlo
-  //    después era un TDZ ("Cannot access before initialization") que dejaba
-  //    la tarea pegada en encolada para siempre.
-  const sessAlive = task.agentSessionId ? sessionAliveInDb(task.agentSessionId) : false;
+  // 2) Resume REAL de la sesión del agente: si la tarea tiene agentSessionId
+  //    y la sesión sigue viva en el motor (db.sqlite para zcode, JSONL para
+  //    claude), el agente retoma TODO su contexto. Va ANTES del claim: el
+  //    claim también lo usa, y declararlo después era un TDZ que dejaba la
+  //    tarea pegada en encolada para siempre.
+  const sessAlive = task.agentSessionId
+    ? adapter.sessionAlive(task.agentSessionId)
+    : false;
 
   // 3) Reclamar (abre la corrida y entrega el followUp pendiente de Cris).
   let runId, followUp;
@@ -371,60 +222,75 @@ async function dispatchTaskInner({ task, workspace }, run) {
   }
   run.runId = runId;
 
-  const prompt = buildPrompt({ task, workspacePath: folder, runId, followUp, resumed: !!task.agentSessionId, contract });
-  const mode = AUTONOMY_MODE[task.autonomy] ?? "yolo";
-  const needsSwap = run.effectiveModel !== defaultModel;
-  // Sin --disallowed-tools: en 0.16.5 un spec "Bash(...)" tumba la
-  // herramienta Bash entera (ver config.mjs). Los límites de git son
-  // contractuales (prompt).
+  const prompt = buildPrompt({
+    task,
+    workspacePath: folder,
+    runId,
+    followUp,
+    resumed: !!task.agentSessionId,
+    contract,
+    agentLabel: adapter.label,
+  });
+  const needsSwap = adapter.needsSwap(run.effectiveModel, defaultModel);
 
   log(
-    `▶ despachando "${task.title}" [${task.taskType}/${task.autonomy}/${run.effectiveModel.split("/").pop()}] → ${folder}` +
+    `▶ despachando "${task.title}" [${adapter.label} · ${task.taskType}/${task.autonomy}/${run.effectiveModel.split("/").pop() || "default"}] → ${folder}` +
       (activeRuns.size > 1 ? ` (paralela, ${activeRuns.size} activas)` : ""),
   );
 
-  // 3) (Sin mensaje de "inicio": el PRIMER mensaje de WhatsApp es el PLAN
-  //     que el agente declara; los pasos llegan de a un renglón.)
-
-  // 4) Swap de modelo SOLO si se necesita (y por la regla de canDispatch, en
-  //    ese caso esta corrida es la única activa).
-  const restore = needsSwap ? swapModel(run.effectiveModel) : null;
-  const args = [
-    ZCODE_CLI,
-    "-p",
+  // 4) Spawn vía adaptador. Env compartido: los hooks (Stop/SessionStart de
+  //    zcode Y claude) se activan solo con ZCODE_TASK_ID presente.
+  const restore = needsSwap ? adapter.swap(run.effectiveModel) : null;
+  const spawnSpec = adapter.buildSpawn({
     prompt,
-    ...(sessAlive ? ["--resume", task.agentSessionId] : []),
-    "--cwd",
+    sessionId: sessAlive ? task.agentSessionId : null,
     folder,
-    "--mode",
-    mode,
-    "--json",
-  ];
+    autonomy: task.autonomy,
+    model: task.model,
+    env: {
+      ...process.env,
+      ZCODE_TASK_ID: taskId,
+      ZCODE_RUN_ID: runId,
+      ZCODE_SESSION_TOKEN: _tokenForChild,
+      ZCODE_CONVEX_URL: CONVEX_URL,
+    },
+  });
+
+  // API que usan los adaptadores para reportar en vivo.
+  const liveApi = {
+    bindSession: (sessionId) => {
+      m("agent:bindSession", { taskId, sessionId, runId }).catch(() => {});
+    },
+    activity: (text) => {
+      m("agent:runActivity", {
+        taskId,
+        runId,
+        activity: text,
+      }).catch(() => {});
+    },
+  };
 
   try {
     const res = await new Promise((resolve) => {
-      const child = spawn(process.execPath, args, {
-        env: {
-          ...process.env,
-          ZCODE_TASK_ID: taskId,
-          ZCODE_RUN_ID: runId,
-          ZCODE_SESSION_TOKEN: _tokenForChild,
-          ZCODE_CONVEX_URL: CONVEX_URL,
-        },
-        windowsHide: true,
-      });
+      const child = spawn(spawnSpec.exe, spawnSpec.args, spawnSpec.options);
       run.kill = () => child.kill();
-      // Sin nudges: el único WhatsApp es plan + pasos (1 renglón) + final.
-      run.tailer = startTailer(run);
+      run.tailer = adapter.startTailer(run, liveApi);
 
       let stdout = "";
+      let buf = "";
       child.stdout.on("data", (d) => {
         stdout += d;
         if (stdout.length > 2_000_000) stdout = stdout.slice(-1_000_000);
+        // Líneas completas → eventos en vivo (claude stream-json; zcode --json
+        // es un solo objeto al final y pasa por extractResponse igual).
+        buf += d;
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) adapter.onStdoutLine(run, line, liveApi);
       });
       child.stderr.on("data", (d) => {
         const s = String(d);
-        if (s.trim()) log(`  [zcode] ${s.trim().slice(0, 300)}`);
+        if (s.trim()) log(`  [${adapter.id}] ${s.trim().slice(0, 300)}`);
       });
 
       const timeout = setTimeout(() => {
@@ -438,12 +304,13 @@ async function dispatchTaskInner({ task, workspace }, run) {
       });
       child.on("close", (code) => {
         clearTimeout(timeout);
+        if (buf.trim()) adapter.onStdoutLine(run, buf, liveApi);
         resolve({ code, stdout });
       });
     });
 
     // 5) Vincular sesión + watchdog si el agente no reportó.
-    const sessionId = extractSessionId(res.stdout);
+    const sessionId = adapter.extractSessionId(run, res.stdout);
     if (sessionId) {
       await m("agent:bindSession", { taskId, sessionId, runId }).catch(() => {});
     }
@@ -453,7 +320,7 @@ async function dispatchTaskInner({ task, workspace }, run) {
         r.state === "despachada" || r.state === "trabajando" || r.state === "pregunta",
     );
     if (open) {
-      const response = extractResponse(res.stdout);
+      const response = adapter.extractResponse(res.stdout);
       if (res.code === 0) {
         await m("agent:agentReport", {
           taskId,
@@ -470,7 +337,7 @@ async function dispatchTaskInner({ task, workspace }, run) {
           taskId,
           runId,
           state: "error",
-          error: `zcode terminó con código ${res.code}${res.err ? `: ${res.err}` : ""}`,
+          error: `${adapter.id} terminó con código ${res.code}${res.err ? `: ${res.err}` : ""}`,
           summary: response,
           exitCode: res.code,
           watchdog: true,
@@ -492,20 +359,6 @@ async function dispatchTaskInner({ task, workspace }, run) {
   }
 }
 
-function extractSessionId(stdout) {
-  const m = String(stdout).match(/"sessionId":\s*"(sess_[a-f0-9-]+)"/);
-  return m ? m[1] : null;
-}
-
-function extractResponse(stdout) {
-  try {
-    const j = JSON.parse(stdout);
-    return typeof j.response === "string" ? j.response : null;
-  } catch {
-    return null;
-  }
-}
-
 /**
  * Toma la cola y lanza en paralelo todo lo que la regla de concurrencia
  * permita. Las corridas corren "sueltas" (no await): el pump solo decide quién
@@ -523,7 +376,8 @@ async function pump() {
   for (const entry of queue ?? []) {
     const id = entry.task._id;
     if (activeRuns.has(id) || reserving.has(id)) continue;
-    if (!canDispatch(effectiveModel(entry.task))) continue;
+    const adapter = adapterFor(entry.task.executor);
+    if (!canDispatch(entry.task, adapter)) continue;
     reserving.add(id);
     void dispatchTask(entry)
       .catch((e) => log("dispatch:", e.message))
@@ -544,9 +398,9 @@ async function beat() {
         t &&
         (t.deletedAt !== undefined ||
           t.agentState === "cancelada" ||
-          t.executor !== "zcode")
+          t.executor !== run.agent)
       ) {
-        log(`✗ "${run.title}" borrada/cancelada — matando corrida ${run.runId}`);
+        log(`✗ "${run.title}" borrada/cancelada/cambiada de agente — matando corrida ${run.runId}`);
         if (run.kill) run.kill();
         continue; // el post-exit watchdog reporta sin efecto sobre la tarea
       }
@@ -567,7 +421,8 @@ async function beat() {
         activeRuns: [...activeRuns.values()].map((r) => ({
           title: r.title ?? "(reservando)",
           elapsedMin: Math.round((now - r.spawnedAt) / 60000),
-          model: r.effectiveModel,
+          model: r.agent === "claude" ? `claude:${r.effectiveModel}` : r.effectiveModel,
+          agent: r.agent,
         })),
         queueDepth,
         pid: process.pid,
@@ -585,12 +440,13 @@ async function main() {
     console.error("Configuración incompleta del puente:\n - " + problems.join("\n - "));
     process.exit(1);
   }
+  for (const w of claudeWarnings()) console.warn(`⚠ ${w}`);
   acquireLock();
   if (restoreOrphanSwap()) log("swap de modelo huérfano restaurado");
 
   _tokenForChild = await getToken();
-  defaultModel = readModelCatalog().default || "";
-  log(`puente activo → ${CONVEX_URL} (default ${defaultModel}, paralelas default: ${MAX_PARALLEL_DEFAULT})`);
+  defaultModel = adapterFor("zcode").modelCatalog().default || "";
+  log(`puente activo → ${CONVEX_URL} (default ${defaultModel}, paralelas default: ${MAX_PARALLEL_DEFAULT}, paralelas claude: ${MAX_PARALLEL_CLAUDE})`);
 
   // Sembrar carpetas por defecto (idempotente) y sincronizar modelos.
   await m("agent:seedWorkspaces").catch((e) => log("seedWorkspaces:", e.message));

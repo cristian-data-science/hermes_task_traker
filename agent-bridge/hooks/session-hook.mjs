@@ -1,12 +1,16 @@
 #!/usr/bin/env node
 /**
- * Hook SessionStart de ZCode (re-inyección de contexto de la tarea).
+ * Hook SessionStart (re-inyección de contexto de la tarea).
  *
  * No-op salvo en corridas despachadas por el puente (ZCODE_TASK_ID en env).
- * Si Cris abre después la sesión en el desktop (comparten db.sqlite), este
- * hook vuelve a inyectar el contexto de la tarea como additionalContext.
+ * Registrado tanto en ZCode (~/.zcode/cli/config.json) como en Claude Code
+ * (~/.claude/settings.json): si Cris abre después la sesión en el desktop o
+ * en el CLI interactivo, este hook vuelve a inyectar el contexto de la tarea.
  *
- * Salida: JSON {"additionalContext": "..."} en stdout (protocolo de hooks).
+ * Salida: JSON en stdout con los DOS protocolos (ZCode y Claude leen campos
+ * distintos del additionalContext): {"additionalContext": "...",
+ * "hookSpecificOutput": {"hookEventName": "SessionStart",
+ * "additionalContext": "..."}}.
  */
 import { CONVEX_URL } from "../config.mjs";
 
@@ -28,12 +32,17 @@ async function main() {
   const info = data?.value;
   if (!info) return;
 
+  const context =
+    `[puente hermes] Esta sesión corresponde a la tarea delegada ` +
+    `"${info.title}" (estado: ${info.agentState ?? "?"}). ` +
+    `Al terminar reporta con agent-bridge/report.mjs y no pierdas el contexto del contrato.`;
   process.stdout.write(
     JSON.stringify({
-      additionalContext:
-        `[puente hermes] Esta sesión corresponde a la tarea delegada ` +
-        `"${info.title}" (estado: ${info.agentState ?? "?"}). ` +
-        `Al terminar reporta con agent-bridge/report.mjs y no pierdas el contexto del contrato.`,
+      additionalContext: context,
+      hookSpecificOutput: {
+        hookEventName: "SessionStart",
+        additionalContext: context,
+      },
     }),
   );
 }

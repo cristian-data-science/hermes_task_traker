@@ -1,8 +1,8 @@
 /**
- * Bloque "Delegación a ZCode" del TaskModal: tipo de tarea → carpeta destino
+ * Bloque "Delegación al agente" del TaskModal: tipo de tarea → carpeta destino
  * (con la separación dura Git vs archivos), nivel de autonomía, modelo y
- * notificaciones WhatsApp. Solo se muestra con ejecutor ZCode y en la web
- * (AGENT_UI_ENABLED).
+ * notificaciones WhatsApp. Se muestra con ejecutor despachable (ZCode o
+ * Claude Code) y en la web (AGENT_UI_ENABLED).
  *
  * Controlado desde TaskModal vía value/onChange para que hidrate/beba del
  * mismo borrador que el resto del formulario.
@@ -10,6 +10,7 @@
 import { useQuery } from "convex/react";
 import {
   Sparkles,
+  BrainCircuit,
   Circle,
   CircleDot,
 } from "lucide-react";
@@ -23,10 +24,12 @@ import {
   NOTIFY_MODES,
   NOTIFY_META,
   AREA_META,
+  EXECUTOR_META,
   type TaskType,
   type Autonomy,
   type NotifyMode,
   type Area,
+  type DelegatedExecutor,
 } from "../lib/constants";
 import { AGENT_UI_ENABLED, cn } from "../lib/utils";
 
@@ -79,10 +82,13 @@ function workspaceLabel(
 export function AgentDelegationSection({
   value,
   onChange,
+  executor,
 }: {
   value: AgentConfig;
   onChange: (next: AgentConfig) => void;
   area: Area;
+  /** Agente despachable elegido (ZCode o Claude Code). */
+  executor: DelegatedExecutor;
 }) {
   if (!AGENT_UI_ENABLED) return null;
   const { token } = useAuth();
@@ -92,12 +98,32 @@ export function AgentDelegationSection({
       api.agent.listWorkspaces,
       token ? { sessionToken: token } : "skip",
     ) ?? [];
+  // Catálogo por agente: zcode lee la key histórica, claude la suya.
   const models =
-    useQuery(api.agent.listModels, token ? { sessionToken: token } : "skip");
+    useQuery(
+      api.agent.listModels,
+      token ? { sessionToken: token, agent: executor } : "skip",
+    );
   const bridge = useQuery(
     api.agent.bridgeStatus,
     token ? { sessionToken: token } : "skip",
   );
+
+  const meta = EXECUTOR_META[executor];
+  const HeadIcon = executor === "claude" ? BrainCircuit : Sparkles;
+  // Acento del agente: fucsia ZCode, naranja Claude.
+  const accent =
+    executor === "claude"
+      ? {
+          text: "text-orange-500 dark:text-orange-400",
+          border: "border-orange-500/60",
+          bg: "bg-orange-500/10",
+        }
+      : {
+          text: "text-fuchsia-500 dark:text-fuchsia-400",
+          border: "border-fuchsia-500/60",
+          bg: "bg-fuchsia-500/10",
+        };
 
   const typeMeta = value.taskType ? TASK_TYPE_META[value.taskType] : null;
   // Separación explícita por MUNDO (CONTRATO_AGENTE.md §4): el selector muestra
@@ -115,8 +141,8 @@ export function AgentDelegationSection({
   return (
     <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
       <div className="mb-2.5 flex items-center gap-1.5 text-xs font-semibold text-ink">
-        <Sparkles className="h-3.5 w-3.5 text-fuchsia-500 dark:text-fuchsia-400" />
-        Delegación a ZCode
+        <HeadIcon className={cn("h-3.5 w-3.5", accent.text)} />
+        Delegación a {meta.label}
       </div>
 
       {/* Tipo de tarea */}
@@ -144,12 +170,12 @@ export function AgentDelegationSection({
               className={cn(
                 "flex flex-col items-center gap-1 rounded-el border-el px-1 py-2 text-[10px] font-medium transition-all",
                 active
-                  ? "border-fuchsia-500/60 bg-fuchsia-500/10 text-ink"
+                  ? cn(accent.border, accent.bg, "text-ink")
                   : "border-line text-mute hover:bg-panel2",
-              )}
+                )}
             >
               <meta.Icon
-                className={cn("h-4 w-4", active && "text-fuchsia-500 dark:text-fuchsia-400")}
+                className={cn("h-4 w-4", active && accent.text)}
               />
               {meta.label}
             </button>
@@ -223,16 +249,13 @@ export function AgentDelegationSection({
               className={cn(
                 "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
                 active
-                  ? "border-fuchsia-500/60 bg-fuchsia-500/10"
+                  ? cn(accent.border, accent.bg)
                   : "border-line hover:bg-panel2",
               )}
             >
               <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
                 <meta.Icon
-                  className={cn(
-                    "h-3.5 w-3.5",
-                    active && "text-fuchsia-500 dark:text-fuchsia-400",
-                  )}
+                  className={cn("h-3.5 w-3.5", active && accent.text)}
                 />
                 {meta.label}
               </span>

@@ -10,7 +10,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
 import { internal } from "./_generated/api";
 import { logEvent, logStatusChange } from "./events";
-import { validateDelegation } from "./agent";
+import { validateDelegation, isDelegatedExecutor } from "./agent";
 
 /** Literales de área y estado para reutilizar en validaciones. */
 const areaUnion = v.union(
@@ -190,9 +190,17 @@ const taskFields = {
   area: areaUnion,
   status: statusUnion,
   notes: v.optional(v.string()),
-  /** Ejecutor: Cris (tú), Claw (agente Hermes) o ZCode (agente de código). */
+  /**
+   * Ejecutor: Cris (tú), Claw (agente Hermes), ZCode o Claude Code
+   * (agentes de código despachables por el puente).
+   */
   executor: v.optional(
-    v.union(v.literal("cris"), v.literal("claw"), v.literal("zcode")),
+    v.union(
+      v.literal("cris"),
+      v.literal("claw"),
+      v.literal("zcode"),
+      v.literal("claude"),
+    ),
   ),
   estimate: v.optional(v.string()),
   dueDate: v.optional(v.string()),
@@ -244,7 +252,7 @@ export const create = mutation({
   handler: async (ctx, args) => {
     await requireAuth(ctx, args.sessionToken);
     // Separación Git/archivos (CONTRATO_AGENTE.md §4) ya en el alta.
-    if (args.executor === "zcode") {
+    if (isDelegatedExecutor(args.executor)) {
       await validateDelegation(ctx, {
         taskType: args.taskType,
         workspaceId: args.workspaceId,
@@ -284,17 +292,18 @@ export const create = mutation({
       clickupParentId: args.clickupParentId,
       clickupListId: args.clickupListId,
       clickupLocal: args.clickupLocal,
-      // Capa agente: al asignar a ZCode la tarea nace encolada para el puente.
-      taskType: args.executor === "zcode" ? args.taskType : undefined,
-      workspaceId: args.executor === "zcode" ? args.workspaceId : undefined,
+      // Capa agente: al asignar un agente despachable la tarea nace encolada
+      // para el puente.
+      taskType: isDelegatedExecutor(args.executor) ? args.taskType : undefined,
+      workspaceId: isDelegatedExecutor(args.executor) ? args.workspaceId : undefined,
       workspacePath:
-        args.executor === "zcode" && args.workspaceId
+        isDelegatedExecutor(args.executor) && args.workspaceId
           ? (args.workspacePath ?? undefined)
           : undefined,
-      autonomy: args.executor === "zcode" ? args.autonomy : undefined,
-      model: args.executor === "zcode" ? args.model : undefined,
-      notifyWhatsapp: args.executor === "zcode" ? args.notifyWhatsapp : undefined,
-      agentState: args.executor === "zcode" ? "encolada" : undefined,
+      autonomy: isDelegatedExecutor(args.executor) ? args.autonomy : undefined,
+      model: isDelegatedExecutor(args.executor) ? args.model : undefined,
+      notifyWhatsapp: isDelegatedExecutor(args.executor) ? args.notifyWhatsapp : undefined,
+      agentState: isDelegatedExecutor(args.executor) ? "encolada" : undefined,
       order: 0,
       completedAt: args.status === "completado" ? now : undefined,
       createdAt: now,
@@ -346,7 +355,12 @@ export const update = mutation({
     status: v.optional(statusUnion),
     notes: v.optional(v.string()),
     executor: v.optional(
-      v.union(v.literal("cris"), v.literal("claw"), v.literal("zcode")),
+      v.union(
+        v.literal("cris"),
+        v.literal("claw"),
+        v.literal("zcode"),
+        v.literal("claude"),
+      ),
     ),
     estimate: v.optional(v.string()),
     dueDate: v.optional(v.string()),
@@ -397,7 +411,7 @@ export const update = mutation({
     if (patch.workspacePath === "") patch.workspacePath = undefined;
     const asPatch = patch as Record<string, unknown>;
     const nextExecutor = patch.executor ?? task.executor;
-    const delegating = nextExecutor === "zcode";
+    const delegating = isDelegatedExecutor(nextExecutor);
     if (delegating) {
       const nextType = patch.taskType ?? task.taskType;
       const nextWs = patch.workspaceId !== undefined ? patch.workspaceId : task.workspaceId;
@@ -407,7 +421,7 @@ export const update = mutation({
         asPatch.agentState = "encolada";
       }
     } else if (task.agentState !== undefined && patch.executor !== undefined) {
-      // Se quitó a ZCode como ejecutor: la capa agente se apaga.
+      // Se quitó al agente como ejecutor: la capa agente se apaga.
       asPatch.agentState = undefined;
       asPatch.agentQuestion = undefined;
       asPatch.agentFollowUp = undefined;
