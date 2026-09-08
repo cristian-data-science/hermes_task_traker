@@ -241,9 +241,13 @@ const taskFields = {
     ),
   ),
   model: v.optional(v.string()),
+  /** Estrategia Git para desarrollo: rama-pr (default) | main-directo. */
+  gitStrategy: v.optional(
+    v.union(v.literal("rama-pr"), v.literal("main-directo")),
+  ),
   notifyWhatsapp: v.optional(
     v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
-  ),
+    ),
 };
 
 /** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
@@ -302,6 +306,7 @@ export const create = mutation({
           : undefined,
       autonomy: isDelegatedExecutor(args.executor) ? args.autonomy : undefined,
       model: isDelegatedExecutor(args.executor) ? args.model : undefined,
+      gitStrategy: isDelegatedExecutor(args.executor) ? args.gitStrategy : undefined,
       notifyWhatsapp: isDelegatedExecutor(args.executor) ? args.notifyWhatsapp : undefined,
       agentState: isDelegatedExecutor(args.executor) ? "encolada" : undefined,
       order: 0,
@@ -394,6 +399,10 @@ export const update = mutation({
       ),
     ),
     model: v.optional(v.string()),
+    /** Estrategia Git para desarrollo: rama-pr (default) | main-directo. */
+    gitStrategy: v.optional(
+      v.union(v.literal("rama-pr"), v.literal("main-directo")),
+    ),
     notifyWhatsapp: v.optional(
       v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
     ),

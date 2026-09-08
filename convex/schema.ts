@@ -311,6 +311,16 @@ export default defineSchema({
      * Vacío → default de la instalación/cuenta.
      */
     model: v.optional(v.string()),
+    /**
+     * Estrategia de Git para tareas de desarrollo (elección explícita de Cris):
+     *  - "rama-pr" (default): rama agent/<slug> + pull request, jamás master.
+     *  - "main-directo": excepción elegida al crear la tarea — commits y push
+     *    directo en master/main (producción se despliega por el pipeline).
+     * Sin campo (tareas viejas) = rama-pr.
+     */
+    gitStrategy: v.optional(
+      v.union(v.literal("rama-pr"), v.literal("main-directo")),
+    ),
     /** Notificaciones WhatsApp vía Hermes para esta tarea. */
     notifyWhatsapp: v.optional(
       v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),

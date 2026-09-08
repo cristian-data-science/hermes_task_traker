@@ -23,6 +23,7 @@ import {
   Compass,
   ShieldCheck,
   Rocket,
+  Target,
   Inbox,
   Send,
   Loader2,
@@ -116,7 +117,6 @@ export const TASK_TYPE_META: Record<
 /** Niveles de autonomía del agente. */
 export const AUTONOMIES = ["escenario", "supervisado", "autonomo"] as const;
 export type Autonomy = (typeof AUTONOMIES)[number];
-
 export const AUTONOMY_META: Record<
   Autonomy,
   { label: string; desc: string; Icon: LucideIcon }
@@ -135,6 +135,29 @@ export const AUTONOMY_META: Record<
     label: "Autónomo",
     desc: "Todo + push de rama (nunca master). Prod/ERP/correos siempre con tu OK.",
     Icon: Rocket,
+  },
+};
+
+/**
+ * Estrategia de Git para tareas de desarrollo (elección explícita al delegar).
+ * Sin especificar (o tarea vieja) = "rama-pr".
+ */
+export const GIT_STRATEGIES = ["rama-pr", "main-directo"] as const;
+export type GitStrategy = (typeof GIT_STRATEGIES)[number];
+
+export const GIT_STRATEGY_META: Record<
+  GitStrategy,
+  { label: string; desc: string; Icon: LucideIcon }
+> = {
+  "rama-pr": {
+    label: "Rama propia + PR",
+    desc: "Rama agent/<slug> y pull request para integrar. Master queda intacto.",
+    Icon: GitBranch,
+  },
+  "main-directo": {
+    label: "Directo a main",
+    desc: "Commits y push directo en master/main: la producción se despliega por el pipeline del repo.",
+    Icon: Target,
   },
 };
 

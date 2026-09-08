@@ -424,6 +424,14 @@ export function AgentRunsPanel({
                   )}
                   {typeMeta && <span>{typeMeta.label}</span>}
                   {autoMeta && <span>· {autoMeta.label}</span>}
+                  {t.gitStrategy === "main-directo" && (
+                    <span
+                      className="font-semibold text-red-600 dark:text-red-400"
+                      title="Commits y push directo en master/main (excepción elegida al crear la tarea): la producción se despliega por el pipeline del repo."
+                    >
+                      · ⚠ directo a main
+                    </span>
+                  )}
                   {modelLabel && <span>· {modelLabel}</span>}
                   {clickupHref && !t.clickupDetached && (
                     <a

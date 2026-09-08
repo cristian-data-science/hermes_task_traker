@@ -296,6 +296,9 @@ export function TaskModal({
                 undefined) as Doc<"tasks">["workspaceId"],
               autonomy: agentCfg.autonomy,
               model: agentCfg.model || undefined,
+              // Estrategia Git: solo viaja para desarrollo (default rama-pr).
+              gitStrategy:
+                agentCfg.taskType === "desarrollo" ? agentCfg.gitStrategy : undefined,
               notifyWhatsapp: agentCfg.notifyWhatsapp,
             }
           : {}),

@@ -21,12 +21,15 @@ import {
   TASK_TYPE_META,
   AUTONOMIES,
   AUTONOMY_META,
+  GIT_STRATEGIES,
+  GIT_STRATEGY_META,
   NOTIFY_MODES,
   NOTIFY_META,
   AREA_META,
   EXECUTOR_META,
   type TaskType,
   type Autonomy,
+  type GitStrategy,
   type NotifyMode,
   type Area,
   type DelegatedExecutor,
@@ -38,6 +41,8 @@ export interface AgentConfig {
   workspaceId: string;
   autonomy: Autonomy;
   model: string;
+  /** Estrategia Git (solo desarrollo): rama-pr default | main-directo. */
+  gitStrategy: GitStrategy;
   notifyWhatsapp: NotifyMode;
 }
 
@@ -46,6 +51,7 @@ export const EMPTY_AGENT_CONFIG: AgentConfig = {
   workspaceId: "",
   autonomy: "supervisado",
   model: "",
+  gitStrategy: "rama-pr",
   notifyWhatsapp: "off",
 };
 
@@ -54,6 +60,7 @@ export function agentConfigFromTask(t: {
   workspaceId?: string;
   autonomy?: string;
   model?: string;
+  gitStrategy?: string;
   notifyWhatsapp?: string;
 }): AgentConfig {
   return {
@@ -65,6 +72,7 @@ export function agentConfigFromTask(t: {
       ? (t.autonomy as Autonomy)
       : "supervisado",
     model: t.model ?? "",
+    gitStrategy: t.gitStrategy === "main-directo" ? "main-directo" : "rama-pr",
     notifyWhatsapp: (NOTIFY_MODES as readonly string[]).includes(t.notifyWhatsapp ?? "")
       ? (t.notifyWhatsapp as NotifyMode)
       : "off",
@@ -264,6 +272,49 @@ export function AgentDelegationSection({
           );
         })}
       </div>
+
+      {/* Estrategia de Git: SOLO desarrollo. Elección explícita de Cris —
+          rama+PR (default) o directo a main (excepción que viaja en el
+          contrato del despacho). */}
+      {value.taskType === "desarrollo" && (
+        <>
+          <label className="label">Estrategia de Git</label>
+          <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {GIT_STRATEGIES.map((g) => {
+              const meta = GIT_STRATEGY_META[g];
+              const active = value.gitStrategy === g;
+              const danger = g === "main-directo";
+              return (
+                <button
+                  key={g}
+                  type="button"
+                  title={meta.desc}
+                  onClick={() => onChange({ ...value, gitStrategy: g })}
+                  className={cn(
+                    "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
+                    active
+                      ? danger
+                        ? "border-red-500/60 bg-red-500/10"
+                        : cn(accent.border, accent.bg)
+                      : "border-line hover:bg-panel2",
+                  )}
+                >
+                  <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                    <meta.Icon
+                      className={cn("h-3.5 w-3.5", active && (danger ? "text-red-500" : accent.text))}
+                    />
+                    {meta.label}
+                  </span>
+                  <span className="text-[10px] leading-snug text-mute">
+                    {meta.desc}
+                    {danger && " ⚠ Se publica a producción al pushear."}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       {/* Modelo + WhatsApp */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

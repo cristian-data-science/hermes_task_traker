@@ -114,6 +114,30 @@ export function buildPrompt(input) {
   lines.push(`\n${AUTONOMY_RULES[task.autonomy] ?? AUTONOMY_RULES.supervisado}`);
   lines.push(`\n${recipe}`);
 
+  // Excepción de estrategia Git elegida por Cris al crear la tarea: pisa la
+  // regla de oro de ramas y la receta de desarrollo SOLO para esta tarea.
+  if (task.gitStrategy === "main-directo") {
+    lines.push(
+      "\n=== ESTRATEGIA GIT: DIRECTO A MAIN (excepción explícita elegida por Cris al crear la tarea) ===",
+    );
+    lines.push(
+      "Esta tarea PISA la regla de oro de ramas y la receta de desarrollo: NO trabajes en rama propia ni abras pull request.",
+    );
+    lines.push("- Commitea DIRECTO en master/main, commits chicos y descriptivos.");
+    lines.push(
+      "- Verifica build/tests ANTES de cada push; si la verificación falla, corrige antes de pushear.",
+    );
+    lines.push(
+      "- Push a master/main al verificar: la producción se despliega por el pipeline del repo (eso es lo que Cris quiere para esta tarea).",
+    );
+    lines.push(
+      "- Reporta con evidencia: hashes de commits y verificación (build/deploy).",
+    );
+    lines.push(
+      "- El resto de los límites del contrato siguen vigentes (ERP, correos, producción de OTROS sistemas).",
+    );
+  }
+
   if (resumed && followUp) {
     lines.push("\n=== SEGUIMIENTO (retomas tu sesión anterior) ===");
     lines.push(
