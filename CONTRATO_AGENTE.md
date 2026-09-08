@@ -13,9 +13,14 @@ encolada ─► despachada ─► trabajando ─┬─► pregunta ──(respue
                                      ├─► para-revisión ──(aprobar)──► hecho
                                      └─► error ──(re-despachar)──► encolada
                               (cancelada: Cris mata la delegación en cualquier punto)
+
+MODO PLAN (tasks.planMode, opcional al delegar):
+encolada ─► planificando ─► plan-para-aprobar ─┬─(Cris aprueba)──► encolada [planApproved] ─► despachada ─► …
+                                              └─(Cris pide cambios)──► encolada ─► planificando (resume, replanifica)
 ```
 
 - `encolada`: la tarea nació en la app con ejecutor ZCode (o fue re-encolada). Espera al puente.
+- `planificando` (solo modo plan): el agente corre una fase de **planificación de solo lectura** (`--mode plan`): analiza la tarea y produce un plan; no puede ejecutar comandos ni modificar nada. `plan-para-aprobar`: el plan (pasos + detalle) espera el OK de Cris en la app, que puede **aprobar** (pasa a ejecución) o **pedir cambios** (replanifica con las indicaciones, retomando la misma sesión). En `planificando` tampoco hay report.mjs (el modo lo bloquea): el plan lo cosecha el puente del stdout y lo entrega con `agent:submitPlan`.
 - `despachada`: el puente la tomó y está por lanzar ZCode en la carpeta destino.
 - `trabajando`: ZCode está ejecutando. Progreso visible en la tarea.
 - `pregunta`: el agente está bloqueado y necesita contexto o una decisión de Cris. **Nunca silencio**: toda pregunta llega con ping por WhatsApp (si está activado) y se responde desde la app; la corrida retoma la MISMA sesión de ZCode (no pierde contexto).
@@ -30,6 +35,8 @@ El ciclo del agente es la fuente de verdad; el estado del tablero se deriva:
 | agentState | status Kanban |
 |---|---|
 | encolada | pendiente |
+| planificando | en-curso |
+| plan-para-aprobar | standby |
 | despachada / trabajando | en-curso |
 | pregunta | urgente |
 | para-revisión | standby |
@@ -73,20 +80,22 @@ Otros tipos (`analisis`, `ops`, `otro`) no exigen carpeta: corren donde indique 
 
 ## 6. Protocolo de despacho (puente `agent-bridge`)
 
-1. Cris crea la tarea en la app con ejecutor **ZCode** + tipo + carpeta + autonomía (+ modelo + WhatsApp opcional). Nace `encolada`.
+1. Cris crea la tarea en la app con ejecutor **ZCode** + tipo + carpeta + autonomía (+ modelo + WhatsApp opcional + **modo plan** opcional). Nace `encolada`.
 2. El puente (daemon local, suscrito reactivamente a la cola de Convex) la recibe en segundos.
 3. Valida: carpeta existe en disco y `vcs` coherente con el tipo. Si falla → `error` con diagnóstico.
-4. Marca `despachada`, abre una corrida (`agentRuns`) y lanza `zcode -p` headless con:
+4. Marca `despachada` (o `planificando` en la fase de planificación del modo plan), abre una corrida (`agentRuns`) y lanza `zcode -p` headless con:
    - `--cwd <carpeta destino>` — todo el trabajo ocurre ahí;
-   - `--mode plan|build|edit` según autonomía (NUNCA yolo por defecto);
-   - `--disallowed-tools` reforzando los límites del nivel (p.ej. `Bash(git push*)` en supervisado);
-   - `--max-turns` como cinturón de seguridad;
+   - `--mode plan` si es la fase de planificación (solo lectura real: el CLI bloquea la ejecución de comandos); en ejecución, `yolo` (único modo operativo headless — ver §3);
    - modelo de la tarea (swap temporal del `model` en `~/.zcode/cli/config.json` con backup y restauración inmediata — el puente corre una tarea por vez);
    - env `ZCODE_TASK_ID`, `ZCODE_RUN_ID`, `ZCODE_CONVEX_URL`, `ZCODE_SESSION_TOKEN` para que los hooks y el CLI de reporte sepan a dónde escribir.
-5. El prompt empaqueta: datos de la tarea, extracto de ESTE contrato, la receta del tipo (`agent-bridge/prompts/`) y la instrucción de reportar al terminar.
-6. Seguimientos (respuesta a `pregunta`, re-despacho): `--resume <sessionId>` — misma sesión, mismo contexto.
+5. El prompt empaqueta: datos de la tarea, extracto de ESTE contrato, la receta del tipo y — en ejecución — el protocolo de reporte; en planificación, el formato del bloque `===PLAN===` (PASOS + DETALLE) que cosecha el puente.
+6. Seguimientos (respuesta a `pregunta`, re-despacho, replanificación): `--resume <sessionId>` — misma sesión, mismo contexto.
 
 ## 7. Protocolo de reporte
+
+**Fase de planificación (modo plan):** el agente no puede llamar a report.mjs (el modo plan bloquea Bash). Al terminar, su respuesta final debe traer el bloque `===PLAN===` (PASOS numerados + DETALLE) o una línea `PREGUNTA: …`; el puente lo parsea del stdout y entrega: `agent:submitPlan` (plan listo → `plan-para-aprobar`), `--state pregunta` (necesita a Cris) o `--state error` (salida sin plan utilizable).
+
+**Fase de ejecución (flujo clásico):**
 
 - **Pasos en vivo (protocolo --step)**: el agente trabaja en pasos numerados y después de CADA paso ejecuta `report.mjs --step "<paso, ≤12 palabras>"`. Cada llamada se AGREGA a la checklist de la corrida en la app (y notifica por WhatsApp en modo `periodica`). El resumen final NO repite los pasos.
 - **Estado final inmediato**: apenas el objetivo esté verificado (incluye guardar .pbix / CAMBIOS.md, que son pasos previos visibles), ejecuta `--state para-revision` con un resumen de máximo 3 líneas. Nada de embellecimiento post-verificación antes del reporte.
@@ -99,7 +108,7 @@ Otros tipos (`analisis`, `ops`, `otro`) no exigen carpeta: corren donde indique 
 Se eligen por tarea: `off` (nada) · `final` (solo resultado) · `periodica` (avances).
 
 - Canal: `hermes send --to whatsapp:Criss` — reusa el gateway ya conectado, sin LLM.
-- `final`: un mensaje al llegar a `pregunta`, `para-revisión`, `hecho` o `error`, con estado + resumen.
+- `final`: un mensaje al llegar a `pregunta`, `para-revisión`, `hecho` o `error`, con estado + resumen; también avisa "📋 Plan por tu OK" cuando un plan del modo plan queda esperando aprobación.
 - `periodica`: además, inicio de corrida, cada reporte de progreso y nudge si pasan ~10 min sin novedades.
 - Los mensajes son cortos: estado, tarea, carpeta y última línea del resumen.
 

@@ -20,6 +20,7 @@ import {
   Search,
   Server,
   ListTodo,
+  ListChecks,
   Compass,
   ShieldCheck,
   Rocket,
@@ -164,6 +165,8 @@ export const GIT_STRATEGY_META: Record<
 /** Ciclo de vida de la delegación (fuente de verdad del lado agente). */
 export const AGENT_STATES = [
   "encolada",
+  "planificando",
+  "plan-para-aprobar",
   "despachada",
   "trabajando",
   "pregunta",
@@ -180,6 +183,8 @@ export const AGENT_STATE_META: Record<
   { label: string; Icon: LucideIcon; tone: string; pulse?: boolean }
 > = {
   encolada: { label: "En cola", Icon: Inbox, tone: "var(--status-pendiente)" },
+  planificando: { label: "Planificando", Icon: Compass, tone: "var(--status-en-curso)", pulse: true },
+  "plan-para-aprobar": { label: "Plan por aprobar", Icon: ListChecks, tone: "var(--status-standby)", pulse: true },
   despachada: { label: "Despachada", Icon: Send, tone: "var(--status-en-curso)" },
   trabajando: { label: "Trabajando", Icon: Loader2, tone: "var(--status-en-curso)", pulse: true },
   pregunta: { label: "Pregunta", Icon: HelpCircle, tone: "var(--status-urgente)", pulse: true },

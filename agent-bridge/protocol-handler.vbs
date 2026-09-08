@@ -117,21 +117,32 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
     ' sueltas. Los valores vacíos viajan como "-" para que la POSICIÓN de cada
     ' argumento sea siempre la misma (antes, un p64 vacío corría st al lugar
     ' del plan).
+    ' SIN sesión pero CON task válido también se lanza: el botón del tracker
+    ' puede abrirse ANTES de que el agente registre su sesión; el server la
+    ' adopta apenas Convex la reporte (session pendiente).
     Dim p64, st, ag, tk, th
+    p64 = qsValue(qs, "p64")
+    st = qsValue(qs, "st")
+    ag = qsValue(qs, "ag")
+    tk = qsValue(qs, "task")
+    th = qsValue(qs, "th")
+    If p64 = "" Or Not IsSafeToken(p64) Then p64 = "-"
+    If st = "" Or Not IsSafeToken(st) Then st = "-"
+    If ag = "" Or Not IsSafeToken(ag) Then ag = "-"
+    If th = "" Or Not IsSafeToken(th) Then th = "-"
+    Dim sessArg
     If Len(session) > 10 And IsSafeToken(session) Then
-      p64 = qsValue(qs, "p64")
-      st = qsValue(qs, "st")
-      ag = qsValue(qs, "ag")
-      tk = qsValue(qs, "task")
-      th = qsValue(qs, "th")
-      If p64 = "" Or Not IsSafeToken(p64) Then p64 = "-"
-      If st = "" Or Not IsSafeToken(st) Then st = "-"
-      If ag = "" Or Not IsSafeToken(ag) Then ag = "-"
-      If tk = "" Or Not IsSafeToken(tk) Then tk = "-"
-      If th = "" Or Not IsSafeToken(th) Then th = "-"
-      ' 8º argumento = agente (zcode | claude): el servidor elige adaptador.
+      sessArg = session
+    ElseIf tk <> "" And IsSafeToken(tk) Then
+      ' Sin sesión aún: el server espera la de la tarea (sesión pendiente).
+      sessArg = "-"
+    Else
+      sessArg = ""
+    End If
+    ' 8º argumento = agente (zcode | claude): el servidor elige adaptador.
+    If sessArg <> "" And tk <> "" And IsSafeToken(tk) Then
       CreateObject("WScript.Shell").Run _
-        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & session & " """ & path & """ " & p64 & " " & st & " " & ag & " " & tk & " " & th & " " & agentKind, _
+        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & sessArg & " """ & path & """ " & p64 & " " & st & " " & ag & " " & tk & " " & th & " " & agentKind, _
         0, False
     End If
   Else

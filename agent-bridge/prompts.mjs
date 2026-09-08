@@ -62,22 +62,11 @@ const DEFAULT_GOLDEN_RULES = [
 ];
 
 /**
- * Arma el prompt completo de despacho (o seguimiento, si hay followUp).
- * `contract` = contrato operativo guardado en Convex (getContract):
- * { goldenRules: string[], typeRecipes: {reporte, desarrollo, analisis, ops, otro} }.
- * `agentLabel` = nombre del motor (ZCode / Claude Code): solo cosmético.
+ * Líneas comunes de contexto (compartidas por el prompt de ejecución y el de
+ * planificación): título de sesión, datos de la tarea, reglas del contrato,
+ * receta del tipo y la excepción Git elegida por Cris.
  */
-export function buildPrompt(input) {
-  const {
-    task,
-    workspacePath,
-    runId,
-    followUp,
-    resumed,
-    contract,
-    agentLabel = "ZCODE",
-  } = input;
-
+function taskContextLines({ task, workspacePath, contract, agentLabel }) {
   const goldenRules =
     Array.isArray(contract?.goldenRules) && contract.goldenRules.length
       ? contract.goldenRules
@@ -111,7 +100,6 @@ export function buildPrompt(input) {
   }
   lines.push(`- Producción de la tarea en: ${workspacePath} (respeta la receta de abajo).`);
 
-  lines.push(`\n${AUTONOMY_RULES[task.autonomy] ?? AUTONOMY_RULES.supervisado}`);
   lines.push(`\n${recipe}`);
 
   // Excepción de estrategia Git elegida por Cris al crear la tarea (desarrollo
@@ -138,6 +126,29 @@ export function buildPrompt(input) {
       "- El resto de los límites del contrato siguen vigentes (ERP, correos, producción de OTROS sistemas).",
     );
   }
+  return lines;
+}
+
+/**
+ * Arma el prompt completo de despacho (o seguimiento, si hay followUp).
+ * `contract` = contrato operativo guardado en Convex (getContract):
+ * { goldenRules: string[], typeRecipes: {reporte, desarrollo, analisis, ops, otro} }.
+ * `agentLabel` = nombre del motor (ZCode / Claude Code): solo cosmético.
+ */
+export function buildPrompt(input) {
+  const {
+    task,
+    workspacePath,
+    runId,
+    followUp,
+    resumed,
+    contract,
+    agentLabel = "ZCODE",
+  } = input;
+
+  const lines = taskContextLines({ task, workspacePath, contract, agentLabel });
+
+  lines.push(`\n${AUTONOMY_RULES[task.autonomy] ?? AUTONOMY_RULES.supervisado}`);
 
   if (resumed && followUp) {
     lines.push("\n=== SEGUIMIENTO (retomas tu sesión anterior) ===");
@@ -187,6 +198,87 @@ export function buildPrompt(input) {
 /** Digest corto del prompt para auditoría (se guarda en la corrida). */
 export function promptDigest(prompt) {
   return prompt.replace(/\s+/g, " ").slice(0, 300);
+}
+
+/**
+ * Prompt de la FASE DE PLANIFICACIÓN (modo plan): el puente lanza el CLI con
+ * `--mode plan` — solo lectura REAL (el motor bloquea la ejecución de
+ * comandos; no es solo un pedido del prompt). En ese modo el agente NO puede
+ * llamar a report.mjs, así que aquí no hay protocolo de reporte: el plan
+ * completo viaja en su respuesta final dentro del bloque ===PLAN=== que el
+ * puente cosecha del stdout y entrega a la app con agent:submitPlan.
+ */
+export function buildPlanPrompt(input) {
+  const { task, workspacePath, followUp, contract, agentLabel = "ZCODE" } =
+    input;
+  const lines = taskContextLines({ task, workspacePath, contract, agentLabel });
+
+  lines.push("\n=== FASE 1: PLANIFICACIÓN (MODO SOLO LECTURA) ===");
+  lines.push(
+    "Estás en MODO PLAN: solo puedes leer y analizar (el motor bloquea ejecutar comandos y modificar archivos). Explora lo necesario para entender bien la tarea.",
+  );
+  lines.push(
+    "Tu único entregable es el PLAN de lo que harás en la fase de ejecución. NO intentes avanzar trabajo real: Cris revisará este plan en la app y solo con su OK arranca la ejecución.",
+  );
+  if (followUp) {
+    lines.push("\n=== REPLANIFICACIÓN (indicaciones de Cris sobre tu plan anterior) ===");
+    lines.push(
+      "Cris revisó tu plan anterior y pide cambios. Rehaz el plan aplicando estas indicaciones (retomas tu sesión: ya conoces lo que exploraste):",
+    );
+    lines.push(`>>> ${followUp}`);
+  }
+  lines.push("\n=== FORMATO OBLIGATORIO DE TU RESPUESTA FINAL ===");
+  lines.push(
+    "Termina tu respuesta EXACTAMENTE con este bloque. PASOS: máximo 10, cortos y concretos. DETALLE: qué harás, cómo, qué archivos/reportes tocas y cómo verificas el resultado (números antes/después, build/tests).",
+  );
+  lines.push("===PLAN===");
+  lines.push("PASOS:");
+  lines.push("1. primer paso");
+  lines.push("2. segundo paso");
+  lines.push("DETALLE:");
+  lines.push("(aquí el detalle de lo que vas a hacer y cómo lo verificas)");
+  lines.push("===FIN PLAN===");
+  lines.push(
+    'Si necesitas una decisión de Cris para poder planificar, responde ÚNICAMENTE con una línea "PREGUNTA: <pregunta concreta>" — el puente se la hace llegar.',
+  );
+  return lines.join("\n");
+}
+
+/**
+ * Cosecha el bloque ===PLAN=== de la respuesta final del CLI en modo plan.
+ * Devuelve { steps, detail } o null si el bloque no viene.
+ */
+export function parsePlanBlock(response) {
+  if (!response) return null;
+  const text = String(response);
+  const start = text.indexOf("===PLAN===");
+  const end = text.indexOf("===FIN PLAN===");
+  if (start < 0 || end < 0 || end < start) return null;
+  const body = text.slice(start + "===PLAN===".length, end).trim();
+  const stepsMatch = body.match(/^\s*PASOS:\s*$/im);
+  const detailMatch = body.match(/^\s*DETALLE:\s*$/im);
+  let steps = [];
+  if (stepsMatch) {
+    const from = stepsMatch.index + stepsMatch[0].length;
+    const to = detailMatch && detailMatch.index > from ? detailMatch.index : body.length;
+    steps = body
+      .slice(from, to)
+      .split("\n")
+      .map((l) => l.replace(/^\s*\d+[.)-]\s*/, "").replace(/^[-*]\s*/, "").trim())
+      .filter(Boolean);
+  }
+  let detail = "";
+  if (detailMatch) {
+    detail = body.slice(detailMatch.index + detailMatch[0].length).trim();
+  }
+  return { steps, detail };
+}
+
+/** Detecta "PREGUNTA: ..." en la respuesta de planificación (sin bloque plan). */
+export function parsePlanQuestion(response) {
+  if (!response) return null;
+  const m = String(response).match(/^\s*\**\s*PREGUNTA:\s*(.+)$/im);
+  return m ? m[1].trim() : null;
 }
 
 /**

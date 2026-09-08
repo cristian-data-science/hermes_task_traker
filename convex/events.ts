@@ -33,7 +33,8 @@ export type EventKind =
   | "agent_update"
   | "agent_question"
   | "agent_answer"
-  | "agent_review";
+  | "agent_review"
+  | "agent_plan";
 
 interface LogEventInput {
   taskId: Id<"tasks">;

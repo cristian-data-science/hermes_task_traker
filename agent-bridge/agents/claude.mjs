@@ -107,7 +107,7 @@ export const claudeAdapter = {
   exe: CLAUDE_CLI,
 
   /** Spawn: claude.exe -p ... (cwd = carpeta de trabajo; no existe --cwd). */
-  buildSpawn({ prompt, sessionId, folder, model, env }) {
+  buildSpawn({ prompt, sessionId, folder, model, env, mode }) {
     const flags = claudeModelFlags(model);
     return {
       exe: CLAUDE_CLI,
@@ -116,7 +116,8 @@ export const claudeAdapter = {
         prompt,
         ...(sessionId ? ["--resume", sessionId] : []),
         "--permission-mode",
-        "bypassPermissions",
+        // Fase de PLANIFICACIÓN (modo plan de la tarea): plan = solo lectura.
+        mode === "plan" ? "plan" : "bypassPermissions",
         ...(flags.model ? ["--model", flags.model] : []),
         ...(flags.effort ? ["--effort", flags.effort] : []),
         "--output-format",

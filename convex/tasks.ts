@@ -10,7 +10,49 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
 import { internal } from "./_generated/api";
 import { logEvent, logStatusChange } from "./events";
-import { validateDelegation, isDelegatedExecutor } from "./agent";
+import {
+  validateDelegation,
+  isDelegatedExecutor,
+  applyAgentState,
+  closeOpenRun,
+} from "./agent";
+
+/**
+ * Coherencia tablero ⇄ capa agente al completar/reabrir por mano propia
+ * (check del tablero, drag, modal): el estado Kanban que mueve Cris también
+ * cierra (o reabre) la delegación. Sin esto, una tarea delegada completada
+ * desde el tablero quedaba con agentState="para-revision" para siempre y la
+ * vista Agente la seguía mostrando en "esperando tu OK".
+ *
+ * - `completing`: el movimiento la dejó completada → agentState "hecho"
+ *   (sobre la tarea ya patcheada: applyAgentState no re-mueve columnas) y se
+ *   cierra la corrida abierta si quedaba una.
+ * - `reopened`: salió de completada → la delegación aprobada vuelve a
+ *   "para-revision" (resultado esperando decisión otra vez), sin mover la
+ *   tarjeta: el move del tablero ya ocurrió.
+ */
+async function alignAgentStateOnComplete(
+  ctx: MutationCtx,
+  id: Id<"tasks">,
+  before: Doc<"tasks">,
+  opts: { completing: boolean; reopened: boolean },
+  sessionToken: string,
+): Promise<void> {
+  if (!isDelegatedExecutor(before.executor) || !before.agentState) return;
+  if (opts.completing) {
+    if (before.agentState === "hecho" || before.agentState === "cancelada")
+      return;
+    const updated = await ctx.db.get(id);
+    if (!updated) return;
+    await applyAgentState(ctx, updated, "hecho", sessionToken);
+    await closeOpenRun(ctx, id, "hecho");
+  } else if (opts.reopened && before.agentState === "hecho") {
+    await ctx.db.patch(id, {
+      agentState: "para-revision",
+      updatedAt: Date.now(),
+    });
+  }
+}
 
 /** Literales de área y estado para reutilizar en validaciones. */
 const areaUnion = v.union(
@@ -248,6 +290,8 @@ const taskFields = {
   notifyWhatsapp: v.optional(
     v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
     ),
+  /** Modo plan: planifica primero (solo lectura) y espera tu OK. */
+  planMode: v.optional(v.boolean()),
 };
 
 /** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
@@ -308,6 +352,7 @@ export const create = mutation({
       model: isDelegatedExecutor(args.executor) ? args.model : undefined,
       gitStrategy: isDelegatedExecutor(args.executor) ? args.gitStrategy : undefined,
       notifyWhatsapp: isDelegatedExecutor(args.executor) ? args.notifyWhatsapp : undefined,
+      planMode: isDelegatedExecutor(args.executor) ? args.planMode : undefined,
       agentState: isDelegatedExecutor(args.executor) ? "encolada" : undefined,
       order: 0,
       completedAt: args.status === "completado" ? now : undefined,
@@ -406,6 +451,7 @@ export const update = mutation({
     notifyWhatsapp: v.optional(
       v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
     ),
+    planMode: v.optional(v.boolean()),
   },
   handler: async (ctx, { sessionToken, id, ...patch }) => {
     await requireAuth(ctx, sessionToken);
@@ -428,12 +474,16 @@ export const update = mutation({
       // Asignación nueva (o re-delegación tras cancelar): vuelve a la cola.
       if (task.agentState === undefined || task.agentState === "cancelada") {
         asPatch.agentState = "encolada";
+        // El ciclo del plan arranca de cero en una re-delegación.
+        asPatch.planApproved = undefined;
       }
     } else if (task.agentState !== undefined && patch.executor !== undefined) {
       // Se quitó al agente como ejecutor: la capa agente se apaga.
       asPatch.agentState = undefined;
       asPatch.agentQuestion = undefined;
       asPatch.agentFollowUp = undefined;
+      asPatch.planMode = undefined;
+      asPatch.planApproved = undefined;
     }
 
     // Sanea textos y clamp del progreso antes de aplicarlos.
@@ -542,6 +592,22 @@ export const update = mutation({
       }
       await ctx.db.patch(id, next);
     }
+
+    // ===== Capa agente: completar/reabrir desde el modal también cierra la
+    // delegación (misma coherencia que el check del tablero y el drag). =====
+    await alignAgentStateOnComplete(
+      ctx,
+      id,
+      task,
+      {
+        completing: newStatus === "completado",
+        reopened:
+          !!newStatus &&
+          newStatus !== "completado" &&
+          task.status === "completado",
+      },
+      sessionToken,
+    );
 
     // ===== Bitácora =====
     // Se registra con el título/área NUEVOS (los que quedaron tras el patch),
@@ -748,6 +814,19 @@ export const changeStatus = mutation({
       at: now,
     });
 
+    // ===== Capa agente: arrastrar a completado también cierra la delegación =====
+    await alignAgentStateOnComplete(
+      ctx,
+      id,
+      task,
+      {
+        completing: newStatus === "completado",
+        reopened:
+          oldStatus === "completado" && newStatus !== "completado",
+      },
+      sessionToken,
+    );
+
     // ===== Sync ClickUp outbound (solo patagonia, solo si hubo cambio real) =====
     if (oldStatus !== newStatus && task.area === "patagonia" && task.clickupId) {
       await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
@@ -847,6 +926,15 @@ export const toggleComplete = mutation({
       to: newStatus,
       at: now,
     });
+
+    // ===== Capa agente: el check del tablero también cierra la delegación =====
+    await alignAgentStateOnComplete(
+      ctx,
+      id,
+      task,
+      { completing, reopened: !completing && oldStatus === "completado" },
+      sessionToken,
+    );
 
     // ===== Sync ClickUp outbound (solo patagonia) =====
     if (task.area === "patagonia" && task.clickupId) {

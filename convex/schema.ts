@@ -54,9 +54,16 @@ export type Autonomy = (typeof autonomies)[number];
  * Ciclo de vida de la delegación. Es la fuente de verdad mientras la tarea
  * tenga executor=zcode; el estado del tablero (status) se deriva de acá
  * (mapeo en CONTRATO_AGENTE.md §2).
+ *
+ * Modo plan (tasks.planMode): la delegación arranca con una fase de
+ * planificación de SOLO LECTURA — `planificando` mientras el agente arma el
+ * plan, `plan-para-aprobar` mientras Cris lo revisa. Al aprobar, la tarea
+ * vuelve a `encolada` y corre la fase de ejecución con el flujo clásico.
  */
 export const agentStates = [
   "encolada",
+  "planificando",
+  "plan-para-aprobar",
   "despachada",
   "trabajando",
   "pregunta",
@@ -259,10 +266,20 @@ export default defineSchema({
         v.literal("autonomo"),
       ),
     ),
+    /**
+     * Modo plan (elección de Cris al delegar): ANTES de ejecutar, el agente
+     * corre una fase de planificación de solo lectura; Cris revisa el plan
+     * (pasos + detalle), puede pedir cambios (se replanifica) y al aprobarlo
+     * recién arranca la ejecución. `planApproved` marca que ya fue aprobado.
+     */
+    planMode: v.optional(v.boolean()),
+    planApproved: v.optional(v.boolean()),
     /** Estado del ciclo de delegación (fuente de verdad del lado agente). */
     agentState: v.optional(
       v.union(
         v.literal("encolada"),
+        v.literal("planificando"),
+        v.literal("plan-para-aprobar"),
         v.literal("despachada"),
         v.literal("trabajando"),
         v.literal("pregunta"),
@@ -377,6 +394,7 @@ export default defineSchema({
       v.literal("agent_question"),
       v.literal("agent_answer"),
       v.literal("agent_review"),
+      v.literal("agent_plan"),
     ),
     /** Timestamp del evento (ms). Índice principal de consulta por rango. */
     at: v.number(),
@@ -612,6 +630,8 @@ export default defineSchema({
     /** true si esta corrida retomó la sesión anterior (--resume). */
     resumed: v.optional(v.boolean()),
     state: v.union(
+      v.literal("planificando"),
+      v.literal("plan-para-aprobar"),
       v.literal("despachada"),
       v.literal("trabajando"),
       v.literal("pregunta"),
@@ -639,6 +659,12 @@ export default defineSchema({
      * derivada de progressLog (paso N de M). ≤10 pasos × 120 chars.
      */
     plan: v.optional(v.array(v.string())),
+    /**
+     * Detalle del plan en modo planificación (fase de solo lectura): lo que
+     * va a hacer, cómo y por qué, en markdown libre. Lo cosecha el puente de
+     * la respuesta del CLI y lo guarda submitPlan. Tope 8000 chars.
+     */
+    planDetail: v.optional(v.string()),
     /**
      * Actividad en vivo detectada por el puente leyendo el transcript de la
      * sesión (última acción del agente entre pasos explícitos).

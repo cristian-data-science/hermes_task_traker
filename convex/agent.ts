@@ -56,6 +56,8 @@ const areaUnion = v.union(
 /** Mapeo agentState → estado del tablero (CONTRATO_AGENTE.md §2). */
 export const AGENT_STATE_TO_STATUS: Record<string, Doc<"tasks">["status"]> = {
   encolada: "pendiente",
+  planificando: "en-curso",
+  "plan-para-aprobar": "standby",
   despachada: "en-curso",
   trabajando: "en-curso",
   pregunta: "urgente",
@@ -68,6 +70,10 @@ export const AGENT_STATE_TO_STATUS: Record<string, Doc<"tasks">["status"]> = {
 const SUMMARY_MAX = 5000;
 const QUESTION_MAX = 2000;
 const FOLLOWUP_MAX = 3000;
+/** Tope del detalle markdown del plan (modo planificación). */
+const PLAN_DETAIL_MAX = 8000;
+/** Tope de las indicaciones para replanificar. */
+const PLAN_FEEDBACK_MAX = 1500;
 
 /**
  * Catálogo de modelos de respaldo: lo muestra el picker mientras el puente
@@ -172,7 +178,7 @@ const DEFAULT_WORKSPACES: Array<{
  * estado del tablero (con reorder a top de columna), completedAt, bitácora
  * y sync ClickUp outbound si la tarea es patagonia y cambió de columna.
  */
-async function applyAgentState(
+export async function applyAgentState(
   ctx: MutationCtx,
   task: Doc<"tasks">,
   newState: string,
@@ -241,6 +247,16 @@ async function applyAgentState(
       ...extraTask,
     });
   }
+
+  // Defensa estructural: llegar a un estado terminal CIERRA la corrida abierta
+  // que quede. Antes esto lo hacía cada caller por su cuenta (reviewResult,
+  // cancelAgent…) y cualquier camino que lo olvidara dejaba una corrida
+  // "abierta" para siempre en una tarea ya terminada — el plan quedaba atorado
+  // en "paso 3 de 6" aunque la tarea estuviera aprobada. closeOpenRun es no-op
+  // si no hay corrida abierta, así que duplicar llamadas es inofensivo.
+  if (newState === "hecho" || newState === "cancelada") {
+    await closeOpenRun(ctx, task._id, newState);
+  }
 }
 
 /**
@@ -272,7 +288,7 @@ export async function validateDelegation(
 }
 
 /** Cierra la corrida abierta de una tarea (si existe) con el estado final. */
-async function closeOpenRun(
+export async function closeOpenRun(
   ctx: MutationCtx,
   taskId: Id<"tasks">,
   state: string,
@@ -283,7 +299,13 @@ async function closeOpenRun(
     .withIndex("by_task", (q) => q.eq("taskId", taskId))
     .collect();
   const open = runs
-    .filter((r) => r.state === "despachada" || r.state === "trabajando" || r.state === "pregunta")
+    .filter(
+      (r) =>
+        r.state === "planificando" ||
+        r.state === "despachada" ||
+        r.state === "trabajando" ||
+        r.state === "pregunta",
+    )
     .sort((a, b) => b.startedAt - a.startedAt)[0];
   if (!open) return;
   await ctx.db.patch(open._id, {
@@ -293,6 +315,52 @@ async function closeOpenRun(
     ...patch,
   });
 }
+
+/**
+ * REPARACIÓN de corridas zombis: corridas "abiertas" (sin endedAt en
+ * despachada/trabajando/pregunta/planificando) cuya tarea ya terminó (hecha/
+ * cancelada/borrada). Quedaron así por caminos que no cerraban la corrida
+ * (completar desde el tablero antes de la defensa de applyAgentState, crashes
+ * del puente, etc.) y mantenían el plan "atorado" en la UI para siempre.
+ *
+ * Cierra cada una con el estado final coherente de su tarea. Ejecutar una
+ * vez: `npx convex run agent:_closeOrphanRuns` (idempotente: al no quedar
+ * zombis, cierra 0).
+ */
+export const _closeOrphanRuns = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const runs = await ctx.db.query("agentRuns").collect();
+    const openStates = ["planificando", "despachada", "trabajando", "pregunta"];
+    const orphans = runs.filter(
+      (r) => !r.endedAt && openStates.includes(r.state),
+    );
+    let closed = 0;
+    const detail: string[] = [];
+    for (const r of orphans) {
+      const task = await ctx.db.get(r.taskId);
+      const done =
+        !task ||
+        task.deletedAt !== undefined ||
+        task.agentState === "hecho" ||
+        task.agentState === "cancelada";
+      if (!done) continue;
+      const finalState = !task || task.deletedAt !== undefined
+        ? "cancelada"
+        : (task.agentState as "hecho" | "cancelada");
+      await ctx.db.patch(r._id, {
+        state: finalState,
+        endedAt: task?.completedAt ?? task?.updatedAt ?? now,
+        updatedAt: now,
+      });
+      closed++;
+      if (detail.length < 20)
+        detail.push(`${r._id} (${r.state}) → ${finalState}`);
+    }
+    return { closed, detail };
+  },
+});
 
 /** Lee un valor de settings por clave (funciona en queries y mutations). */
 async function getSetting(
@@ -399,8 +467,8 @@ export const agentOverview = query({
       .slice(0, 50);
     return {
       queue: pick(["encolada"]),
-      working: pick(["despachada", "trabajando"]),
-      review: pick(["pregunta", "para-revision", "error"]),
+      working: pick(["planificando", "despachada", "trabajando"]),
+      review: pick(["plan-para-aprobar", "pregunta", "para-revision", "error"]),
       done: pick(["hecho"]).filter(
         (t) => (t.completedAt ?? t.updatedAt) >= cut,
       ),
@@ -794,10 +862,15 @@ export const claimTask = mutation({
 
     const now = Date.now();
     const followUp = task.agentFollowUp;
+    // Modo plan: si el plan aún no fue aprobado, esta corrida es la FASE DE
+    // PLANIFICACIÓN (solo lectura; el puente la lanza con --mode plan y
+    // cosecha el plan con submitPlan). Tras aprobar (planApproved), el claim
+    // siguiente abre la corrida de ejecución con el flujo clásico.
+    const planningPhase = task.planMode === true && task.planApproved !== true;
     const runId = await ctx.db.insert("agentRuns", {
       taskId,
       agent: isDelegatedExecutor(task.executor) ? task.executor : "zcode",
-      state: "despachada",
+      state: planningPhase ? "planificando" : "despachada",
       resumed: resumed ?? false,
       autonomy: task.autonomy,
       workspacePath: workspacePath ?? task.workspacePath,
@@ -808,20 +881,30 @@ export const claimTask = mutation({
       updatedAt: now,
     });
 
-    await applyAgentState(ctx, task, "despachada", sessionToken, {
-      agentFollowUp: undefined,
-      agentLastStep: undefined,
-      agentLastStepAt: undefined,
-      agentStepIndex: undefined,
-      agentPlanTotal: undefined,
-      workspacePath: workspacePath ?? task.workspacePath,
-    });
+    await applyAgentState(
+      ctx,
+      task,
+      planningPhase ? "planificando" : "despachada",
+      sessionToken,
+      {
+        agentFollowUp: undefined,
+        agentLastStep: undefined,
+        agentLastStepAt: undefined,
+        agentStepIndex: undefined,
+        agentPlanTotal: undefined,
+        workspacePath: workspacePath ?? task.workspacePath,
+      },
+    );
     await logEvent(ctx, {
       taskId,
       kind: "agent_dispatched",
       task,
       at: now,
-      detail: resumed ? "seguimiento (resume de sesión)" : undefined,
+      detail: planningPhase
+        ? "fase de planificación (modo plan, solo lectura)"
+        : resumed
+          ? "seguimiento (resume de sesión)"
+          : undefined,
     });
     return { runId, followUp };
   },
@@ -1187,6 +1270,131 @@ export const reviewResult = mutation({
       kind: "agent_review",
       task,
       detail: (approve ? "aprobado" : `rechazado: ${feedback}`).slice(0, 300),
+    });
+    return { ok: true };
+  },
+});
+
+/**
+ * El puente entrega el plan cosechado de la fase de planificación (solo
+ * lectura): guarda los pasos + el detalle, cierra la corrida y deja la tarea
+ * en `plan-para-aprobar` para que Cris revise (aprobar o pedir cambios).
+ */
+export const submitPlan = mutation({
+  args: {
+    ...sessionArg,
+    taskId: v.id("tasks"),
+    runId: v.id("agentRuns"),
+    steps: v.array(v.string()),
+    detail: v.optional(v.string()),
+  },
+  handler: async (ctx, { sessionToken, taskId, runId, steps, detail }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    if (task.executor !== "zcode")
+      throw new Error("La tarea no está delegada al agente");
+    const run = await ctx.db.get(runId);
+    if (!run || run.taskId !== taskId) throw new Error("Corrida no encontrada");
+    if (run.state !== "planificando")
+      throw new Error(`La corrida no está planificando (estado: ${run.state})`);
+
+    const now = Date.now();
+    // Misma forma y topes que el protocolo --plan (≤10 pasos × 120 chars).
+    const plan = steps
+      .map((p) => p.trim().replace(/^\d+[.)-]\s*/, "").slice(0, 120))
+      .filter(Boolean)
+      .slice(0, 10);
+    await ctx.db.patch(runId, {
+      state: "plan-para-aprobar" as Doc<"agentRuns">["state"],
+      plan: plan.length > 0 ? plan : undefined,
+      planDetail: detail?.trim().slice(0, PLAN_DETAIL_MAX),
+      endedAt: now,
+      updatedAt: now,
+    });
+    await applyAgentState(ctx, task, "plan-para-aprobar", sessionToken);
+    await logEvent(ctx, {
+      taskId,
+      kind: "agent_plan",
+      task,
+      at: now,
+      detail: `plan con ${plan.length} paso(s), listo para revisión`,
+    });
+    return { ok: true };
+  },
+});
+
+/**
+ * Cris aprueba el plan: la tarea vuelve a encolarse para la FASE DE EJECUCIÓN
+ * con el plan aprobado como followUp (el puente la reclama y corre el flujo
+ * clásico, retomando la sesión de planificación con --resume).
+ */
+export const approvePlan = mutation({
+  args: { ...sessionArg, taskId: v.id("tasks") },
+  handler: async (ctx, { sessionToken, taskId }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    if (task.agentState !== "plan-para-aprobar")
+      throw new Error("La tarea no tiene un plan esperando aprobación");
+    // El plan aprobado viaja en el followUp: sin depender de que el agente
+    // recuerde su plan anterior al retomar la sesión.
+    const runs = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
+      .collect();
+    const run = runs
+      .filter((r) => (r.plan?.length ?? 0) > 0)
+      .sort((a, b) => b.startedAt - a.startedAt)[0];
+    const steps = run?.plan ?? [];
+    const followUp = [
+      "PLAN APROBADO por Cris — ejecútalo tal cual, sin cambiar el alcance. Al arrancar, declara tu --plan EXACTAMENTE con estos pasos:",
+      ...steps.map((p, i) => `${i + 1}) ${p}`),
+    ].join("\n");
+    await applyAgentState(ctx, task, "encolada", sessionToken, {
+      planApproved: true,
+      agentFollowUp: followUp.slice(0, FOLLOWUP_MAX),
+    });
+    await logEvent(ctx, {
+      taskId,
+      kind: "agent_plan",
+      task,
+      detail: "plan aprobado → pasa a ejecución",
+    });
+    return { ok: true };
+  },
+});
+
+/**
+ * Cris pide cambios al plan: vuelve a encolar la FASE DE PLANIFICACIÓN con
+ * las indicaciones nuevas. `planApproved` sigue false, así que el puente
+ * relanza el modo plan retomando la misma sesión (--resume) para replanificar.
+ */
+export const requestPlanChanges = mutation({
+  args: { ...sessionArg, taskId: v.id("tasks"), feedback: v.string() },
+  handler: async (ctx, { sessionToken, taskId, feedback }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    if (task.agentState !== "plan-para-aprobar")
+      throw new Error("La tarea no tiene un plan esperando aprobación");
+    const text = feedback.trim();
+    if (!text) throw new Error("Escribe qué cambiar del plan");
+    await applyAgentState(ctx, task, "encolada", sessionToken, {
+      agentFollowUp:
+        `PLAN A REVISAR — indicaciones de Cris para el nuevo plan: ${text}`.slice(
+          0,
+          PLAN_FEEDBACK_MAX,
+        ),
+    });
+    await logEvent(ctx, {
+      taskId,
+      kind: "agent_plan",
+      task,
+      detail: `replanificar: ${text}`.slice(0, 300),
     });
     return { ok: true };
   },

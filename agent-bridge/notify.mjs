@@ -70,6 +70,17 @@ export function formatNotification(kind, payload) {
     };
   }
 
+  if (kind === "planListo") {
+    const steps = payload.plan ?? [];
+    const body =
+      (steps.length ? steps.map((p, i) => `${i + 1}. ${p}`).join("\n") + "\n\n" : "") +
+      "👉 Revísalo en la app: apruébalo o pídele cambios antes de que ejecute.";
+    return {
+      subject: `[${tag}] 📋 Plan por tu OK (${steps.length}) · ${st}`,
+      body,
+    };
+  }
+
   if (kind === "replan") {
     const steps = payload.plan ?? [];
     const prev = new Set((payload.previousPlan ?? []).map(normStep));
@@ -129,13 +140,15 @@ export function formatNotification(kind, payload) {
 /**
  * Notifica un evento del agente. `mode` es el notifyWhatsapp de la tarea:
  *  - off: nunca
- *  - final: solo estados terminales (pregunta/para-revisión/hecho/error)
+ *  - final: solo lo que exige a Cris actuar (plan por aprobar, estados finales)
  *  - periodica: plan inicial + re-plan compacto + cada paso + reanudada + final
  */
 export async function notifyAgent(mode, kind, payload) {
   if (!mode || mode === "off") return { ok: true, skipped: true };
-  const isFinal = kind === "final";
-  if (mode === "final" && !isFinal) return { ok: true, skipped: true };
+  // El plan esperando OK pausa la tarea hasta que Cris actúe: se avisa igual
+  // que los estados finales, también en modo "final".
+  const isActionable = kind === "final" || kind === "planListo";
+  if (mode === "final" && !isActionable) return { ok: true, skipped: true };
 
   const { subject, body } = formatNotification(kind, payload);
   const res = await send(WHATSAPP_TARGET, subject, body);

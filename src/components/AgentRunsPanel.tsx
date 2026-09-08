@@ -49,14 +49,21 @@ function RunStateChip({ state }: { state: string }) {
 
 /** Botones de artefactos: abrir carpeta / abrir reporte (.md) / ver en ClickUp.
  *  La web no puede abrir rutas locales por seguridad → protocolo
- *  hermesagent:// (instalado en el PC de Cris por agent-bridge). */
+ *  hermesagent:// (instalado en el PC de Cris por agent-bridge).
+ *  `task` debe ser la tarea EN VIVO (t): la sesión se bindea a mitad de
+ *  corrida y con el snapshot viejo el botón de chat no aparecía nunca.
+ *  `session` = sessionId efectivo (tarea, con la corrida más reciente de
+ *  respaldo para el caso de bind temprano fallido). */
 function ArtifactsBlock({
   task,
   plan,
+  session,
 }: {
   task: Doc<"tasks">;
   /** Plan de la última corrida (para el sidebar del chat). */
   plan?: string[];
+  /** SessionId efectivo: de la tarea en vivo, o de la última corrida. */
+  session?: string;
 }) {
   if (!task.workspacePath) return null;
   const open = (mode: "open" | "file" | "md", path: string) => {
@@ -91,7 +98,7 @@ function ArtifactsBlock({
             <ExternalLink className="h-3.5 w-3.5" /> Ver en ClickUp
           </a>
         )}
-        {task.agentSessionId && (
+        {isDelegatedExecutor(task.executor) && (
           <button
             onClick={() => {
               // Plan de la corrida más reciente + estado actual: viajan en el
@@ -117,19 +124,26 @@ function ArtifactsBlock({
               // task → el servidor del chat se suscribe a Convex y muestra el
               // plan, el paso actual y el estado EN VIVO (p64/st/ag quedan
               // como respaldo si el puente no tiene credenciales).
-              window.location.href = `hermesagent://${host}?path=${encodeURIComponent(task.workspacePath!)}&session=${encodeURIComponent(task.agentSessionId!)}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
+              // La sesión puede NO existir todavía (corrida recién arrancada):
+              // el chat abre en modo "esperando sesión" y la adopta apenas
+              // el agente la registre.
+              window.location.href = `hermesagent://${host}?path=${encodeURIComponent(task.workspacePath!)}${session ? `&session=${encodeURIComponent(session)}` : ""}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
             }}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
             title={
-              ["despachada", "trabajando"].includes(task.agentState ?? "")
-                ? "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, EN MODO OBSERVADOR mientras la corrida está activa: historial y razonamiento en vivo. Tildá 'Siempre permitir' la primera vez."
-                : "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Tildá 'Siempre permitir' la primera vez."
+              session
+                ? ["planificando", "despachada", "trabajando"].includes(task.agentState ?? "")
+                  ? "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, EN MODO OBSERVADOR mientras la corrida está activa: historial y razonamiento en vivo. Tildá 'Siempre permitir' la primera vez."
+                  : "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Tildá 'Siempre permitir' la primera vez."
+                : "Abre el chat de la tarea: si el agente todavía no registró su sesión, queda esperando y el razonamiento aparece solo en cuanto arranque. Tildá 'Siempre permitir' la primera vez."
             }
           >
             <MessageCircle className="h-3.5 w-3.5" />
-            {["despachada", "trabajando"].includes(task.agentState ?? "")
-              ? "Ver razonamiento en vivo"
-              : "Chatear con el agente"}
+            {session
+              ? ["planificando", "despachada", "trabajando"].includes(task.agentState ?? "")
+                ? "Ver razonamiento en vivo"
+                : "Chatear con el agente"
+              : "Chat del agente (espera sesión)"}
           </button>
         )}
         {isReporte ? (
@@ -157,12 +171,24 @@ function ArtifactsBlock({
     </div>
   );
 }
-/** Plan declarado (roadmap) + checklist de pasos reales + actividad en vivo. */
-function StepList({ run }: { run: Doc<"agentRuns"> }) {
+/** Plan declarado (roadmap) + checklist de pasos reales + actividad en vivo.
+ *  `taskDone`: la tarea ya terminó (hecha/cancelada/completada) — una corrida
+ *  "abierta" en una tarea terminada es un zombi (quedó así por un camino que
+ *  no la cerró): se muestra como cerrada para que el plan no quede atorado. */
+function StepList({ run, taskDone }: { run: Doc<"agentRuns">; taskDone?: boolean }) {
   const steps = run.progressLog ?? [];
   const plan = run.plan ?? [];
-  const open = !run.endedAt;
+  const open = !run.endedAt && !taskDone;
   const doneCount = steps.length;
+  // Corrida terminada BIEN (para-revisión/hecho): el objetivo se cumplió — el
+  // roadmap se marca completo. El agente no siempre reporta un --step por
+  // cada ítem del plan (los agrupa o los hace sin cortar), y sin esto los
+  // pasos restantes quedaban "pendientes" para siempre aunque la tarea ya
+  // estuviera terminada y aprobada. También aplica a corridas zombis de una
+  // tarea ya hecha (las de error/cancelada se muestran como quedaron).
+  const finishedOk =
+    (!!run.endedAt && ["para-revision", "hecho"].includes(run.state)) ||
+    (!!taskDone && !["error", "cancelada"].includes(run.state));
   const lastLive =
     open && run.lastActivity && run.lastActivityAt
       ? { text: run.lastActivity, at: run.lastActivityAt }
@@ -177,12 +203,14 @@ function StepList({ run }: { run: Doc<"agentRuns"> }) {
       {plan.length > 0 && (
         <div className="mb-2">
           <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-faint">
-            Plan · paso {Math.min(doneCount + (open ? 1 : 0), plan.length) || "–"} de {plan.length}
+            {finishedOk
+              ? `Plan · completado (${plan.length})`
+              : `Plan · paso ${Math.min(doneCount + (open ? 1 : 0), plan.length) || "–"} de ${plan.length}`}
           </p>
           <ol className="space-y-0.5">
             {plan.map((p, i) => {
-              const done = i < doneCount;
-              const current = open && i === doneCount;
+              const done = finishedOk || i < doneCount;
+              const current = !finishedOk && open && i === doneCount;
               return (
                 <li
                   key={i}
@@ -296,6 +324,8 @@ export function AgentRunsPanel({
   const answerQuestion = useMutation(api.agent.answerQuestion);
   const askHistory = useMutation(api.agent.askHistory);
   const reviewResult = useMutation(api.agent.reviewResult);
+  const approvePlan = useMutation(api.agent.approvePlan);
+  const requestPlanChanges = useMutation(api.agent.requestPlanChanges);
   const cancelAgent = useMutation(api.agent.cancelAgent);
   const removeTask = useMutation(api.tasks.remove);
   const redirectAgent = useMutation(api.agent.redirectAgent);
@@ -337,6 +367,15 @@ export function AgentRunsPanel({
   const canAnswer =
     state === "pregunta" || state === "error" || state === "cancelada";
   const canReview = state === "para-revision";
+  // Tarea ya terminada (cualquier camino): las corridas zombis se muestran
+  // cerradas y su roadmap completo (ver StepList).
+  const taskDone =
+    state === "hecho" || state === "cancelada" || t.status === "completado";
+  // Modo plan: el plan cosechado de la fase de planificación espera el OK.
+  const canReviewPlan = state === "plan-para-aprobar";
+  // Corrida más reciente con plan (los replans la reemplazan; viene ordenada
+  // de más nueva a más vieja).
+  const planRun = runs.find((r) => (r.plan?.length ?? 0) > 0 || !!r.planDetail);
   const canCancel =
     state && !["hecho", "cancelada"].includes(state);
   // Redirección en vivo: la corrida está activa y Cris quiere cambiar el rumbo
@@ -607,6 +646,119 @@ export function AgentRunsPanel({
                 </div>
               )}
 
+              {/* Modo plan: la fase de planificación corre en solo lectura */}
+              {state === "planificando" && (
+                <div
+                  className="mb-4 rounded-el border-el p-3"
+                  style={{
+                    borderColor:
+                      "color-mix(in srgb, var(--status-en-curso) 45%, transparent)",
+                    background:
+                      "color-mix(in srgb, var(--status-en-curso) 8%, transparent)",
+                  }}
+                >
+                  <p className="text-xs font-semibold text-ink">
+                    El agente está planificando…
+                  </p>
+                  <p className="mt-1 text-[11px] text-mute">
+                    Corre en modo de solo lectura: no ejecuta ni modifica nada.
+                    Al terminar verás su plan acá (pasos + detalle) para aprobar
+                    o pedir cambios antes de que toque una sola línea.
+                  </p>
+                </div>
+              )}
+
+              {/* Modo plan: aprobar el plan o pedir cambios (replanifica) */}
+              {canReviewPlan && (
+                <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
+                  <p className="text-xs font-semibold text-ink">
+                    Plan esperando tu OK
+                  </p>
+                  {planRun?.plan && planRun.plan.length > 0 && (
+                    <ol className="mt-2 space-y-1">
+                      {planRun.plan.map((p, i) => (
+                        <li
+                          key={i}
+                          className="flex items-baseline gap-1.5 text-xs text-ink"
+                        >
+                          <span className="shrink-0 font-mono text-[10px] text-faint">
+                            {i + 1}.
+                          </span>
+                          <span className="min-w-0">{p}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                  {planRun?.planDetail && (
+                    <div className="mt-3 border-t border-line pt-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-faint">
+                        Detalle de lo que va a hacer
+                      </p>
+                      <p className="mt-1 whitespace-pre-wrap text-xs leading-relaxed text-mute">
+                        {planRun.planDetail}
+                      </p>
+                    </div>
+                  )}
+                  {!planRun?.plan && !planRun?.planDetail && (
+                    <p className="mt-2 text-[11px] text-mute">
+                      El plan todavía no llegó — espera un momento y reabre.
+                    </p>
+                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      disabled={acting}
+                      onClick={() =>
+                        act(
+                          () =>
+                            approvePlan({
+                              sessionToken: token!,
+                              taskId: task._id,
+                            }),
+                          "Plan aprobado: la tarea pasa a ejecución",
+                        )
+                      }
+                      className="btn-primary inline-flex items-center gap-1.5 text-xs"
+                    >
+                      {acting ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Check className="h-3.5 w-3.5" />
+                      )}
+                      Aprobar y ejecutar
+                    </button>
+                    <button
+                      disabled={acting || !feedback.trim()}
+                      onClick={() =>
+                        act(
+                          () =>
+                            requestPlanChanges({
+                              sessionToken: token!,
+                              taskId: task._id,
+                              feedback: feedback.trim(),
+                            }),
+                          "Replanificando con tus indicaciones",
+                        )
+                      }
+                      className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+                    >
+                      <CornerDownRight className="h-3.5 w-3.5" />
+                      Replanificar con estos cambios
+                    </button>
+                  </div>
+                  <input
+                    value={feedback}
+                    onChange={(e) => setFeedback(e.target.value)}
+                    placeholder="Qué cambiar del plan (obligatorio para replanificar)…"
+                    className="input mt-2 text-xs"
+                  />
+                  <p className="mt-1.5 text-[10px] text-faint">
+                    Al aprobar, la ejecución retoma esta misma sesión (conserva
+                    lo que ya exploró). Replanificar no ejecuta nada: solo rehace
+                    el plan con tus indicaciones.
+                  </p>
+                </div>
+              )}
+
               {/* Aprobar / rechazar lo que quedó para revisión */}
               {canReview && (
                 <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
@@ -695,10 +847,16 @@ export function AgentRunsPanel({
                 Eliminar tarea
               </button>
 
-              {/* Artefactos: carpeta/reporte abribles desde el PC */}
+              {/* Artefactos: carpeta/reporte abribles desde el PC. Con la
+                  tarea EN VIVO (t): la sesión se bindea a mitad de corrida y
+                  con el snapshot el botón de chat no aparecía. */}
               <ArtifactsBlock
-                task={task}
+                task={t}
                 plan={runs.find((r) => r.plan && r.plan.length > 0)?.plan}
+                session={
+                  t.agentSessionId ??
+                  runs.find((r) => r.sessionId)?.sessionId
+                }
               />
 
               {/* Timeline de corridas */}
@@ -778,7 +936,7 @@ export function AgentRunsPanel({
                     )}
                     {/* Checklist de pasos + actividad en vivo */}
                     <div className="mt-1.5">
-                      <StepList run={run} />
+                      <StepList run={run} taskDone={taskDone} />
                     </div>
                     {run.followUp && (
                       <p className="mt-1 text-[11px] text-mute">

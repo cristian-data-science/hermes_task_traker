@@ -386,6 +386,8 @@
     welcome: null,
     observer: false, // corrida del dispatcher activa: solo se mira
     exec: false, // modo ejecución (riendas): el agente puede ejecutar de verdad
+    sessionPending: false, // abierto antes de que el agente registre su sesión
+    pendingBanner: null,
     lastHistAgentBody: null, // body del último turno agent del historial (para agrupar append)
   };
   const SIDE_KEY = "zchat-side";
@@ -569,7 +571,8 @@
     }
     const msgs = h.messages || [];
     if (!msgs.length) {
-      showWelcome();
+      // Sesión pendiente: el banner de espera ya explica; sin welcome.
+      if (!h.pending) showWelcome();
       return;
     }
     thread.append(
@@ -858,6 +861,11 @@
     });
     on("tracker", (d) => renderTracker(d.tracker));
     on("observer", (d) => setObserver(!!d.observer));
+    on("session", () => {
+      // La sesión pendiente llegó: fuera el banner y a cargar el historial.
+      setSessionPending(false);
+      loadHistory();
+    });
     on("mode", (d) => setExec(!!d.exec, { silent: true }));
     on("history_append", (d) => appendHistoryMessages(d.messages));
     es.addEventListener("resync", () => resync());
@@ -882,6 +890,7 @@
         connectSSE(st.seq || 0);
       }
       setObserver(!!st.observer);
+      setSessionPending(st.sessionReady === false);
       setExec(!!st.exec, { silent: true });
     } catch (e) {
       setConn(false);
@@ -944,6 +953,39 @@
   }
 
   // ---------- modo observador / modo ejecución ----------
+  /** Sesión pendiente: el chat abrió antes de que el agente arranque su sesión. */
+  function setSessionPending(on) {
+    if (S.sessionPending === on) return;
+    S.sessionPending = on;
+    if (on) {
+      if (S.welcome) {
+        S.welcome.remove();
+        S.welcome = null;
+      }
+      S.pendingBanner = el("div", {
+        class: "divider",
+        text: "⏳ esperando a que el agente arranque su sesión — el razonamiento aparece acá solo (suele tardar segundos)",
+      });
+      thread.append(S.pendingBanner);
+      q.disabled = true;
+      sendBtn.disabled = true;
+      q.placeholder = "El agente está arrancando…";
+      stick(true);
+    } else {
+      if (S.pendingBanner) {
+        S.pendingBanner.remove();
+        S.pendingBanner = null;
+      }
+      // El composer vuelve a habilitarlo setObserver/off (según la corrida).
+      if (!S.observer) {
+        q.disabled = false;
+        sendBtn.disabled = !q.value.trim();
+        q.placeholder = S.exec
+          ? "Pide lo que quieras — se ejecuta de verdad (modo ejecución)…"
+          : "Pregúntale al agente… (Enter envía · Shift+Enter salto de línea)";
+      }
+    }
+  }
   function setObserver(on) {
     if (S.observer === on) return;
     S.observer = on;
@@ -1357,6 +1399,7 @@
     S.info = st.info;
     S.seq = st.seq || 0;
     renderTracker(st.tracker);
+    setSessionPending(st.sessionReady === false);
     setExec(!!(st.exec ?? st.info?.exec), { silent: true });
     setObserver(!!st.observer);
     await loadHistory();

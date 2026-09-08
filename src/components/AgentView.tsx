@@ -201,6 +201,30 @@ function AgentCard({
           </div>
         )}
 
+        {state === "planificando" && (
+          <div className="flex items-center gap-2 rounded-el bg-panel px-2.5 py-2 text-xs text-mute">
+            <CircleDot className="h-3.5 w-3.5 shrink-0 text-faint" />
+            <span>
+              Armando el plan (modo solo lectura: no toca nada todavía)…
+            </span>
+          </div>
+        )}
+
+        {state === "plan-para-aprobar" && (
+          <div
+            className="rounded-el px-2.5 py-2 text-xs"
+            style={{
+              background:
+                "color-mix(in srgb, var(--status-standby) 10%, transparent)",
+            }}
+          >
+            <p className="line-clamp-2 font-medium text-ink">
+              Plan listo — revísalo (pasos + detalle) y apruébalo para que
+              ejecute, o pídele cambios.
+            </p>
+          </div>
+        )}
+
         {state === "pregunta" && task.agentQuestion && (
           <div
             className="rounded-el px-2.5 py-2 text-xs"
@@ -261,7 +285,7 @@ function AgentCard({
           </a>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {state === "para-revision" && (
+          {(state === "para-revision" || state === "plan-para-aprobar") && (
             <span
               role="button"
               tabIndex={0}
@@ -277,7 +301,8 @@ function AgentCard({
               }}
               className="btn-primary inline-flex items-center gap-1 px-2 py-1 text-[11px]"
             >
-              <Check className="h-3 w-3" /> Aprobar
+              <Check className="h-3 w-3" />
+              {state === "plan-para-aprobar" ? "Aprobar plan" : "Aprobar"}
             </span>
           )}
           <span className="inline-flex items-center gap-1 text-[10px] font-medium text-faint">
@@ -741,6 +766,7 @@ export function AgentView() {
   const removeWorkspace = useMutation(api.agent.removeWorkspace);
   const addWorkspace = useMutation(api.agent.addWorkspace);
   const reviewResult = useMutation(api.agent.reviewResult);
+  const approvePlan = useMutation(api.agent.approvePlan);
   const [panelTask, setPanelTask] = useState<OverviewTask | null>(null);
 
   // Sembrar carpetas la primera vez (idempotente; trae las 26 de mcp_servers
@@ -752,8 +778,13 @@ export function AgentView() {
 
   async function quickApprove(t: OverviewTask) {
     try {
-      await reviewResult({ sessionToken: token!, taskId: t._id, approve: true });
-      toast.success("Aprobada: tarea completada");
+      if (t.agentState === "plan-para-aprobar") {
+        await approvePlan({ sessionToken: token!, taskId: t._id });
+        toast.success("Plan aprobado: la tarea pasa a ejecución");
+      } else {
+        await reviewResult({ sessionToken: token!, taskId: t._id, approve: true });
+        toast.success("Aprobada: tarea completada");
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "No se pudo aprobar");
     }

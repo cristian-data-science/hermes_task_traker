@@ -37,7 +37,13 @@ import {
 } from "./config.mjs";
 import { getToken, q, m } from "./auth.mjs";
 import { restoreOrphanSwap } from "./models.mjs";
-import { buildPrompt, buildRedirectPrompt } from "./prompts.mjs";
+import {
+  buildPrompt,
+  buildRedirectPrompt,
+  buildPlanPrompt,
+  parsePlanBlock,
+  parsePlanQuestion,
+} from "./prompts.mjs";
 import { notifyAgent } from "./notify.mjs";
 import { adapterFor } from "./agents/index.mjs";
 
@@ -232,19 +238,33 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     }).catch(() => {});
   }
 
-  const prompt = buildPrompt({
-    task,
-    workspacePath: folder,
-    runId,
-    followUp,
-    resumed: !!task.agentSessionId,
-    contract,
-    agentLabel: adapter.label,
-  });
+  // Modo plan: sin plan aprobado, esta corrida es la FASE DE PLANIFICACIÓN —
+  // se lanza con --mode plan (solo lectura REAL del CLI) y el plan se cosecha
+  // del stdout al terminar (el agente no puede llamar a report.mjs ahí).
+  const planning = task.planMode === true && task.planApproved !== true;
+
+  const prompt = planning
+    ? buildPlanPrompt({
+        task,
+        workspacePath: folder,
+        runId,
+        followUp,
+        contract,
+        agentLabel: adapter.label,
+      })
+    : buildPrompt({
+        task,
+        workspacePath: folder,
+        runId,
+        followUp,
+        resumed: !!task.agentSessionId,
+        contract,
+        agentLabel: adapter.label,
+      });
   const needsSwap = adapter.needsSwap(run.effectiveModel, defaultModel);
 
   log(
-    `▶ despachando "${task.title}" [${adapter.label} · ${task.taskType}/${task.autonomy}/${run.effectiveModel.split("/").pop() || "default"}] → ${folder}` +
+    `▶ despachando "${task.title}" [${adapter.label} · ${task.taskType}/${task.autonomy}/${run.effectiveModel.split("/").pop() || "default"}${planning ? " · MODO PLAN" : ""}] → ${folder}` +
       (activeRuns.size > 1 ? ` (paralela, ${activeRuns.size} activas)` : ""),
   );
 
@@ -287,6 +307,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
         autonomy: task.autonomy,
         model: task.model,
         env: childEnv,
+        mode: planning ? "plan" : undefined,
       });
       const child = spawn(spec.exe, spec.args, spec.options);
       run.kill = () => child.kill();
@@ -357,6 +378,62 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
       break;
     }
 
+    // ===== FASE DE PLANIFICACIÓN: cosechar el plan y esperarlo en la app =====
+    // El agente en --mode plan no puede reportar (no ejecuta comandos): el
+    // plan viaja en su respuesta final y lo entrega el puente (submitPlan).
+    if (planning) {
+      const sessionId = adapter.extractSessionId(run, res.stdout);
+      if (sessionId) {
+        await m("agent:bindSession", { taskId, sessionId, runId }).catch(() => {});
+      }
+      const response = adapter.extractResponse(res.stdout);
+      const parsed = parsePlanBlock(response);
+      let submitted = false;
+      if (parsed && (parsed.steps.length > 0 || parsed.detail)) {
+        try {
+          await m("agent:submitPlan", {
+            sessionToken: _tokenForChild,
+            taskId,
+            runId,
+            steps: parsed.steps,
+            detail: parsed.detail || undefined,
+          });
+          submitted = true;
+        } catch (e) {
+          log(`submitPlan ${taskId} falló: ${e.message}`);
+        }
+      }
+      if (submitted) {
+        log(
+          `📋 plan listo para "${task.title}" (${parsed.steps.length} pasos) — esperando OK de Cris`,
+        );
+        notifyAgent(notifyMode, "planListo", {
+          title: task.title,
+          executor: task.executor,
+          plan: parsed.steps,
+        }).catch(() => {});
+      } else {
+        // Sin plan utilizable: ¿pregunta de Cris o corrida fallida?
+        const question =
+          res.code === 0 ? parsePlanQuestion(response) : null;
+        await m("agent:agentReport", {
+          taskId,
+          runId,
+          state: question ? "pregunta" : "error",
+          ...(question
+            ? { question: question.slice(0, 2000) }
+            : {
+                error: "la fase de planificación no devolvió un plan utilizable",
+                summary: response ? response.slice(0, 500) : undefined,
+              }),
+          exitCode: res.code,
+          watchdog: true,
+        }).catch((e) => log("report planificación falló:", e.message));
+      }
+      log(`✔ planificación ${runId} terminada (exit ${res.code})`);
+      return;
+    }
+
     // 5) Vincular sesión + watchdog si el agente no reportó.
     const sessionId = adapter.extractSessionId(run, res.stdout);
     if (sessionId) {
@@ -365,7 +442,10 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     const runs = await q("agent:runsByTask", { taskId }).catch(() => []);
     const open = (runs || []).some(
       (r) =>
-        r.state === "despachada" || r.state === "trabajando" || r.state === "pregunta",
+        r.state === "planificando" ||
+        r.state === "despachada" ||
+        r.state === "trabajando" ||
+        r.state === "pregunta",
     );
     if (open) {
       const response = adapter.extractResponse(res.stdout);

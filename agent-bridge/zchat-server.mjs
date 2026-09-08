@@ -2,9 +2,15 @@
 /**
  * zchat-server — chat WEB local con la sesión del agente de una tarea (v4).
  *
- *   node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState] [taskId] [theme] [agent]
+ *   node zchat-server.mjs <sessionId|-> <workspacePath> [planB64] [status] [agentState] [taskId] [theme] [agent]
  *   (un "-" en cualquier posicional equivale a vacío; así el .vbs puede pasar
  *   los argumentos siempre en el mismo orden; agent: zcode|claude, default zcode)
+ *
+ *   Con sessionId vacío ("-") y taskId válido arranca en SESIÓN PENDIENTE:
+ *   el botón del tracker se abre antes de que el agente registre su sesión y
+ *   el server la adopta apenas Convex reporta agentSessionId (o el sessionId
+ *   de la corrida más reciente). Mientras tanto /history es vacío, /ask
+ *   responde 409 pendingSession y la UI muestra la espera.
  *
  * Servidor en 127.0.0.1 (puerto 43110+) que sirve la UI de agent-bridge/zchat-ui
  * y expone:
@@ -77,9 +83,14 @@ const log = (m) => {
 
 // ---- Argumentos ----
 const argv = process.argv.slice(2).map((a) => (a === "-" ? "" : a));
-const [sessionId, workspacePath, planB64 = "", statusArg = "", stateArg = "", taskIdArg = "", themeArg = "", agentArg = ""] = argv;
-if (!sessionId || !workspacePath) {
-  console.error("uso: node zchat-server.mjs <sessionId> <workspacePath> [planB64] [status] [agentState] [taskId] [theme] [agent]");
+let [sessionId, workspacePath, planB64 = "", statusArg = "", stateArg = "", taskIdArg = "", themeArg = "", agentArg = ""] = argv;
+// Sesión PENDIENTE: el botón del panel puede abrir el chat ANTES de que el
+// agente registre su sesión (ZCode la crea al arrancar el proceso). Con taskId
+// válido el server espera la sesión por Convex (agentSessionId de la tarea o
+// sessionId de la corrida más reciente) y la adopta apenas aparece.
+const sessionPending = !sessionId;
+if (!workspacePath || (!sessionId && !taskIdArg)) {
+  console.error("uso: node zchat-server.mjs <sessionId|-> <workspacePath> [planB64] [status] [agentState] [taskId] [theme] [agent]");
   process.exit(1);
 }
 const AGENT = agentArg === "claude" ? "claude" : "zcode";
@@ -127,10 +138,33 @@ function safeQuery(fn, fallback) {
   }
 }
 
-const sessionTitle =
+let sessionTitle =
   AGENT === "claude"
     ? "" // Claude no titula sesiones; la UI muestra la tarea del tracker.
-    : safeQuery((d) => d.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title, "") ?? "";
+    : sessionId
+      ? safeQuery((d) => d.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title, "") ?? ""
+      : "";
+
+/**
+ * Adopción de la sesión pendiente: cuando Convex reporta el agentSessionId
+ * (la tarea lo obtiene apenas ZCode registra la sesión), el chat pasa a esa
+ * sesión: refresca título, re-seedea el modo observador y avisa a la UI.
+ */
+function adoptSession(id) {
+  if (!id || sessionId === id) return;
+  sessionId = id;
+  if (AGENT !== "claude") {
+    sessionTitle =
+      safeQuery((d) => d.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title, "") ?? "";
+  }
+  log(`sesión adoptada (esperada por Convex): ${sessionId}`);
+  emit("session", { session: sessionId, title: sessionTitle });
+  emit("notice", {
+    level: "info",
+    text: "La sesión del agente ya está disponible: historial cargado.",
+  });
+  if (observer) seedHistoryIds();
+}
 
 // Prefijos que este chat agrega a cada pregunta (se limpian al mostrar).
 const ASK_PREFIX = "Consulta de Cris sobre el trabajo ya entregado (solo responde; no ejecutes cambios): ";
@@ -224,6 +258,8 @@ function addTokens(acc, t) {
 
 /** Conversación completa estructurada (últimos `limit` mensajes visibles). */
 function readHistory(limit = 80) {
+  // Sesión todavía no adoptada: historial vacío (la UI muestra la espera).
+  if (!sessionId) return { total: 0, messages: [], pending: true };
   if (AGENT === "claude") return readClaudeHistory(limit);
   return safeQuery(
     (d) => {
@@ -577,6 +613,14 @@ async function startTracker() {
       clearTimeout(timer);
       timer = setTimeout(() => {
         if (task === undefined || runs === undefined) return;
+        // Sesión pendiente: adoptar apenas Convex la reporte (tarea o corrida).
+        if (!sessionId) {
+          const fromRun = [...(runs ?? [])]
+            .filter((r) => r.sessionId)
+            .sort((a, b) => b.startedAt - a.startedAt)[0]?.sessionId;
+          adoptSession(task?.agentSessionId || fromRun || "");
+          if (!sessionId) return; // sigue sin sesión: nada que mostrar aún
+        }
         tracker = computeTracker(task, runs);
         emit("tracker", { tracker });
         // ¿Hay una corrida del dispatcher ABIERTA sobre esta tarea? → el chat
@@ -1657,7 +1701,7 @@ async function handler(req, res) {
       if (p === "/info") return json(res, 200, info(listeningPort));
       if (p === "/history") return json(res, 200, readHistory());
       if (p === "/state") {
-        return json(res, 200, { info: info(listeningPort), tracker, turn: snapshotTurn(turn), seq, observer, exec: execMode, now: Date.now() });
+        return json(res, 200, { info: info(listeningPort), tracker, turn: snapshotTurn(turn), seq, observer, exec: execMode, sessionReady: !!sessionId, now: Date.now() });
       }
       if (p === "/events") {
         res.writeHead(200, {
@@ -1690,6 +1734,14 @@ async function handler(req, res) {
       if (p === "/ask") {
         if (turn && turn.status === "running") {
           return json(res, 409, { error: "Ya hay una respuesta en curso. Esperá a que termine o detenela.", turnId: turn.id });
+        }
+        // Sesión pendiente: todavía no hay sesión a la que preguntar.
+        if (!sessionId) {
+          return json(res, 409, {
+            error:
+              "El agente todavía no arrancó su sesión (acaba de despacharse). Espera unos segundos: el historial aparece solo en cuanto arranca.",
+            pendingSession: true,
+          });
         }
         // Modo observador: la corrida del dispatcher está activa sobre esta
         // sesión; dos procesos se pisarían. Se puede MIRAR, no preguntar.
@@ -1783,7 +1835,7 @@ function openBrowser(url) {
   }
 }
 
-/** ¿Ya hay un zchat-server para ESTA sesión? Devuelve su puerto o null. */
+/** ¿Ya hay un zchat-server para ESTA sesión (o tarea, si la sesión espera)? */
 async function findExisting() {
   for (let port = PORT_BASE; port < PORT_BASE + PORT_SPAN; port++) {
     const ctl = new AbortController();
@@ -1792,7 +1844,10 @@ async function findExisting() {
       const r = await fetch(`http://127.0.0.1:${port}/info`, { signal: ctl.signal });
       if (!r.ok) continue;
       const j = await r.json();
-      if (j?.app === "zchat" && j.session === sessionId) return port;
+      if (j?.app !== "zchat") continue;
+      if (sessionId && j.session === sessionId) return port;
+      // Sesión pendiente: matchear por tarea (mismo chat de la misma tarea).
+      if (!sessionId && taskId && j.task === taskId) return port;
     } catch {
       // puerto libre o no es nuestro
     } finally {

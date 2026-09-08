@@ -302,6 +302,8 @@ export function TaskModal({
                   ? agentCfg.gitStrategy
                   : undefined,
               notifyWhatsapp: agentCfg.notifyWhatsapp,
+              // Modo plan: planifica primero (solo lectura) y espera tu OK.
+              planMode: agentCfg.planMode,
             }
           : {}),
       };

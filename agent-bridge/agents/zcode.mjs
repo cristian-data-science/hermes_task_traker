@@ -178,8 +178,10 @@ export const zcodeAdapter = {
   exe: process.execPath,
 
   /** Spawn: node <zcode.cjs> -p <prompt> [--resume sess] --cwd ... --mode yolo --json */
-  buildSpawn({ prompt, sessionId, folder, autonomy, model, env }) {
-    const mode = AUTONOMY_MODE[autonomy] ?? "yolo";
+  buildSpawn({ prompt, sessionId, folder, autonomy, model, env, mode }) {
+    // `mode` explícito pisa el mapeo de autonomía: la fase de PLANIFICACIÓN
+    // (modo plan de la tarea) corre con "plan" — solo lectura real del CLI.
+    const effectiveMode = mode ?? AUTONOMY_MODE[autonomy] ?? "yolo";
     return {
       exe: process.execPath,
       args: [
@@ -190,7 +192,7 @@ export const zcodeAdapter = {
         "--cwd",
         folder,
         "--mode",
-        mode,
+        effectiveMode,
         "--json",
       ],
       options: { env, windowsHide: true },

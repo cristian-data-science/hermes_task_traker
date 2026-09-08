@@ -13,6 +13,8 @@ import {
   BrainCircuit,
   Circle,
   CircleDot,
+  Rocket,
+  Compass,
 } from "lucide-react";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
@@ -44,6 +46,8 @@ export interface AgentConfig {
   /** Estrategia Git (solo desarrollo): rama-pr default | main-directo. */
   gitStrategy: GitStrategy;
   notifyWhatsapp: NotifyMode;
+  /** Modo plan: primero planifica (solo lectura) y espera tu OK antes de ejecutar. */
+  planMode: boolean;
 }
 
 export const EMPTY_AGENT_CONFIG: AgentConfig = {
@@ -53,6 +57,7 @@ export const EMPTY_AGENT_CONFIG: AgentConfig = {
   model: "",
   gitStrategy: "rama-pr",
   notifyWhatsapp: "off",
+  planMode: false,
 };
 
 export function agentConfigFromTask(t: {
@@ -62,6 +67,7 @@ export function agentConfigFromTask(t: {
   model?: string;
   gitStrategy?: string;
   notifyWhatsapp?: string;
+  planMode?: boolean;
 }): AgentConfig {
   return {
     taskType: (TASK_TYPES as readonly string[]).includes(t.taskType ?? "")
@@ -76,6 +82,7 @@ export function agentConfigFromTask(t: {
     notifyWhatsapp: (NOTIFY_MODES as readonly string[]).includes(t.notifyWhatsapp ?? "")
       ? (t.notifyWhatsapp as NotifyMode)
       : "off",
+    planMode: t.planMode === true,
   };
 }
 
@@ -271,6 +278,52 @@ export function AgentDelegationSection({
             </button>
           );
         })}
+      </div>
+
+      {/* Modo plan: planifica primero y espera tu OK antes de ejecutar */}
+      <label className="label">Modo de ejecución</label>
+      <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => onChange({ ...value, planMode: false })}
+          className={cn(
+            "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
+            !value.planMode
+              ? cn(accent.border, accent.bg)
+              : "border-line hover:bg-panel2",
+          )}
+        >
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+            <Rocket
+              className={cn("h-3.5 w-3.5", !value.planMode && accent.text)}
+            />
+            Directo
+          </span>
+          <span className="text-[10px] leading-snug text-mute">
+            Planifica y ejecuta de una: revisas el resultado al final.
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onChange({ ...value, planMode: true })}
+          className={cn(
+            "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
+            value.planMode
+              ? cn(accent.border, accent.bg)
+              : "border-line hover:bg-panel2",
+          )}
+        >
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+            <Compass
+              className={cn("h-3.5 w-3.5", value.planMode && accent.text)}
+            />
+            Modo plan
+          </span>
+          <span className="text-[10px] leading-snug text-mute">
+            Primero planifica (solo lectura) y espera tu OK: apruebas el plan o
+            pides cambios antes de que ejecute.
+          </span>
+        </button>
       </div>
 
       {/* Estrategia de Git: desarrollo y ops. Elección explícita de Cris —
