@@ -273,10 +273,10 @@ export function AgentDelegationSection({
         })}
       </div>
 
-      {/* Estrategia de Git: SOLO desarrollo. Elección explícita de Cris —
+      {/* Estrategia de Git: desarrollo y ops. Elección explícita de Cris —
           rama+PR (default) o directo a main (excepción que viaja en el
           contrato del despacho). */}
-      {value.taskType === "desarrollo" && (
+      {(value.taskType === "desarrollo" || value.taskType === "ops") && (
         <>
           <label className="label">Estrategia de Git</label>
           <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">

@@ -114,14 +114,15 @@ export function buildPrompt(input) {
   lines.push(`\n${AUTONOMY_RULES[task.autonomy] ?? AUTONOMY_RULES.supervisado}`);
   lines.push(`\n${recipe}`);
 
-  // Excepción de estrategia Git elegida por Cris al crear la tarea: pisa la
-  // regla de oro de ramas y la receta de desarrollo SOLO para esta tarea.
+  // Excepción de estrategia Git elegida por Cris al crear la tarea (desarrollo
+  // u ops sobre un repo): pisa la regla de oro de ramas y la receta de
+  // desarrollo SOLO para esta tarea.
   if (task.gitStrategy === "main-directo") {
     lines.push(
       "\n=== ESTRATEGIA GIT: DIRECTO A MAIN (excepción explícita elegida por Cris al crear la tarea) ===",
     );
     lines.push(
-      "Esta tarea PISA la regla de oro de ramas y la receta de desarrollo: NO trabajes en rama propia ni abras pull request.",
+      "Esta tarea PISA la regla de oro de ramas y la receta de tu tipo de tarea en lo que haga al flujo git: NO trabajes en rama propia ni abras pull request.",
     );
     lines.push("- Commitea DIRECTO en master/main, commits chicos y descriptivos.");
     lines.push(
