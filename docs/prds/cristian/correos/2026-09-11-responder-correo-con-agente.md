@@ -184,6 +184,16 @@ cubren el caso "el contexto de ESTE correo está acá".
 
 ## 8. Riesgos y notas
 
+- **AMPLIACIÓN (2026-09-11, voz y fidelidad)**: `agent-bridge/guia-correo-cris.md`
+  — la voz de Cris (apertura, cierre "Saludos!/Cris.", párrafos cortos,
+  respuesta-antes-que-motivo, cómo decir no, idioma por destinatario) que el
+  dispatcher inyecta fresca en cada despacho de correo. Regla de ORO en el
+  prompt: responder ÚNICAMENTE lo que la indicación de Cris autoriza; temas
+  no autorizados del correo se ignoran por completo (caso real que la motivó:
+  "API Follow Up" — el agente respondió por su cuenta el tema Valdivia con
+  un compromiso que Cris nunca hizo). Auto-chequeo de fidelidad + formato
+  antes de entregar el borrador.
+
 - **AMPLIACIÓN (2026-09-11, telemetría de punta a punta)**: tras un caso
   real donde la tarea esperó en cola con el chat mudo (WebSocket del puente
   caído por horas: la red local fallaba hacia Convex), se instrumentó la

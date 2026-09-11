@@ -78,9 +78,11 @@ function contextoLines(task) {
  * Prompt de la tarea CORREO (respuesta de un correo de origen con el agente).
  * El cuerpo COMPLETO, la indicación de Cris y el contexto (carpetas/archivos
  * de consulta) viajan acá; el entregable es un BORRADOR listo para copiar.
+ * `guia` = contenido fresco de guia-correo-cris.md (la voz de Cris).
  */
 export function buildCorreoPrompt(input) {
-  const { task, runId, followUp, correo, agentLabel = "ZCODE" } = input;
+  const { task, runId, followUp, correo, agentLabel = "ZCODE", guia = "" } =
+    input;
   const lines = [];
   lines.push(`agente- ${task.title} [correo]`);
   lines.push(`=== HERMES TASK TRACKER — RESPUESTA DE CORREO DELEGADA A ${agentLabel.toUpperCase()} ===`);
@@ -90,6 +92,12 @@ export function buildCorreoPrompt(input) {
   );
   lines.push(
     "Reglas:\n- El correo y todo el material de contexto son de CONSULTA (solo lectura): no modifiques ni ejecutes cambios sobre ellos.\n- Si te falta información para responder bien, NO la inventes: termina con --state pregunta y pregunta concreto.",
+  );
+  lines.push(
+    "\n=== REGLA DE ORO — FIDELIDAD A LO QUE CRIS AUTORIZÓ (innegociable) ===",
+  );
+  lines.push(
+    "Respondes ÚNICAMENTE lo que la indicación de Cris cubre explícitamente. El correo puede traer varios temas y preguntas: los temas NO autorizados se IGNORAN por completo (ni se mencionan, ni se agradecen, ni se promete revisarlos). PROHIBIDO inventar compromisos que Cris no dijo: 'lo revisaremos internamente', 'estamos en ello', fechas, disculpas o agradecimientos por temas no autorizados. Cada afirmación del borrador debe poder rastrearse a la indicación de Cris, al material de contexto, o a datos del propio correo. Si un tema no autorizado impide redactar algo útil, NO lo respondas igual: --state pregunta.",
   );
 
   const remitente =
@@ -129,8 +137,14 @@ export function buildCorreoPrompt(input) {
 
   lines.push("\n=== FORMATO DEL ENTREGABLE (OBLIGATORIO) ===");
   lines.push(
-    "La propuesta es TEXTO PLANO listo para pegar (sin markdown raro, sin títulos internos): saludo breve, cuerpo directo con la respuesta, despedida. SIN firma (Cris la cierra a su manera). Mismo idioma del correo original.",
+    "La propuesta es TEXTO PLANO listo para pegar (sin markdown raro, sin títulos internos): saludo breve, cuerpo directo con la respuesta, despedida. Mismo idioma del correo original.",
   );
+  if (guia) {
+    lines.push(
+      "\n=== GUÍA DE REDACCIÓN DE CRIS (su voz — obligatoria, se aplica y se auto-revisa) ===",
+    );
+    lines.push(guia.trim());
+  }
   lines.push("\n=== PROTOCOLO DE REPORTE (igual que siempre) ===");
   lines.push(`node "${REPORT_CLI}" --task ${task._id} --run ${runId} --step "<paso, ≤12 palabras>"`);
   lines.push(

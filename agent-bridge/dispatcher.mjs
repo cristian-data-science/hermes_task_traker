@@ -208,6 +208,17 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     ? await q("correos:correoDeTarea", { taskId }).catch(() => null)
     : null;
 
+  // Guía de redacción de Cris (su voz + regla de fidelidad): fresca en cada
+  // despacho, así editarla aplica sin reiniciar el puente.
+  let guiaCris = "";
+  if (task.taskType === "correo") {
+    try {
+      guiaCris = readFileSync(path.join(BRIDGE_DIR, "guia-correo-cris.md"), "utf8");
+    } catch {
+      // sin guía: la regla de fidelidad sigue vigente (va en el prompt)
+    }
+  }
+
   // 1) Carpeta en disco: sin carpeta el agente no sabe dónde trabajar →
   //    pregunta (no error): Cris elige la carpeta en la app y re-encola.
   if (!folder || !existsSync(folder)) {
@@ -278,6 +289,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
           runId,
           followUp,
           correo,
+          guia: guiaCris,
           agentLabel: adapter.label,
         })
       : buildPrompt({
