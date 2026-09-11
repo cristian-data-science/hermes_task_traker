@@ -184,6 +184,16 @@ cubren el caso "el contexto de ESTE correo está acá".
 
 ## 8. Riesgos y notas
 
+- **AMPLIACIÓN (2026-09-11, telemetría de punta a punta)**: tras un caso
+  real donde la tarea esperó en cola con el chat mudo (WebSocket del puente
+  caído por horas: la red local fallaba hacia Convex), se instrumentó la
+  cadena: `tasks.agentQueuedAt` (cuándo se encoló), fases en la corrida
+  (`spawn` = proceso arriba, `session` = sesión bindeada),
+  `firstActivityAt` (primera actividad), y una línea ⏱ por corrida en el
+  panel (en cola · proceso · sesión · 1ª actividad · total). Además, el
+  dispatcher relee la cola por HTTP cada 2 min (pump idempotente) para que
+  una suscripción muerta en silencio no deje tareas varadas.
+
 - **AMPLIACIÓN (2026-09-11, borrado en cascada)**: al eliminar una tarea de
   origen correo se borra TAMBIÉN físicamente su fila en `correos`
   (softDeleteTask). Antes quedaba huérfana para siempre. El original sigue

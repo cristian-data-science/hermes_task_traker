@@ -507,6 +507,8 @@ export const update = mutation({
       // Asignación nueva (o re-delegación tras cancelar): vuelve a la cola.
       if (task.agentState === undefined || task.agentState === "cancelada") {
         asPatch.agentState = "encolada";
+        // Telemetría: cuándo entró a la cola.
+        asPatch.agentQueuedAt = now;
         // El ciclo del plan arranca de cero en una re-delegación.
         asPatch.planApproved = undefined;
       }

@@ -176,6 +176,50 @@ function ArtifactsBlock({
     </div>
   );
 }
+/** Duración legible para telemetría: "45s" / "2m 10s" / "1h 03m". */
+function fmtDur(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "–";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/**
+ * Telemetría de punta a punta de una corrida: cuánto esperó en cola (al
+ * puente), cuánto tardó el proceso en subir, la sesión en aparecer, la
+ * primera actividad del agente y el total. Justo para diagnosticar "mandé
+ * la tarea y no pasaba nada": cada tramo señala su responsable.
+ */
+function RunTiming({
+  run,
+  queuedAt,
+}: {
+  run: Doc<"agentRuns">;
+  queuedAt?: number;
+}) {
+  const spawnAt = run.phases?.find((p) => p.phase === "spawn")?.at;
+  const sessionAt = run.phases?.find((p) => p.phase === "session")?.at;
+  const bits: string[] = [];
+  if (queuedAt && run.startedAt - queuedAt > 1500)
+    bits.push(`en cola ${fmtDur(run.startedAt - queuedAt)}`);
+  if (spawnAt) bits.push(`proceso +${fmtDur(spawnAt - run.startedAt)}`);
+  if (sessionAt) bits.push(`sesión +${fmtDur(sessionAt - run.startedAt)}`);
+  if (run.firstActivityAt)
+    bits.push(`1ª actividad +${fmtDur(run.firstActivityAt - run.startedAt)}`);
+  if (run.endedAt) bits.push(`total ${fmtDur(run.endedAt - run.startedAt)}`);
+  if (bits.length === 0) return null;
+  return (
+    <p
+      className="mt-0.5 font-mono text-[10px] text-faint"
+      title="Telemetría de la corrida: espera en cola → arranque del proceso → sesión disponible → primera actividad → total"
+    >
+      ⏱ {bits.join(" · ")}
+    </p>
+  );
+}
+
 /** Plan declarado (roadmap) + checklist de pasos reales + actividad en vivo.
  *  `taskDone`: la tarea ya terminó (hecha/cancelada/completada) — una corrida
  *  "abierta" en una tarea terminada es un zombi (quedó así por un camino que
@@ -956,6 +1000,7 @@ export function AgentRunsPanel({
                         return label ? <span>{label}</span> : null;
                       })()}
                       {run.resumed && <span>· seguimiento</span>}
+                      <RunTiming run={run} queuedAt={t.agentQueuedAt} />
                       {run.sessionId && (
                         <span
                           className="inline-flex items-center gap-1"

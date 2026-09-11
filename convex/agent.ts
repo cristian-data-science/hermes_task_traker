@@ -227,6 +227,8 @@ export async function applyAgentState(
       completedAt:
         newStatus === "completado" ? (task.completedAt ?? now) : undefined,
       ...(newStatus === "completado" ? { progress: 100 } : {}),
+      // Telemetría: cuándo entró a la cola (delegación/re-despacho).
+      ...(newState === "encolada" ? { agentQueuedAt: now } : {}),
       updatedAt: now,
       ...extraTask,
     });
@@ -250,6 +252,8 @@ export async function applyAgentState(
   } else {
     await ctx.db.patch(task._id, {
       agentState: newState as Doc<"tasks">["agentState"],
+      // Telemetría: cuándo entró a la cola (delegación/re-despacho).
+      ...(newState === "encolada" ? { agentQueuedAt: now } : {}),
       updatedAt: now,
       ...extraTask,
     });
@@ -808,6 +812,8 @@ export const runActivity = mutation({
     await ctx.db.patch(runId, {
       lastActivity: activity.slice(0, 200),
       lastActivityAt: now,
+      // Telemetría: la PRIMERA actividad no se pisa (arranque de la corrida).
+      firstActivityAt: run.firstActivityAt ?? now,
       activityCount: (run.activityCount ?? 0) + 1,
       ...(stalled !== undefined ? { stalled } : {}),
       updatedAt: now,
@@ -1129,9 +1135,36 @@ export const bindSession = mutation({
     if (runId) {
       const run = await ctx.db.get(runId);
       if (run && !run.sessionId) {
-        await ctx.db.patch(runId, { sessionId, updatedAt: Date.now() });
+        // Telemetría: hito de sesión disponible (chat y contexto vivos).
+        const phases = [...(run.phases ?? []), { phase: "session", at: Date.now() }].slice(-12);
+        await ctx.db.patch(runId, { sessionId, phases, updatedAt: Date.now() });
       }
     }
+    return { ok: true };
+  },
+});
+
+/**
+ * Telemetría de fases de una corrida (la llama el puente): hitos como
+ * "spawn" (proceso del CLI arriba). Append con tope, sin duplicar la última.
+ */
+export const runPhase = mutation({
+  args: {
+    ...sessionArg,
+    taskId: v.id("tasks"),
+    runId: v.id("agentRuns"),
+    phase: v.string(),
+  },
+  handler: async (ctx, { sessionToken, taskId, runId, phase }) => {
+    await requireAuth(ctx, sessionToken);
+    const run = await ctx.db.get(runId);
+    if (!run || run.taskId !== taskId) throw new Error("Corrida no encontrada");
+    const phases = run.phases ?? [];
+    if (phases[phases.length - 1]?.phase === phase) return { ok: true };
+    await ctx.db.patch(runId, {
+      phases: [...phases, { phase: phase.slice(0, 40), at: Date.now() }].slice(-12),
+      updatedAt: Date.now(),
+    });
     return { ok: true };
   },
 });

@@ -485,6 +485,7 @@ export const responderCorreo = mutation({
       executor: "zcode",
       taskType: "correo",
       agentState: "encolada",
+      agentQueuedAt: now,
       agentFollowUp: texto.slice(0, 3000),
       contextPaths: {
         carpetas: carpetas ?? [],

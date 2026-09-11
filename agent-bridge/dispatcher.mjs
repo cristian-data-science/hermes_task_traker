@@ -338,6 +338,17 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
         mode: planning ? "plan" : undefined,
       });
       const child = spawn(spec.exe, spec.args, spec.options);
+      // Telemetría: hito de proceso arriba (desde acá corre el CLI; la
+      // distancia startedAt→spawn mide armado de prompt + swap de modelo).
+      if (!run.spawnReported) {
+        run.spawnReported = true;
+        m("agent:runPhase", {
+          sessionToken: _tokenForChild,
+          taskId,
+          runId,
+          phase: "spawn",
+        }).catch(() => {});
+      }
       run.kill = () => child.kill();
       run.childAlive = true;
       // ¿Quedó una redirección encolada mientras no había proceso vivo?
@@ -662,6 +673,15 @@ async function main() {
       pump().catch((e) => log("pump:", e.message));
     },
   );
+
+  // Red de respaldo contra una suscripción MUERTA en silencio (sufrido en
+  // producción: WebSocket caído por horas → tareas encoladas varadas aunque
+  // el puente siguiera "vivo"). El pump es idempotente (guards de
+  // activeRuns/reserving): cada 2 min relee la cola por HTTP pase lo que
+  // pase con la suscripción.
+  setInterval(() => {
+    pump().catch(() => {});
+  }, 2 * 60 * 1000);
 
   // Redirecciones en vivo: cada instrucción de Cris sobre una corrida activa
   // se entrega AL INSTANTE (interrumpir + retomar con --resume).

@@ -318,6 +318,12 @@ export default defineSchema({
     /** Pregunta abierta del agente a Cris (estado pregunta). */
     agentQuestion: v.optional(v.string()),
     /**
+     * Cuándo se encoló por última vez (delegación/re-despacho): telemetría
+     * de punta a punta — la UI lo compara con run.startedAt para mostrar
+     * cuánto esperó la tarea al puente (cola/concurrencio/conexión).
+     */
+    agentQueuedAt: v.optional(v.number()),
+    /**
      * Contexto pendiente para el PRÓXIMO despacho: la respuesta de Cris a una
      * pregunta, o el feedback al rechazar una revisión. El puente lo empaqueta
      * en el prompt de seguimiento (run.followUp) y lo limpia al despachar.
@@ -691,7 +697,15 @@ export default defineSchema({
      */
     lastActivity: v.optional(v.string()),
     lastActivityAt: v.optional(v.number()),
+    /** Momento de la PRIMERA actividad detectada (telemetría de arranque). */
+    firstActivityAt: v.optional(v.number()),
     activityCount: v.optional(v.number()),
+    /**
+     * Telemetría de fases: hitos con timestamp (spawn = proceso del CLI
+     * arriba; session = sesión bindeada). La UI arma la línea de tiempos:
+     * en cola → despachada → proceso → sesión → actividad → fin.
+     */
+    phases: v.optional(v.array(v.object({ phase: v.string(), at: v.number() }))),
     /** Marcada por el watchdog: la corrida lleva demasiado sin actividad. */
     stalled: v.optional(v.boolean()),
     /** Digest corto del prompt despachado (para auditar qué se le pidió). */
