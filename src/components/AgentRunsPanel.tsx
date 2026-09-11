@@ -3,7 +3,7 @@
  * resúmenes/evidencia, respuesta a preguntas, aprobación/rechazo y cancelación.
  * Se abre desde la tarjeta (web) o desde la vista Agente.
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -217,6 +217,127 @@ function RunTiming({
     >
       ⏱ {bits.join(" · ")}
     </p>
+  );
+}
+
+/** Inline markdown ligero del texto del agente: **negritas** y `código`. */
+function renderInlineMd(text: string, keyPrefix: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean);
+  return parts.map((part, i) => {
+    const key = `${keyPrefix}-${i}`;
+    if (part.startsWith("**") && part.endsWith("**"))
+      return (
+        <strong key={key} className="font-semibold text-ink">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    if (part.startsWith("`") && part.endsWith("`"))
+      return (
+        <code key={key} className="rounded-el bg-panel2 px-1 py-px font-mono text-[11px]">
+          {part.slice(1, -1)}
+        </code>
+      );
+    return <span key={key}>{part}</span>;
+  });
+}
+
+/**
+ * Texto del resultado del agente con markdown LIGERO (lo que producen sus
+ * conclusiones: encabezados ###, listas, negritas, código) renderizado con
+ * la tipografía de la app. Antes se volcaba crudo con pre-wrap y se veía
+ * desordenado, sin jerarquía y con "tamaños raros" (los # y ** a la vista).
+ */
+function SummaryText({ text }: { text: string }) {
+  const blocks: ReactNode[] = [];
+  let items: string[] = [];
+  let ordered = false;
+  let listId = 0;
+  const flush = () => {
+    if (!items.length) return;
+    const listItems = items;
+    items = [];
+    const List = ordered ? "ol" : "ul";
+    blocks.push(
+      <List
+        key={`l${listId++}`}
+        className={cn(
+          "mt-1 space-y-0.5 pl-4 text-xs leading-relaxed text-mute",
+          ordered ? "list-decimal" : "list-disc",
+        )}
+      >
+        {listItems.map((it, i) => (
+          <li key={i} className="pl-0.5 marker:text-faint">
+            {renderInlineMd(it, `li${listId}-${i}`)}
+          </li>
+        ))}
+      </List>,
+    );
+  };
+  text.split("\n").forEach((line, i) => {
+    const t = line.trim();
+    if (!t) {
+      flush();
+      return;
+    }
+    const h = t.match(/^#{1,6}\s+(.*)$/);
+    if (h) {
+      flush();
+      blocks.push(
+        <p
+          key={i}
+          className="label mb-1 mt-2.5 text-[10px] font-semibold uppercase tracking-wide text-faint first:mt-0"
+        >
+          {renderInlineMd(h[1], `h${i}`)}
+        </p>,
+      );
+      return;
+    }
+    const bullet = t.match(/^[-*•]\s+(.*)$/);
+    if (bullet) {
+      if (items.length === 0) ordered = false;
+      items.push(bullet[1]);
+      return;
+    }
+    const num = t.match(/^(\d+)[.)]\s+(.*)$/);
+    if (num) {
+      if (items.length === 0) ordered = true;
+      items.push(num[2]);
+      return;
+    }
+    flush();
+    blocks.push(
+      <p
+        key={i}
+        className="text-xs leading-relaxed text-mute [&:not(:first-child)]:mt-1.5"
+      >
+        {renderInlineMd(t, `p${i}`)}
+      </p>,
+    );
+  });
+  flush();
+  return <div className="min-w-0">{blocks}</div>;
+}
+
+/**
+ * Caja de resultado final de una corrida: la conclusión/entrega del agente
+ * claramente separada del checklist de pasos — label + icono + tipografía
+ * consistente con el design system (antes era un párrafo suelto sin marco).
+ */
+function SummaryBlock({
+  title,
+  text,
+}: {
+  title: string;
+  text: string;
+}) {
+  return (
+    <div className="mt-2 rounded-el border-el border-line bg-panel p-3">
+      <p className="label mb-1.5 flex items-center gap-1.5">
+        <FileText className="h-3.5 w-3.5" />
+        {title}
+      </p>
+      <SummaryText text={text} />
+    </div>
   );
 }
 
@@ -553,9 +674,9 @@ export function AgentRunsPanel({
               {state === "pregunta" && task.agentQuestion && (
                 <div className="mb-4 rounded-el border-el p-3" style={{ borderColor: "color-mix(in srgb, var(--status-urgente) 45%, transparent)", background: "color-mix(in srgb, var(--status-urgente) 8%, transparent)" }}>
                   <p className="text-xs font-semibold text-ink">El agente pregunta:</p>
-                  <p className="mt-1 whitespace-pre-wrap text-xs text-mute">
-                    {task.agentQuestion}
-                  </p>
+                  <div className="mt-1 text-xs text-mute">
+                    <SummaryText text={t.agentQuestion ?? ""} />
+                  </div>
                 </div>
               )}
 
@@ -839,9 +960,9 @@ export function AgentRunsPanel({
                       <p className="text-xs font-semibold text-ink">
                         Propuesta de respuesta
                       </p>
-                      <p className="mt-1.5 whitespace-pre-wrap rounded-el bg-panel p-2 text-xs leading-relaxed text-ink">
-                        {propuesta.summary}
-                      </p>
+                      <div className="mt-1.5 rounded-el border-el border-line bg-panel p-3">
+                        <SummaryText text={propuesta.summary ?? ""} />
+                      </div>
                       <button
                         onClick={() => {
                           void navigator.clipboard
@@ -1050,11 +1171,9 @@ export function AgentRunsPanel({
                         {run.followUp}
                       </p>
                     )}
-                    {run.summary && run.endedAt && (
-                      <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-ink">
-                        {run.summary}
-                      </p>
-                    )}
+                  {run.summary && run.endedAt && (
+                    <SummaryBlock title="Resultado del agente" text={run.summary} />
+                  )}
                     {run.error && (
                       <p className="mt-1.5 rounded-el bg-red-500/10 p-1.5 text-[11px] text-red-600 dark:text-red-400">
                         {run.error}
