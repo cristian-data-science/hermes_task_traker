@@ -69,6 +69,15 @@ const IDLE_MS = Number(process.env.ZCHAT_IDLE_MS || 30 * 60 * 1000);
 const DEMO = process.env.ZCHAT_DEMO === "1";
 const NO_OPEN = process.env.ZCHAT_NO_OPEN === "1";
 const EVENTS_MAX = 4000;
+/**
+ * Watchdog de herramienta bloqueada: un comando que lanza una app en primer
+ * plano (o cuelga un PowerShell) deja el turno MUDO — el CLI está atrapado
+ * dentro del tool y no emite nada. Sin esto, el usuario miraba "ejecutando…"
+ * hasta el timeout total de 15 min. Avisos a los 5 min de silencio total y
+ * autodetención a los 12 (configurables).
+ */
+const STUCK_WARN_MS = Number(process.env.ZCHAT_STUCK_WARN_MS || 5 * 60 * 1000);
+const STUCK_CANCEL_MS = Number(process.env.ZCHAT_STUCK_CANCEL_MS || 12 * 60 * 1000);
 
 const ZCODE_CLI =
   process.env.ZCODE_CLI ||
@@ -451,6 +460,11 @@ function emit(type, payload) {
       sseClients.delete(res);
     }
   }
+  // Telemetría de actividad del turno: CUALQUIER evento con turnId cuenta
+  // (delta/part/tool/phase…) — es la base del watchdog de bloqueo.
+  if (payload?.turnId && turn && turn.id === payload.turnId && turn.status === "running") {
+    turn.lastEventAt = Date.now();
+  }
 }
 
 // ---- Tracker en vivo (Convex) ----
@@ -737,6 +751,9 @@ function newTurn(question) {
     toolInput: new Map(), // toolCallId → JSON acumulado del input
     streamResponse: null,
     phase: "",
+    // Watchdog de bloqueo: última señal de vida del turno (cualquier evento).
+    lastEventAt: Date.now(),
+    stuckWarned: false,
   };
   turn = t;
   emit("turn_start", { turnId: id, question, startedAt: t.startedAt });
@@ -1917,6 +1934,37 @@ const listen = (port) =>
   log(`arriba en ${url} · sesión ${sessionId} · ${workspacePath}${taskId ? ` · tarea ${taskId}` : ""}${DEMO ? " · DEMO" : ""}`);
   openBrowser(url);
   void startTracker();
+  // Watchdog de turno bloqueado: si un turno "running" no emite NADA
+  // (ni delta ni tool ni phase) en STUCK_WARN_MS, avisa; en STUCK_CANCEL_MS
+  // lo detiene solo (la herramienta quedó atrapada — ej. lanzó una app en
+  // primer plano — y seguir esperando solo quema el timeout completo).
+  setInterval(() => {
+    if (!turn || turn.status !== "running" || DEMO) return;
+    const silence = Date.now() - (turn.lastEventAt ?? turn.startedAt);
+    if (silence >= STUCK_CANCEL_MS) {
+      log(`watchdog: ${Math.round(silence / 60000)} min sin eventos — detengo el turno`);
+      emit("notice", {
+        level: "warn",
+        text: `Turno detenido automáticamente: ${Math.round(
+          silence / 60000,
+        )} min sin ninguna respuesta del agente (una herramienta quedó bloqueada, ej. lanzó una app en primer plano). Lo parcial queda en el historial; vuelve a pedirlo indicando que el comando anterior se colgó.`,
+      });
+      cancelTurn();
+      return;
+    }
+    if (silence >= STUCK_WARN_MS && !turn.stuckWarned) {
+      turn.stuckWarned = true;
+      const lastTool = [...turn.parts.values()]
+        .reverse()
+        .find((p) => p.kind === "tool" && (p.status === "running" || p.status === "pending"));
+      emit("notice", {
+        level: "warn",
+        text: `⏱ ${Math.round(silence / 60000)} min sin respuesta del agente${
+          lastTool ? ` (ejecutando: ${lastTool.label || lastTool.tool})` : ""
+        }. Si sospechas que una herramienta quedó colgada (ej. lanzó una app y nunca termina), toca Detener y vuelve a pedirlo.`,
+      });
+    }
+  }, 30_000).unref();
   setInterval(() => {
     // Keep-alive del SSE (comentario: no genera evento en el cliente).
     for (const res of sseClients) {
