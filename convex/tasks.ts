@@ -474,8 +474,14 @@ export const update = mutation({
         archivos: v.optional(v.array(v.string())),
       }),
     ),
+    /**
+     * Indicación de Cris para la respuesta del correo (taskType=correo): se
+     * persiste como agentFollowUp para que el despacho la entregue al agente.
+     * No es una columna: se consume en el handler.
+     */
+    correoInstruccion: v.optional(v.string()),
   },
-  handler: async (ctx, { sessionToken, id, ...patch }) => {
+  handler: async (ctx, { sessionToken, id, correoInstruccion, ...patch }) => {
     await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(id);
     if (!task || task.deletedAt !== undefined)
@@ -489,6 +495,11 @@ export const update = mutation({
     const asPatch = patch as Record<string, unknown>;
     const nextExecutor = patch.executor ?? task.executor;
     const delegating = isDelegatedExecutor(nextExecutor);
+    // Indicación de la respuesta del correo: viaja como followUp del próximo
+    // despacho (correoInstruccion NO es columna — se consume acá).
+    if (delegating && correoInstruccion?.trim()) {
+      asPatch.agentFollowUp = correoInstruccion.trim().slice(0, 3000);
+    }
     if (delegating) {
       const nextType = patch.taskType ?? task.taskType;
       const nextWs = patch.workspaceId !== undefined ? patch.workspaceId : task.workspaceId;

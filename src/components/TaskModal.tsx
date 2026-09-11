@@ -27,8 +27,6 @@ import {
   Maximize2,
   Minimize2,
   Zap,
-  Mail,
-  Send,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { startOfDay } from "date-fns";
@@ -98,7 +96,6 @@ export function TaskModal({
   const updateTask = useMutation(api.tasks.update);
   const removeTask = useMutation(api.tasks.remove);
   const detachFromClickup = useMutation(api.tasks.detachFromClickup);
-  const responderCorreo = useMutation(api.correos.responderCorreo);
   const convertToImprevisto = useMutation(api.imprevistos.createFromTask);
 
   // Sub-tareas
@@ -160,11 +157,9 @@ export function TaskModal({
   const [agentCfg, setAgentCfg] = useState<AgentConfig>(EMPTY_AGENT_CONFIG);
   // Panel de corridas del agente (solo edición de una tarea delegada).
   const [runsOpen, setRunsOpen] = useState(false);
-  // Respuesta de correo con el agente (tareas de origen correo).
+  // Respuesta de correo con el agente: indicación que viaja como followUp
+  // del despacho (el contexto va en delegCtx → contextPaths).
   const [correoInstruccion, setCorreoInstruccion] = useState("");
-  const [correoContexto, setCorreoContexto] =
-    useState<ContextPaths>(EMPTY_CONTEXT);
-  const [enviandoCorreo, setEnviandoCorreo] = useState(false);
   // Contexto de consulta de la delegación (picker nativo): viaja en
   // contextPaths para CUALQUIER tipo de tarea delegada.
   const [delegCtx, setDelegCtx] = useState<ContextPaths>(EMPTY_CONTEXT);
@@ -245,13 +240,19 @@ export function TaskModal({
       return;
     }
     // Capa agente: los tipos con mundo de trabajo definido exigen carpeta.
-    if (isDelegatedExecutor(executor) && AGENT_UI_ENABLED) {
+    if (executor === "zcode" && AGENT_UI_ENABLED) {
       const t = agentCfg.taskType;
       const needsFolder = t ? TASK_TYPE_META[t]?.vcs : null;
       if (needsFolder && !agentCfg.workspaceId) {
         toast.error(
           `Elige la carpeta destino (${needsFolder === "git" ? "repo Git" : "reporte"}) para la tarea delegada`,
         );
+        return;
+      }
+      // Respuesta de correo: la indicación de Cris es obligatoria (es lo que
+      // guía al agente sobre qué responder).
+      if (t === "correo" && !correoInstruccion.trim()) {
+        toast.error("Escribe la indicación para la respuesta del correo");
         return;
       }
     }
@@ -327,6 +328,10 @@ export function TaskModal({
               planMode: agentCfg.planMode,
               // Contexto de consulta (picker nativo): carpetas/archivos.
               contextPaths: delegCtx,
+              // Respuesta de correo: la indicación viaja como followUp.
+              ...(agentCfg.taskType === "correo"
+                ? { correoInstruccion: correoInstruccion.trim() }
+                : {}),
             }
           : {}),
       };
@@ -692,16 +697,28 @@ export function TaskModal({
                     onChange={setAgentCfg}
                     area={area}
                     executor={executor}
+                    correoOrigen={!!task?.correoId}
                     contextSlot={
-                      <div className="mb-3">
-                        <label className="label">Contexto adicional (opcional)</label>
-                        <ContextPicker value={delegCtx} onChange={setDelegCtx} />
-                        <p className="mt-1 text-[10px] text-faint">
-                          Carpeta custom (puedes crearla en el mismo momento con
-                          el botón del diálogo) o archivos sueltos: el agente
-                          los lee como material de consulta, no los toca.
-                        </p>
-                      </div>
+                      agentCfg.taskType === "correo" ? (
+                        <div>
+                          <label className="label">Respuesta del correo</label>
+                          <textarea
+                            value={correoInstruccion}
+                            onChange={(e) => setCorreoInstruccion(e.target.value)}
+                            rows={2}
+                            placeholder="Tu indicación: qué responderle, con qué datos o criterio…"
+                            className="input mb-2 resize-y font-normal text-xs"
+                          />
+                          <ContextPicker value={delegCtx} onChange={setDelegCtx} />
+                          <p className="mt-1.5 text-[10px] leading-snug text-faint">
+                            El agente recibe el correo COMPLETO + tu indicación +
+                            este contexto (solo lectura: puedes crear la carpeta
+                            en el momento desde el diálogo). Te devuelve una
+                            propuesta lista para copiar y pegar en tu correo —
+                            nunca envía.
+                          </p>
+                        </div>
+                      ) : undefined
                     }
                   />
                 </>
@@ -817,68 +834,6 @@ export function TaskModal({
                       )}
                     </div>
                   )}
-                </div>
-              )}
-
-              {/* Responder el correo de origen con el agente (PRD 2026-09-11):
-                  indicación + contexto (picker nativo) → borrador para copiar. */}
-              {isEdit && task.correoId && !isDelegatedExecutor(executor) && (
-                <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
-                  <label className="label flex items-center gap-1.5">
-                    <Mail className="h-3.5 w-3.5" />
-                    Responder con el agente
-                  </label>
-                  <p className="mb-2 text-[11px] leading-snug text-faint">
-                    El agente recibe el correo completo + tu indicación + el
-                    contexto que elijas (solo lectura) y te devuelve una
-                    propuesta lista para copiar y pegar en tu correo. Nunca
-                    envía: el último click es tuyo.
-                  </p>
-                  <textarea
-                    value={correoInstruccion}
-                    onChange={(e) => setCorreoInstruccion(e.target.value)}
-                    rows={2}
-                    placeholder="Tu indicación: qué responderle, con qué datos o criterio…"
-                    className="input mb-2 resize-y font-normal text-xs"
-                  />
-                  <ContextPicker value={correoContexto} onChange={setCorreoContexto} />
-                  <button
-                    type="button"
-                    disabled={enviandoCorreo || !correoInstruccion.trim()}
-                    onClick={async () => {
-                      if (!task || !correoInstruccion.trim()) return;
-                      setEnviandoCorreo(true);
-                      try {
-                        await responderCorreo({
-                          sessionToken: token!,
-                          taskId: task._id,
-                          instruccion: correoInstruccion.trim(),
-                          carpetas: correoContexto.carpetas,
-                          archivos: correoContexto.archivos,
-                        });
-                        toast.success(
-                          "Respuesta delegada: el agente redactará la propuesta",
-                        );
-                        onClose();
-                      } catch (err) {
-                        toast.error(
-                          err instanceof Error
-                            ? err.message
-                            : "No se pudo delegar la respuesta",
-                        );
-                      } finally {
-                        setEnviandoCorreo(false);
-                      }
-                    }}
-                    className="btn-primary mt-2 inline-flex items-center gap-1.5 text-xs"
-                  >
-                    {enviandoCorreo ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Send className="h-3.5 w-3.5" />
-                    )}
-                    Delegar respuesta
-                  </button>
                 </div>
               )}
 

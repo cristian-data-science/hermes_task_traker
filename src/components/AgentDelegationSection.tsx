@@ -100,14 +100,17 @@ export function AgentDelegationSection({
   onChange,
   executor,
   contextSlot,
+  correoOrigen = false,
 }: {
   value: AgentConfig;
   onChange: (next: AgentConfig) => void;
   area: Area;
   /** Agente despachable elegido (ZCode o Claude Code). */
   executor: DelegatedExecutor;
-  /** Bloque extra al final de la sección (contexto con picker nativo). */
+  /** Bloque extra al final de la sección (respuesta del correo). */
   contextSlot?: ReactNode;
+  /** La tarea nació de un correo: habilita el tipo "Correo". */
+  correoOrigen?: boolean;
 }) {
   if (!AGENT_UI_ENABLED) return null;
   const { token } = useAuth();
@@ -166,15 +169,23 @@ export function AgentDelegationSection({
 
       {/* Tipo de tarea */}
       <label className="label">Tipo de tarea</label>
-      <div className="mb-3 grid grid-cols-5 gap-1">
+      <div className="mb-3 grid grid-cols-3 gap-1 sm:grid-cols-6">
         {TASK_TYPES.map((t) => {
           const meta = TASK_TYPE_META[t];
           const active = value.taskType === t;
+          // El tipo Correo solo aplica a tareas de origen correo (traen el
+          // correo completo para el prompt de la respuesta).
+          const bloqueado = t === "correo" && !correoOrigen;
           return (
             <button
               key={t}
               type="button"
-              title={meta.hint}
+              disabled={bloqueado}
+              title={
+                bloqueado
+                  ? "Solo para tareas que nacieron de un correo marcado"
+                  : meta.hint
+              }
               onClick={() => {
                 // Si la carpeta elegida no sirve para el nuevo tipo, soltarla.
                 const newMeta = TASK_TYPE_META[t];
@@ -191,7 +202,8 @@ export function AgentDelegationSection({
                 active
                   ? cn(accent.border, accent.bg, "text-ink")
                   : "border-line text-mute hover:bg-panel2",
-                )}
+                bloqueado && "cursor-not-allowed opacity-40 hover:bg-transparent",
+              )}
             >
               <meta.Icon
                 className={cn("h-4 w-4", active && accent.text)}
@@ -212,47 +224,53 @@ export function AgentDelegationSection({
 
       {/* Carpeta destino: obligatoria para reporte/desarrollo (mundos Git vs
           archivos); recomendada para el resto (el despachador la exige para
-          saber dónde trabajar). */}
-      <label className="label">
-        Carpeta destino
-        {typeMeta?.vcs === "git" && " (repo Git) *"}
-        {typeMeta?.vcs === "ninguno" && " (reporte) *"}
-      </label>
-      <select
-        value={value.workspaceId}
-        onChange={(e) => onChange({ ...value, workspaceId: e.target.value })}
-        className="input mb-1"
-      >
-        <option value="">
-          {typeMeta?.vcs ? "Elige carpeta…" : "Elige carpeta (el agente trabaja ahí)…"}
-        </option>
-        {repGroup.length > 0 && (
-          <optgroup label="📊 Reportes — carpetas locales (sin git)">
-            {repGroup.map((w) => (
-              <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
-                {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
-                {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
-              </option>
-            ))}
-          </optgroup>
-        )}
-        {devGroup.length > 0 && (
-          <optgroup label="🔀 Desarrollo — repos Git">
-            {devGroup.map((w) => (
-              <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
-                {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
-                {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
-              </option>
-            ))}
-          </optgroup>
-        )}
-      </select>
-      {chosen && (
-        <p className="mb-3 truncate font-mono text-[10px] text-faint" title={chosen.path}>
-          {workspaceLabel(chosen)}
-        </p>
+          saber dónde trabajar). Para CORREO no aplica: el agente no escribe —
+          corre en la carpeta de contexto (picker) o en la neutra del puente. */}
+      {value.taskType !== "correo" && (
+        <>
+          <label className="label">
+            Carpeta destino
+            {typeMeta?.vcs === "git" && " (repo Git) *"}
+            {typeMeta?.vcs === "ninguno" && " (reporte) *"}
+          </label>
+          <select
+            value={value.workspaceId}
+            onChange={(e) => onChange({ ...value, workspaceId: e.target.value })}
+            className="input mb-1"
+          >
+            <option value="">
+              {typeMeta?.vcs ? "Elige carpeta…" : "Elige carpeta (el agente trabaja ahí)…"}
+            </option>
+            {repGroup.length > 0 && (
+              <optgroup label="📊 Reportes — carpetas locales (sin git)">
+                {repGroup.map((w) => (
+                  <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
+                    {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
+                    {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            {devGroup.length > 0 && (
+              <optgroup label="🔀 Desarrollo — repos Git">
+                {devGroup.map((w) => (
+                  <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
+                    {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
+                    {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+          </select>
+          {chosen && (
+            <p className="mb-3 truncate font-mono text-[10px] text-faint" title={chosen.path}>
+              {workspaceLabel(chosen)}
+            </p>
+          )}
+          {!chosen && <div className="mb-3" />}
+        </>
       )}
-      {!chosen && <div className="mb-3" />}
+      {value.taskType === "correo" && <div className="mb-3" />}
 
       {/* Autonomía */}
       <label className="label">Autonomía</label>
