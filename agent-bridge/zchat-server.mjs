@@ -1697,7 +1697,8 @@ async function handler(req, res) {
   try {
     if (req.method === "GET") {
       if (p === "/" || p === "/index.html") return serveStatic(res, "index.html");
-      if (p === "/app.css" || p === "/app.js" || p === "/logo.svg") return serveStatic(res, p.slice(1));
+      if (p === "/app.css" || p === "/app.js" || p === "/logo.svg" || p === "/favicon.svg")
+        return serveStatic(res, p.slice(1));
       if (p === "/info") return json(res, 200, info(listeningPort));
       if (p === "/history") return json(res, 200, readHistory());
       if (p === "/state") {
