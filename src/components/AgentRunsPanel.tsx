@@ -63,16 +63,22 @@ function ArtifactsBlock({
   task,
   plan,
   session,
+  since,
 }: {
   task: Doc<"tasks">;
   /** Plan de la última corrida (para el sidebar del chat). */
   plan?: string[];
   /** SessionId efectivo: de la tarea en vivo, o de la última corrida. */
   session?: string;
+  /** Inicio de la última corrida: el reporte .md debe ser posterior (evita
+   *  abrir un .md viejo cualquiera cuando la corrida no generó reporte). */
+  since?: number;
 }) {
   if (!task.workspacePath) return null;
   const open = (mode: "open" | "file" | "md", path: string) => {
-    window.location.href = `hermesagent://${mode}?path=${encodeURIComponent(path)}`;
+    const extra =
+      mode === "md" && since ? `&since=${Math.max(0, since - 60_000)}` : "";
+    window.location.href = `hermesagent://${mode}?path=${encodeURIComponent(path)}${extra}`;
   };
   const isReporte = task.taskType === "reporte";
   const clickupHref =
@@ -163,7 +169,7 @@ function ArtifactsBlock({
           <button
             onClick={() => open("md", task.workspacePath!)}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
-            title="Abrir el .md modificado más recientemente en esa carpeta (reporte/bitácora del agente)"
+            title="Abre el .md modificado más recientemente en esa carpeta DESDE QUE EMPEZÓ la corrida. Si la corrida no generó reporte, te avisa en vez de abrir un archivo viejo."
           >
             <FileText className="h-3.5 w-3.5" /> Ver reporte (.md)
           </button>
@@ -1083,6 +1089,7 @@ export function AgentRunsPanel({
                   t.agentSessionId ??
                   runs.find((r) => r.sessionId)?.sessionId
                 }
+                since={runs[0]?.startedAt}
               />
 
               {/* Timeline de corridas */}

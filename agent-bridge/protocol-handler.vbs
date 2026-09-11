@@ -2,11 +2,19 @@
 ' reciente de una carpeta, o la sesión del agente (ZCode/Claude) de una tarea.
 '   hermesagent://open?path=<carpeta>              → Explorador
 '   hermesagent://file?path=<archivo>              → Bloc de notas
-'   hermesagent://md?path=<carpeta>                → el .md modificado más
-'                                                    reciente (búsqueda
-'                                                    recursiva, sin
-'                                                    node_modules/backups; si
-'                                                    no hay, abre la carpeta)
+'   hermesagent://md?path=<carpeta>[&since=<epoch-ms>]
+'                                                  → el .md modificado más
+'                                                    reciente de esa carpeta
+'                                                    (búsqueda recursiva, sin
+'                                                    node_modules/backups/
+'                                                    carpetas ocultas), SOLO
+'                                                    si es posterior a since
+'                                                    (inicio de la corrida; si
+'                                                    no viene, últimas 48 h).
+'                                                    Sin candidato fresco →
+'                                                    aviso, NADA se abre (no
+'                                                    vale abrir cualquier .md
+'                                                    viejo de la carpeta).
 '   hermesagent://zcode?path=<carpeta>&session=<sess_..>[&task=<id>&p64=..&st=..&ag=..&th=..]
 '   hermesagent://claude?path=<carpeta>&session=<uuid>[&task=<id>&...]
 '                                                  → chat WEB local (zchat-server)
@@ -27,7 +35,7 @@
 ' ZCode. Además cada invocación queda logueada en protocol.log para poder
 ' diagnosticar qué llegó realmente.
 On Error Resume Next
-Dim raw, mode, path, session, fso
+Dim raw, mode, path, session, fso, cutoffMd
 raw = WScript.Arguments(0)
 
 ' ===== Log de diagnóstico: qué llegó exactamente por la URL =====
@@ -112,13 +120,33 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
   If mode = "file" Then
     CreateObject("WScript.Shell").Run "notepad.exe """ & path & """", 1, False
   ElseIf mode = "md" Then
-    Dim newestPath, newestDate
+    Dim newestPath, newestDate, sinceRaw, sinceMs, nowMs
     newestPath = ""
+    ' Corte de frescura: &since=<epoch-ms> (inicio de la corrida, lo manda la
+    ' app) o, si no viene, las últimas 48 h. Un .md más viejo NO se abre: era
+    ' el bug (abría cualquier plan viejo de la carpeta cuando la corrida no
+    ' generó reporte).
+    nowMs = (Now - DateSerial(1970, 1, 1)) * 86400000
+    sinceRaw = qsValue(qs, "since")
+    If IsNumeric(sinceRaw) And Len(sinceRaw) >= 8 Then
+      sinceMs = CDbl(sinceRaw)
+    Else
+      sinceMs = nowMs - 48 * 3600000
+    End If
+    If sinceMs > nowMs Then sinceMs = nowMs - 3600000
+    cutoffMd = Now - (nowMs - sinceMs) / 86400000
     If fso.FolderExists(path) Then ScanFolder fso.GetFolder(path)
     If newestPath <> "" Then
       CreateObject("WScript.Shell").Run "notepad.exe """ & newestPath & """", 1, False
     Else
-      CreateObject("WScript.Shell").Run "explorer.exe """ & path & """", 1, False
+      ' Sin candidato fresco: avisar y no abrir NADA (menos todavía un .md
+      ' cualquiera de la carpeta).
+      MsgBox "No se encontró ningún reporte .md modificado desde el " & _
+             FormatDateTime(cutoffMd, vbGeneralDate) & " en:" & vbCrLf & _
+             path & vbCrLf & vbCrLf & _
+             "Probablemente la corrida no generó un reporte .md. " & _
+             "Revisa la carpeta o el resultado en la app.", _
+             64, "Hermes — Reporte no encontrado"
     End If
   ElseIf mode = "zcode" Then
     ' Chat WEB local con la sesión EXACTA del agente (zchat-server): página de
@@ -170,19 +198,23 @@ End If
 WScript.Quit
 
 Sub ScanFolder(folder)
-  Dim f, sf
+  Dim f, sf, nm
   For Each f In folder.Files
     If LCase(fso.GetExtensionName(f.Name)) = "md" Then
-      If newestPath = "" Or f.DateLastModified > newestDate Then
+      ' Solo candidatos FRESCOS (posteriores al corte) y más recientes que
+      ' el mejor hasta ahora.
+      If f.DateLastModified >= cutoffMd And (newestPath = "" Or f.DateLastModified > newestDate) Then
         newestPath = f.Path
         newestDate = f.DateLastModified
       End If
     End If
   Next
   For Each sf In folder.SubFolders
-    If InStr(LCase(sf.Name), "node_modules") = 0 _
-       And InStr(LCase(sf.Name), "backups") = 0 _
-       And InStr(LCase(sf.Name), ".git") = 0 Then
+    nm = LCase(sf.Name)
+    ' Excluir ocultas (.git, .zcode, .obsidian…), node_modules y backups.
+    If Left(nm, 1) <> "." _
+       And InStr(nm, "node_modules") = 0 _
+       And InStr(nm, "backups") = 0 Then
       ScanFolder sf
     End If
   Next
