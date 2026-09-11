@@ -749,6 +749,24 @@ export async function softDeleteTask(
     fromStatus: task.status,
   });
 
+  // ===== Correo de origen: borrado FÍSICO de la fila en `correos` =====
+  // Sin la tarea, la entrada del correo quedaba huérfana guardada para
+  // siempre. El original sigue en Outlook; si Power Automate lo redispara
+  // (el correo cambió allá), vuelve a entrar como correo + tarea nuevos,
+  // que es lo correcto.
+  if (task.correoId) {
+    const correo = await ctx.db.get(task.correoId);
+    if (correo) await ctx.db.delete(correo._id);
+  } else {
+    // Tareas previas al backfill de correoId: el vínculo vivía solo en
+    // correos.tareaId — buscarlas y borrarlas igual.
+    const huerfanos = await ctx.db
+      .query("correos")
+      .withIndex("by_tarea", (q) => q.eq("tareaId", id))
+      .collect();
+    await Promise.all(huerfanos.map((c) => ctx.db.delete(c._id)));
+  }
+
   // ===== Sync ClickUp: eliminar en ClickUp si estaba sincronizada =====
   // Al borrar en Hermes, borramos también en ClickUp (la tarea vino de acá).
   // El handler de op="delete" hace DELETE a ClickUp y desvincula la tarea.

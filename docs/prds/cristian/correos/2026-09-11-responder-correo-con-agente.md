@@ -184,6 +184,12 @@ cubren el caso "el contexto de ESTE correo está acá".
 
 ## 8. Riesgos y notas
 
+- **AMPLIACIÓN (2026-09-11, borrado en cascada)**: al eliminar una tarea de
+  origen correo se borra TAMBIÉN físicamente su fila en `correos`
+  (softDeleteTask). Antes quedaba huérfana para siempre. El original sigue
+  en Outlook; un redisparo del webhook (correo editado allá) la recrea como
+  correo + tarea nuevos.
+
 - **AMPLIACIÓN (2026-09-11, post-feedback ×2)**: la respuesta del correo se
   integró a la sección de delegación del TaskModal (sin bloque suelto): al
   elegir ejecutor ZCode/Claude se despliega la sección; al elegir el tipo
