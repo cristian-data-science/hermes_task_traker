@@ -152,8 +152,12 @@ export function AgentDelegationSection({
   // ambos grupos separados; las carpetas del mundo incompatible con el tipo
   // elegido aparecen deshabilitadas (así la regla se ve, no se adivina).
   const enabled = workspaces.filter((w) => w.enabled);
-  const devGroup = enabled.filter((w) => w.vcs === "git");
-  const repGroup = enabled.filter((w) => w.vcs === "ninguno");
+  // Orden alfabético dentro de cada grupo: si no, el selector mezclaba las
+  // carpetas en el orden que las sembró la base (pedido explícito de Cris).
+  const byLabel = (a: { label: string }, b: { label: string }) =>
+    a.label.localeCompare(b.label, "es", { sensitivity: "base" });
+  const devGroup = enabled.filter((w) => w.vcs === "git").sort(byLabel);
+  const repGroup = enabled.filter((w) => w.vcs === "ninguno").sort(byLabel);
   const isAllowed = (w: { vcs: string }) =>
     !typeMeta?.vcs || w.vcs === typeMeta.vcs;
   const chosen = workspaces.find((w) => w._id === value.workspaceId);

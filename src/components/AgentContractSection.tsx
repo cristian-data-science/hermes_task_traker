@@ -43,6 +43,9 @@ export function AgentContractSection() {
   const [showFull, setShowFull] = useState(false);
   const [golden, setGolden] = useState("");
   const [recipes, setRecipes] = useState<Record<string, string>>({});
+  // Acordeón de recetas: una abierta a la vez (antes eran 5 textareas
+  // apiladas + las reglas + el MD: una gran pila desordenada).
+  const [openRecipe, setOpenRecipe] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   // Hidratar el editor cuando llega el contrato (o cambia su savedAt tras guardar).
@@ -123,7 +126,7 @@ export function AgentContractSection() {
 
       {open && (
         <div className="space-y-3 p-3">
-          {/* Reglas de oro */}
+          {/* Reglas de oro: siempre visibles al abrir (es lo central). */}
           <div>
             <label className="label">Reglas de oro (una por línea)</label>
             <textarea
@@ -134,18 +137,59 @@ export function AgentContractSection() {
             />
           </div>
 
-          {/* Recetas por tipo */}
-          {RECIPE_FIELDS.map(([key, label]) => (
-            <div key={key}>
-              <label className="label">{label}</label>
-              <textarea
-                value={recipes[key] ?? ""}
-                onChange={(e) => setRecipes((r) => ({ ...r, [key]: e.target.value }))}
-                rows={3}
-                className="input resize-y font-mono text-xs"
-              />
+          {/* Recetas por tipo: acordeón individual — el título y un preview
+              de la primera línea; se edita al abrir. Evita la pila de 5
+              textareas gigantes. */}
+          <div>
+            <label className="label">
+              Recetas por tipo ({RECIPE_FIELDS.length})
+            </label>
+            <div className="overflow-hidden rounded-el border-el border-line">
+              {RECIPE_FIELDS.map(([key, label], idx) => {
+                const txt = recipes[key] ?? "";
+                const openR = openRecipe === key;
+                const preview = txt.split("\n")[0]?.trim() ?? "";
+                return (
+                  <div key={key} className={idx > 0 ? "border-t border-line" : ""}>
+                    <button
+                      type="button"
+                      onClick={() => setOpenRecipe(openR ? null : key)}
+                      aria-expanded={openR}
+                      className="flex w-full items-center gap-2 bg-panel2/40 px-2.5 py-2 text-left transition-colors hover:bg-panel2"
+                    >
+                      <ChevronDown
+                        className={cn(
+                          "h-3.5 w-3.5 shrink-0 text-faint transition-transform",
+                          openR && "rotate-180",
+                        )}
+                      />
+                      <span className="shrink-0 text-xs font-medium text-ink">
+                        {label.replace("Receta: ", "")}
+                      </span>
+                      <span
+                        className="ml-auto max-w-[45%] truncate text-[10px] text-faint"
+                        title={preview}
+                      >
+                        {openR ? (txt ? "editando…" : "vacía") : preview || "vacía"}
+                      </span>
+                    </button>
+                    {openR && (
+                      <div className="p-2.5">
+                        <textarea
+                          value={txt}
+                          onChange={(e) =>
+                            setRecipes((r) => ({ ...r, [key]: e.target.value }))
+                          }
+                          rows={6}
+                          className="input resize-y font-mono text-xs"
+                        />
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          ))}
+          </div>
 
           <div className="flex flex-wrap items-center gap-2">
             <button

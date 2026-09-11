@@ -758,8 +758,17 @@ export function AgentView() {
     api.agent.bridgeStatus,
     token ? { sessionToken: token } : "skip",
   );
-  const workspaces =
+  const rawWorkspaces =
     useQuery(api.agent.listWorkspaces, token ? { sessionToken: token } : "skip") ?? [];
+  // Carpetas siempre en orden alfabético (la base las devuelve por área en
+  // orden de siembra): para buscar una a ojo, el orden estable ayuda.
+  const workspaces = useMemo(
+    () =>
+      [...rawWorkspaces].sort((a, b) =>
+        a.label.localeCompare(b.label, "es", { sensitivity: "base" }),
+      ),
+    [rawWorkspaces],
+  );
 
   const seedWorkspaces = useMutation(api.agent.seedWorkspaces);
   const updateWorkspace = useMutation(api.agent.updateWorkspace);
@@ -894,7 +903,14 @@ export function AgentView() {
           ))}
         </Section>
         <Section title="Hecho hoy" count={overview?.done.length ?? 0}>
-          {overview?.done.map((t) => (
+          {[...(overview?.done ?? [])]
+            // Más recientes arriba: la columna mostraba las aprobadas en el
+            // orden de la base (pedido: fecha descendente).
+            .sort(
+              (a, b) =>
+                (b.completedAt ?? b.updatedAt) - (a.completedAt ?? a.updatedAt),
+            )
+            .map((t) => (
             <AgentCard
               key={t._id}
               task={t}
