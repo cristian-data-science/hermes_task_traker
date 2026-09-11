@@ -293,6 +293,17 @@ const taskFields = {
     ),
   /** Modo plan: planifica primero (solo lectura) y espera tu OK. */
   planMode: v.optional(v.boolean()),
+  /**
+   * Contexto de consulta para la delegación (picker nativo): carpetas para
+   * explorar y archivos puntuales para leer, en SOLO LECTURA. Aplica a
+   * cualquier tipo de tarea (correo, análisis, etc.).
+   */
+  contextPaths: v.optional(
+    v.object({
+      carpetas: v.optional(v.array(v.string())),
+      archivos: v.optional(v.array(v.string())),
+    }),
+  ),
 };
 
 /** Crea una nueva tarea. `order` se asigna al INICIO (order 0) de su estado. */
@@ -354,6 +365,9 @@ export const create = mutation({
       gitStrategy: isDelegatedExecutor(args.executor) ? args.gitStrategy : undefined,
       notifyWhatsapp: isDelegatedExecutor(args.executor) ? args.notifyWhatsapp : undefined,
       planMode: isDelegatedExecutor(args.executor) ? args.planMode : undefined,
+      contextPaths: isDelegatedExecutor(args.executor)
+        ? args.contextPaths
+        : undefined,
       agentState: isDelegatedExecutor(args.executor) ? "encolada" : undefined,
       order: 0,
       completedAt: args.status === "completado" ? now : undefined,
@@ -454,6 +468,12 @@ export const update = mutation({
       v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
     ),
     planMode: v.optional(v.boolean()),
+    contextPaths: v.optional(
+      v.object({
+        carpetas: v.optional(v.array(v.string())),
+        archivos: v.optional(v.array(v.string())),
+      }),
+    ),
   },
   handler: async (ctx, { sessionToken, id, ...patch }) => {
     await requireAuth(ctx, sessionToken);

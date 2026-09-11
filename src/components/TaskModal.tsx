@@ -165,6 +165,9 @@ export function TaskModal({
   const [correoContexto, setCorreoContexto] =
     useState<ContextPaths>(EMPTY_CONTEXT);
   const [enviandoCorreo, setEnviandoCorreo] = useState(false);
+  // Contexto de consulta de la delegación (picker nativo): viaja en
+  // contextPaths para CUALQUIER tipo de tarea delegada.
+  const [delegCtx, setDelegCtx] = useState<ContextPaths>(EMPTY_CONTEXT);
 
   // Cargar datos solo cuando CAMBIA el contexto (otra tarea, o editar↔nueva),
   // no cada vez que se reabre el modal. Así, si lo cerrás por misclic mientras
@@ -204,6 +207,10 @@ export function TaskModal({
       setClickupListId(task.clickupListId);
       setClickupLocal(task.clickupLocal ?? false);
       setAgentCfg(agentConfigFromTask(task));
+      setDelegCtx({
+        carpetas: task.contextPaths?.carpetas ?? [],
+        archivos: task.contextPaths?.archivos ?? [],
+      });
     } else {
       setTitle("");
       setArea(
@@ -226,6 +233,7 @@ export function TaskModal({
       setClickupListId(undefined);
       setClickupLocal(false);
       setAgentCfg(EMPTY_AGENT_CONFIG);
+      setDelegCtx(EMPTY_CONTEXT);
     }
     setNewSub("");
     setHydratedKey(ctxKey);
@@ -317,6 +325,8 @@ export function TaskModal({
               notifyWhatsapp: agentCfg.notifyWhatsapp,
               // Modo plan: planifica primero (solo lectura) y espera tu OK.
               planMode: agentCfg.planMode,
+              // Contexto de consulta (picker nativo): carpetas/archivos.
+              contextPaths: delegCtx,
             }
           : {}),
       };
@@ -682,6 +692,17 @@ export function TaskModal({
                     onChange={setAgentCfg}
                     area={area}
                     executor={executor}
+                    contextSlot={
+                      <div className="mb-3">
+                        <label className="label">Contexto adicional (opcional)</label>
+                        <ContextPicker value={delegCtx} onChange={setDelegCtx} />
+                        <p className="mt-1 text-[10px] text-faint">
+                          Carpeta custom (puedes crearla en el mismo momento con
+                          el botón del diálogo) o archivos sueltos: el agente
+                          los lee como material de consulta, no los toca.
+                        </p>
+                      </div>
+                    }
                   />
                 </>
               )}

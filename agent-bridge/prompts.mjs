@@ -51,6 +51,30 @@ const TYPE_RECIPES = {
 const CORREO_CUERPO_MAX = 30_000;
 
 /**
+ * Sección de material de contexto (solo lectura) para cualquier tarea: las
+ * carpetas/archivos elegidos con el picker nativo (contextPaths). Retorna un
+ * array de líneas (vacío si no hay contexto).
+ */
+function contextoLines(task) {
+  const carpetas = task.contextPaths?.carpetas ?? [];
+  const archivos = task.contextPaths?.archivos ?? [];
+  if (!carpetas.length && !archivos.length) return [];
+  const lines = ["\n=== MATERIAL DE CONTEXTO ELEGIDO POR CRIS (solo lectura) ==="];
+  if (carpetas.length) {
+    lines.push("Carpetas para explorar:");
+    for (const c of carpetas) lines.push(`- ${c}`);
+  }
+  if (archivos.length) {
+    lines.push("Archivos para leer:");
+    for (const a of archivos) lines.push(`- ${a}`);
+  }
+  lines.push(
+    "Son material de CONSULTA: úsalos como fuente de datos (cita números/archivos concretos cuando aplique) pero NO los modifiques ni ejecutes cambios sobre ellos.",
+  );
+  return lines;
+}
+
+/**
  * Prompt de la tarea CORREO (respuesta de un correo de origen con el agente).
  * El cuerpo COMPLETO, la indicación de Cris y el contexto (carpetas/archivos
  * de consulta) viajan acá; el entregable es un BORRADOR listo para copiar.
@@ -230,6 +254,10 @@ export function buildPrompt(input) {
   } else if (followUp) {
     lines.push(`\nFeedback de Cris para esta corrida:\n>>> ${followUp}`);
   }
+
+  // Contexto adicional (picker nativo): carpetas/archivos de consulta para
+  // CUALQUIER tipo de tarea, no solo correo.
+  lines.push(...contextoLines(task));
 
   lines.push("\n=== PROTOCOLO DE REPORTE (OBLIGATORIO — así ve Cris tu progreso en vivo) ===");
   lines.push(

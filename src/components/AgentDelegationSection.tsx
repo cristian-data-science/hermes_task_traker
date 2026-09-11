@@ -7,6 +7,7 @@
  * Controlado desde TaskModal vía value/onChange para que hidrate/beba del
  * mismo borrador que el resto del formulario.
  */
+import type { ReactNode } from "react";
 import { useQuery } from "convex/react";
 import {
   Sparkles,
@@ -98,12 +99,15 @@ export function AgentDelegationSection({
   value,
   onChange,
   executor,
+  contextSlot,
 }: {
   value: AgentConfig;
   onChange: (next: AgentConfig) => void;
   area: Area;
   /** Agente despachable elegido (ZCode o Claude Code). */
   executor: DelegatedExecutor;
+  /** Bloque extra al final de la sección (contexto con picker nativo). */
+  contextSlot?: ReactNode;
 }) {
   if (!AGENT_UI_ENABLED) return null;
   const { token } = useAuth();
@@ -415,6 +419,10 @@ export function AgentDelegationSection({
           </div>
         </div>
       </div>
+
+      {/* Contexto adicional (picker nativo de Windows): carpeta custom (se
+          puede crear en el mismo momento) o archivos, en solo lectura. */}
+      {contextSlot}
 
       {/* Estado del puente: activo/libre/ocupado/apagado, con motivo. */}
       <p className="mt-2.5 flex items-center gap-1.5 text-[10px] text-faint">

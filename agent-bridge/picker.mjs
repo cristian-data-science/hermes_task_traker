@@ -29,8 +29,8 @@ function dialog() {
     kind === "folder"
       ? `Add-Type -AssemblyName System.Windows.Forms | Out-Null
 $d = New-Object System.Windows.Forms.FolderBrowserDialog
-$d.Description = 'Elige la carpeta de contexto para el agente'
-$d.ShowNewFolderButton = $false
+$d.Description = 'Elige o crea la carpeta de contexto para el agente'
+$d.ShowNewFolderButton = $true
 if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { Write-Output $d.SelectedPath }`
       : `Add-Type -AssemblyName System.Windows.Forms | Out-Null
 $d = New-Object System.Windows.Forms.OpenFileDialog
