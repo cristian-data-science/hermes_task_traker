@@ -52,6 +52,7 @@ import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
 import { cn } from "../lib/utils";
 import { parseTaskDates } from "../lib/dates";
+import { ausenciasSolapadas, rangoAusenciaLegible } from "../lib/ausencias";
 import { AREAS, AREA_META, type Area } from "../lib/constants";
 
 // ============================================================
@@ -155,6 +156,21 @@ export function InsightsView() {
     token ? { sessionToken: token, from, to, area: effectiveArea } : "skip",
   );
 
+  // Períodos de ausencia (Patagonia): pura anotación — si el rango mostrado
+  // solapa alguno, se etiqueta explícitamente; los números no cambian.
+  const ausencias =
+    useQuery(
+      api.settings.listarAusencias,
+      token ? { sessionToken: token } : "skip",
+    ) ?? [];
+  const ausenciasRango = useMemo(
+    () => ausenciasSolapadas(ausencias, from, to),
+    [ausencias, from, to],
+  );
+  const mostrarAusencias =
+    ausenciasRango.length > 0 &&
+    (effectiveArea === "all" || effectiveArea === "patagonia");
+
   const taskById = useMemo(() => {
     const m = new Map<string, TaskRow>();
     for (const t of data?.tasks ?? []) m.set(t.id, t);
@@ -207,6 +223,21 @@ export function InsightsView() {
           </div>
         </div>
       </div>
+
+      {/* ===== Aviso de períodos de ausencia que solapan el rango ===== */}
+      {mostrarAusencias && (
+        <div className="space-y-1 rounded-el border-el border-line bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+          {ausenciasRango.map((p) => (
+            <p key={p.desde}>
+              <span className="font-semibold">
+                🧳 Período de ausencia{p.etiqueta ? ` (${p.etiqueta})` : ""}:
+              </span>{" "}
+              {rangoAusenciaLegible(p)} — los números de este rango incluyen
+              días sin actividad.
+            </p>
+          ))}
+        </div>
+      )}
 
       {empty ? (
         <div className="rounded-el-lg border-el border-dashed border-line px-4 py-10 text-center text-sm text-faint">

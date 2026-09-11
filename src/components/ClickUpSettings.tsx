@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useAction } from "convex/react";
 import {
@@ -11,11 +11,14 @@ import {
   UserCog,
   FolderTree,
   Copy,
+  Trash2,
+  Plus,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
 import { AREAS, AREA_META } from "../lib/constants";
+import type { AusenciaPeriodo } from "../lib/ausencias";
 import { cn } from "../lib/utils";
 
 interface ClickUpSettingsProps {
@@ -48,6 +51,61 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
   const [backfilling, setBackfilling] = useState(false);
   const cleanupDupes = useAction(api.clickup.cleanupDuplicateTasks);
   const [cleaning, setCleaning] = useState(false);
+
+  // ===== Períodos de ausencia (anotación de insights, solo Patagonia) =====
+  const ausenciasQ = useQuery(
+    api.settings.listarAusencias,
+    token ? { sessionToken: token } : "skip",
+  );
+  const setAusencias = useMutation(api.settings.setAusencias);
+  // Borrador local: `null` = todavía hidratando desde la query.
+  const [periodos, setPeriodos] = useState<AusenciaPeriodo[] | null>(null);
+  const [savingAusencias, setSavingAusencias] = useState(false);
+  useEffect(() => {
+    if (periodos === null && ausenciasQ !== undefined) {
+      setPeriodos(ausenciasQ as AusenciaPeriodo[]);
+    }
+  }, [ausenciasQ, periodos]);
+
+  function editarPeriodo(i: number, patch: Partial<AusenciaPeriodo>) {
+    setPeriodos(
+      (prev) => prev?.map((p, j) => (j === i ? { ...p, ...patch } : p)) ?? null,
+    );
+  }
+
+  async function handleSaveAusencias() {
+    if (!periodos) return;
+    const invalidos = periodos.filter(
+      (p) =>
+        !/^\d{4}-\d{2}-\d{2}$/.test(p.desde) ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(p.hasta) ||
+        p.desde > p.hasta,
+    );
+    if (invalidos.length > 0) {
+      toast.error(
+        "Hay períodos inválidos: revisa que ambas fechas existan y que 'desde' no sea posterior a 'hasta'",
+      );
+      return;
+    }
+    setSavingAusencias(true);
+    try {
+      await setAusencias({
+        sessionToken: token!,
+        periodos: periodos.map((p) => ({
+          desde: p.desde,
+          hasta: p.hasta,
+          ...(p.etiqueta?.trim() ? { etiqueta: p.etiqueta.trim() } : {}),
+        })),
+      });
+      toast.success("Períodos de ausencia guardados");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Error al guardar los períodos",
+      );
+    } finally {
+      setSavingAusencias(false);
+    }
+  }
 
   /**
    * Busca la misma tarea de ClickUp importada más de una vez y deja una sola.
@@ -373,6 +431,96 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                         );
                       })}
                     </div>
+                  </div>
+
+                  {/* Períodos de ausencia (anotación de insights) */}
+                  <div>
+                    <p className="label">Períodos de ausencia (Patagonia)</p>
+                    <p className="mb-2 text-xs text-mute">
+                      Cuando un rango de insights pisa un período, se muestra
+                      el aviso para dar contexto a los números. No cambia
+                      ningún cálculo. "Hasta" es tu último día ausente: si
+                      vuelves el lunes 21, el período termina el domingo 20.
+                    </p>
+                    {periodos === null ? (
+                      <p className="text-xs text-faint">Cargando…</p>
+                    ) : (
+                      <>
+                        <div className="space-y-2">
+                          {periodos.map((p, i) => (
+                            <div
+                              key={i}
+                              className="flex flex-wrap items-center gap-1.5"
+                            >
+                              <input
+                                value={p.etiqueta ?? ""}
+                                onChange={(e) =>
+                                  editarPeriodo(i, { etiqueta: e.target.value })
+                                }
+                                placeholder="Vacaciones"
+                                className="input w-32 text-xs"
+                              />
+                              <input
+                                type="date"
+                                value={p.desde}
+                                onChange={(e) =>
+                                  editarPeriodo(i, { desde: e.target.value })
+                                }
+                                className="input w-36 text-xs"
+                                title="Primer día ausente"
+                              />
+                              <span className="text-[10px] text-faint">a</span>
+                              <input
+                                type="date"
+                                value={p.hasta}
+                                onChange={(e) =>
+                                  editarPeriodo(i, { hasta: e.target.value })
+                                }
+                                className="input w-36 text-xs"
+                                title="Último día ausente"
+                              />
+                              <button
+                                onClick={() =>
+                                  setPeriodos(
+                                    (prev) =>
+                                      prev?.filter((_, j) => j !== i) ?? null,
+                                  )
+                                }
+                                className="rounded-el p-1.5 text-faint transition-colors hover:bg-panel2 hover:text-danger"
+                                title="Quitar este período"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            onClick={() =>
+                              setPeriodos((prev) => [
+                                ...(prev ?? []),
+                                { desde: "", hasta: "", etiqueta: "" },
+                              ])
+                            }
+                            className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+                          >
+                            <Plus className="h-3.5 w-3.5" /> Agregar período
+                          </button>
+                          <button
+                            disabled={savingAusencias}
+                            onClick={() => void handleSaveAusencias()}
+                            className="btn-primary inline-flex items-center gap-1.5 text-xs"
+                          >
+                            {savingAusencias ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Check className="h-3.5 w-3.5" />
+                            )}
+                            Guardar períodos
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   {/* Info de timestamps */}

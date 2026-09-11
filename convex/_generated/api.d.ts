@@ -9,6 +9,7 @@
  */
 
 import type * as agent from "../agent.js";
+import type * as ausenciasConfig from "../ausenciasConfig.js";
 import type * as auth from "../auth.js";
 import type * as authGuard from "../authGuard.js";
 import type * as authQuery from "../authQuery.js";
@@ -42,6 +43,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   agent: typeof agent;
+  ausenciasConfig: typeof ausenciasConfig;
   auth: typeof auth;
   authGuard: typeof authGuard;
   authQuery: typeof authQuery;

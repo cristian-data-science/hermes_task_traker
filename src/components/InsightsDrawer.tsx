@@ -14,6 +14,7 @@ import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
 import { cn } from "../lib/utils";
+import { ausenciasSolapadas, rangoAusenciaLegible } from "../lib/ausencias";
 
 /** Fila reducida que devuelve imprevistos.statsRange. */
 type ImprevistoStat = {
@@ -95,6 +96,18 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
     for (const t of tasks) m.set(t._id, t);
     return m;
   }, [tasks]);
+
+  // Anotación de ausencia: si el rango del visor pisa un período seteado,
+  // se muestra el aviso; los cálculos no cambian.
+  const ausencias =
+    useQuery(
+      api.settings.listarAusencias,
+      token ? { sessionToken: token } : "skip",
+    ) ?? [];
+  const ausenciasRango = useMemo(
+    () => ausenciasSolapadas(ausencias, from, to),
+    [ausencias, from, to],
+  );
 
   /** Buckets por día, del más viejo al más nuevo (se muestran al revés). */
   const buckets = useMemo<DayBucket[]>(() => {
@@ -279,6 +292,20 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
             </div>
 
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 py-4">
+              {/* ===== Aviso de ausencia en el rango ===== */}
+              {ausenciasRango.length > 0 && (
+                <div className="space-y-1 rounded-el border-el border-line bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-400">
+                  {ausenciasRango.map((p) => (
+                    <p key={p.desde}>
+                      <span className="font-semibold">
+                        🧳 Período de ausencia{p.etiqueta ? ` (${p.etiqueta})` : ""}:
+                      </span>{" "}
+                      {rangoAusenciaLegible(p)} — incluye días sin actividad.
+                    </p>
+                  ))}
+                </div>
+              )}
+
               {/* ===== Totales ===== */}
               <div className="grid grid-cols-2 gap-2">
                 <Stat label="Imprevistos/día (prom.)" value={totals.promedioDia.toFixed(1)} />

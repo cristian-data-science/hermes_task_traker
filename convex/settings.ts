@@ -17,6 +17,10 @@ import {
   type ClickupProject,
   DEFAULT_CLICKUP_CONFIG,
 } from "./clickupConfig";
+import {
+  SETTINGS_KEY_AUSENCIAS,
+  parseAusencias,
+} from "./ausenciasConfig";
 
 /**
  * API pública de configuración de la integración ClickUp.
@@ -345,6 +349,52 @@ export const toggleHiddenArea = mutation({
       ? Array.from(new Set([...current, area]))
       : current.filter((a) => a !== area);
     await upsertSetting(ctx, SETTINGS_KEY_HIDDEN_AREAS, JSON.stringify(next));
+  },
+});
+
+// ===== Períodos de ausencia (Patagonia, anotación de insights) =====
+
+/** Períodos de ausencia seteados. Clave ausente → la semilla inicial. */
+export const listarAusencias = query({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    const row = await ctx.db
+      .query("settings")
+      .withIndex("by_key", (q) => q.eq("key", SETTINGS_KEY_AUSENCIAS))
+      .first();
+    return parseAusencias(row?.value);
+  },
+});
+
+/**
+ * Reemplaza la lista completa de períodos de ausencia (edición tipo lista
+ * desde el panel de configuración). Re-valida server-side: filas inválidas
+ * se descartan en vez de lanzar, para que un guardado parcial no rompa nada.
+ */
+export const setAusencias = mutation({
+  args: {
+    ...sessionArg,
+    periodos: v.array(
+      v.object({
+        desde: v.string(),
+        hasta: v.string(),
+        etiqueta: v.optional(v.string()),
+      }),
+    ),
+  },
+  handler: async (ctx, { sessionToken, periodos }) => {
+    await requireAuth(ctx, sessionToken);
+    const limpios = parseAusencias(JSON.stringify(periodos));
+    // Si había filas y TODAS resultaron inválidas, el usuario intentó guardar
+    // basura: avisar en vez de dejar la lista vacía en silencio.
+    if (periodos.length > 0 && limpios.length === 0) {
+      throw new Error(
+        "Ningún período es válido: revisa las fechas (YYYY-MM-DD y desde ≤ hasta)",
+      );
+    }
+    await upsertSetting(ctx, SETTINGS_KEY_AUSENCIAS, JSON.stringify(limpios));
+    return limpios;
   },
 });
 
