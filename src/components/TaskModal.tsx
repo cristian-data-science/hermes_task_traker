@@ -27,6 +27,8 @@ import {
   Maximize2,
   Minimize2,
   Zap,
+  Mail,
+  Send,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import { startOfDay } from "date-fns";
@@ -58,6 +60,11 @@ import {
 } from "./AgentDelegationSection";
 import { AgentRunsPanel } from "./AgentRunsPanel";
 import { TASK_TYPE_META, AGENT_STATE_META, type AgentState } from "../lib/constants";
+import {
+  ContextPicker,
+  EMPTY_CONTEXT,
+  type ContextPaths,
+} from "./ContextPicker";
 import { useAuth } from "../hooks/useAuth";
 import { isMobileLike } from "../hooks/usePwaInstall";
 
@@ -91,6 +98,7 @@ export function TaskModal({
   const updateTask = useMutation(api.tasks.update);
   const removeTask = useMutation(api.tasks.remove);
   const detachFromClickup = useMutation(api.tasks.detachFromClickup);
+  const responderCorreo = useMutation(api.correos.responderCorreo);
   const convertToImprevisto = useMutation(api.imprevistos.createFromTask);
 
   // Sub-tareas
@@ -152,6 +160,11 @@ export function TaskModal({
   const [agentCfg, setAgentCfg] = useState<AgentConfig>(EMPTY_AGENT_CONFIG);
   // Panel de corridas del agente (solo edición de una tarea delegada).
   const [runsOpen, setRunsOpen] = useState(false);
+  // Respuesta de correo con el agente (tareas de origen correo).
+  const [correoInstruccion, setCorreoInstruccion] = useState("");
+  const [correoContexto, setCorreoContexto] =
+    useState<ContextPaths>(EMPTY_CONTEXT);
+  const [enviandoCorreo, setEnviandoCorreo] = useState(false);
 
   // Cargar datos solo cuando CAMBIA el contexto (otra tarea, o editar↔nueva),
   // no cada vez que se reabre el modal. Así, si lo cerrás por misclic mientras
@@ -783,6 +796,68 @@ export function TaskModal({
                       )}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* Responder el correo de origen con el agente (PRD 2026-09-11):
+                  indicación + contexto (picker nativo) → borrador para copiar. */}
+              {isEdit && task.correoId && !isDelegatedExecutor(executor) && (
+                <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
+                  <label className="label flex items-center gap-1.5">
+                    <Mail className="h-3.5 w-3.5" />
+                    Responder con el agente
+                  </label>
+                  <p className="mb-2 text-[11px] leading-snug text-faint">
+                    El agente recibe el correo completo + tu indicación + el
+                    contexto que elijas (solo lectura) y te devuelve una
+                    propuesta lista para copiar y pegar en tu correo. Nunca
+                    envía: el último click es tuyo.
+                  </p>
+                  <textarea
+                    value={correoInstruccion}
+                    onChange={(e) => setCorreoInstruccion(e.target.value)}
+                    rows={2}
+                    placeholder="Tu indicación: qué responderle, con qué datos o criterio…"
+                    className="input mb-2 resize-y font-normal text-xs"
+                  />
+                  <ContextPicker value={correoContexto} onChange={setCorreoContexto} />
+                  <button
+                    type="button"
+                    disabled={enviandoCorreo || !correoInstruccion.trim()}
+                    onClick={async () => {
+                      if (!task || !correoInstruccion.trim()) return;
+                      setEnviandoCorreo(true);
+                      try {
+                        await responderCorreo({
+                          sessionToken: token!,
+                          taskId: task._id,
+                          instruccion: correoInstruccion.trim(),
+                          carpetas: correoContexto.carpetas,
+                          archivos: correoContexto.archivos,
+                        });
+                        toast.success(
+                          "Respuesta delegada: el agente redactará la propuesta",
+                        );
+                        onClose();
+                      } catch (err) {
+                        toast.error(
+                          err instanceof Error
+                            ? err.message
+                            : "No se pudo delegar la respuesta",
+                        );
+                      } finally {
+                        setEnviandoCorreo(false);
+                      }
+                    }}
+                    className="btn-primary mt-2 inline-flex items-center gap-1.5 text-xs"
+                  >
+                    {enviandoCorreo ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Send className="h-3.5 w-3.5" />
+                    )}
+                    Delegar respuesta
+                  </button>
                 </div>
               )}
 

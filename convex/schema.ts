@@ -42,6 +42,7 @@ export const taskTypes = [
   "desarrollo",
   "analisis",
   "ops",
+  "correo",
   "otro",
 ] as const;
 export type TaskType = (typeof taskTypes)[number];
@@ -248,6 +249,7 @@ export default defineSchema({
         v.literal("desarrollo"),
         v.literal("analisis"),
         v.literal("ops"),
+        v.literal("correo"),
         v.literal("otro"),
       ),
     ),
@@ -288,6 +290,24 @@ export default defineSchema({
         v.literal("error"),
         v.literal("cancelada"),
       ),
+    ),
+    /**
+     * Correo de origen de esta tarea (la ingesta lo estampa al crearla).
+     * Habilita "Responder con el agente": el prompt del agente recibe el
+     * cuerpo COMPLETO del correo (el de `correos`, no el recorte de notes).
+     */
+    correoId: v.optional(v.id("correos")),
+    /**
+     * Contexto de consulta para la respuesta del correo (o tareas que lo
+     * necesiten): carpetas para EXPLORAR y archivos puntuales para LEER,
+     * elegidos con el picker nativo de Windows. Solo lectura para el agente.
+     * Acumulable: las respuestas a preguntas AGREGAN material, no lo pisan.
+     */
+    contextPaths: v.optional(
+      v.object({
+        carpetas: v.optional(v.array(v.string())),
+        archivos: v.optional(v.array(v.string())),
+      }),
     ),
     /**
      * Sesión del agente de la última corrida (sess_... para ZCode, uuid para
@@ -789,5 +809,25 @@ export default defineSchema({
     actualizadoEn: v.number(),
   })
     .index("by_messageId", ["messageId"])
-    .index("by_estado", ["estado", "recibidoEn"]),
+    .index("by_estado", ["estado", "recibidoEn"])
+    .index("by_tarea", ["tareaId"]),
+
+  // ===== Picker nativo (selector de carpetas/archivos de Windows) =====
+  /**
+   * Round-trip del selector nativo: la web abre hermesagent://pick con una
+   * key aleatoria; el picker local (diálogo de Windows) publica acá el
+   * resultado con las credenciales del puente y la web lo levanta pollando
+   * por key. Filas efímeras: se limpian las de más de 1 h.
+   */
+  pickResults: defineTable({
+    /** Id aleatorio generado por la web (vincula pedido y respuesta). */
+    key: v.string(),
+    /** folder | files. */
+    kind: v.string(),
+    /** Rutas absolutas elegidas (1 para carpeta, N para archivos). */
+    paths: v.optional(v.array(v.string())),
+    /** true si el usuario cerró el diálogo sin elegir. */
+    cancelado: v.optional(v.boolean()),
+    createdAt: v.number(),
+  }).index("by_key", ["key"]),
 });

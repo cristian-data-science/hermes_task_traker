@@ -47,6 +47,77 @@ const TYPE_RECIPES = {
   otro: `TIPO: OTRO — sigue las instrucciones de la tarea y las reglas generales del contrato.`,
 };
 
+/** Tope del cuerpo del correo en el prompt (el completo vive en Convex). */
+const CORREO_CUERPO_MAX = 30_000;
+
+/**
+ * Prompt de la tarea CORREO (respuesta de un correo de origen con el agente).
+ * El cuerpo COMPLETO, la indicación de Cris y el contexto (carpetas/archivos
+ * de consulta) viajan acá; el entregable es un BORRADOR listo para copiar.
+ */
+export function buildCorreoPrompt(input) {
+  const { task, runId, followUp, correo, agentLabel = "ZCODE" } = input;
+  const lines = [];
+  lines.push(`agente- ${task.title} [correo]`);
+  lines.push(`=== HERMES TASK TRACKER — RESPUESTA DE CORREO DELEGADA A ${agentLabel.toUpperCase()} ===`);
+  lines.push(`Tarea: ${task.title} (id: ${task._id})`);
+  lines.push(
+    "Objetivo: redactar una PROPUESTA DE RESPUESTA para el correo de abajo. Cris la copiará y la enviará desde su cliente de correo: NUNCA envías nada tú.",
+  );
+  lines.push(
+    "Reglas:\n- El correo y todo el material de contexto son de CONSULTA (solo lectura): no modifiques ni ejecutes cambios sobre ellos.\n- Si te falta información para responder bien, NO la inventes: termina con --state pregunta y pregunta concreto.",
+  );
+
+  const remitente =
+    correo?.remitenteNombre ||
+    correo?.remitenteEmail ||
+    "remitente desconocido";
+  lines.push(`\n=== CORREO ORIGINAL ===`);
+  lines.push(`De: ${remitente}`);
+  lines.push(`Asunto: ${correo?.asunto ?? "(sin asunto)"}`);
+  if (correo?.recibidoEn)
+    lines.push(`Recibido: ${new Date(correo.recibidoEn).toISOString().slice(0, 16).replace("T", " ")} UTC`);
+  const adjuntos = correo?.adjuntos ?? [];
+  if (adjuntos.length) {
+    lines.push(`Adjuntos (Cris los tiene; si necesitas alguno, pídelo con --state pregunta):`);
+    for (const a of adjuntos) lines.push(`- ${a.nombre}`);
+  }
+  lines.push(`\n--- cuerpo ---\n${(correo?.cuerpo ?? "").slice(0, CORREO_CUERPO_MAX)}\n--- fin del cuerpo ---`);
+
+  if (followUp) {
+    lines.push(`\n=== INDICACIÓN DE CRIS PARA LA RESPUESTA ===\n>>> ${followUp}`);
+  }
+
+  const carpetas = task.contextPaths?.carpetas ?? [];
+  const archivos = task.contextPaths?.archivos ?? [];
+  if (carpetas.length || archivos.length) {
+    lines.push(`\n=== MATERIAL DE CONTEXTO (solo lectura) ===`);
+    if (carpetas.length) {
+      lines.push("Carpetas para explorar:");
+      for (const c of carpetas) lines.push(`- ${c}`);
+    }
+    if (archivos.length) {
+      lines.push("Archivos para leer:");
+      for (const a of archivos) lines.push(`- ${a}`);
+    }
+    lines.push("Úsalos como fuente de datos para fundamentar la respuesta; cita números/archivos concretos cuando aplique.");
+  }
+
+  lines.push("\n=== FORMATO DEL ENTREGABLE (OBLIGATORIO) ===");
+  lines.push(
+    "La propuesta es TEXTO PLANO listo para pegar (sin markdown raro, sin títulos internos): saludo breve, cuerpo directo con la respuesta, despedida. SIN firma (Cris la cierra a su manera). Mismo idioma del correo original.",
+  );
+  lines.push("\n=== PROTOCOLO DE REPORTE (igual que siempre) ===");
+  lines.push(`node "${REPORT_CLI}" --task ${task._id} --run ${runId} --step "<paso, ≤12 palabras>"`);
+  lines.push(
+    `AL TERMINAR (propuesta redactada): node "${REPORT_CLI}" --task ${task._id} --run ${runId} --state para-revision --summary "<EL BORRADOR COMPLETO, tal cual para copiar y pegar — esta tarea NO tiene tope de 3 líneas: el resumen ES la propuesta>"`,
+  );
+  lines.push(
+    'Si falta información: --state pregunta --question "<qué te falta, concreto>".',
+  );
+  return lines.join("\n");
+}
+
 /**
  * Reglas de oro por defecto (fallback): se usan solo si el contrato guardado
  * en Convex no está disponible. El contrato vigente (editable por Cris en la

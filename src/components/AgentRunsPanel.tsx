@@ -25,6 +25,11 @@ import {
   type TaskType,
 } from "../lib/constants";
 import { cn, formatRelative, formatAgo, agentModelLabel } from "../lib/utils";
+import {
+  ContextPicker,
+  EMPTY_CONTEXT,
+  type ContextPaths,
+} from "./ContextPicker";
 
 function RunStateChip({ state }: { state: string }) {
   const meta = AGENT_STATE_META[state as AgentState];
@@ -334,6 +339,9 @@ export function AgentRunsPanel({
   const [feedback, setFeedback] = useState("");
   const [redirect, setRedirect] = useState("");
   const [acting, setActing] = useState(false);
+  // Contexto extra para la respuesta (picker nativo): carpetas/archivos que
+  // se suman a los de la tarea cuando el agente pidió más material.
+  const [extraCtx, setExtraCtx] = useState<ContextPaths>(EMPTY_CONTEXT);
 
   if (!task || !t) return null;
   const state = (t.agentState ?? null) as AgentState | null;
@@ -357,6 +365,7 @@ export function AgentRunsPanel({
       toast.success(okMsg);
       setAnswer("");
       setFeedback("");
+      setExtraCtx(EMPTY_CONTEXT);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Falló la acción");
     } finally {
@@ -575,6 +584,15 @@ export function AgentRunsPanel({
                     }
                     className="input resize-y font-normal"
                   />
+                  {state === "pregunta" && (
+                    <div className="mt-2">
+                      <p className="mb-1 text-[10px] text-faint">
+                        ¿Pidió material? Agrégale carpetas o archivos de
+                        contexto (solo lectura; se suman a los que ya tiene):
+                      </p>
+                      <ContextPicker value={extraCtx} onChange={setExtraCtx} />
+                    </div>
+                  )}
                   <button
                     disabled={acting || !answer.trim()}
                     onClick={() =>
@@ -584,6 +602,13 @@ export function AgentRunsPanel({
                             sessionToken: token!,
                             taskId: task._id,
                             answer: answer.trim(),
+                            ...(extraCtx.carpetas.length ||
+                            extraCtx.archivos.length
+                              ? {
+                                  carpetas: extraCtx.carpetas,
+                                  archivos: extraCtx.archivos,
+                                }
+                              : {}),
                           }),
                         "Enviado: el agente retoma con tus instrucciones",
                       )
@@ -758,6 +783,42 @@ export function AgentRunsPanel({
                   </p>
                 </div>
               )}
+
+              {/* Tarea de correo: la propuesta del agente, lista para copiar
+                  y pegar en el cliente de correo (el envío es de Cris). */}
+              {t.taskType === "correo" &&
+                (() => {
+                  const propuesta = runs.find((r) => r.summary && r.endedAt);
+                  if (!propuesta) return null;
+                  return (
+                    <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
+                      <p className="text-xs font-semibold text-ink">
+                        Propuesta de respuesta
+                      </p>
+                      <p className="mt-1.5 whitespace-pre-wrap rounded-el bg-panel p-2 text-xs leading-relaxed text-ink">
+                        {propuesta.summary}
+                      </p>
+                      <button
+                        onClick={() => {
+                          void navigator.clipboard
+                            .writeText(propuesta.summary!)
+                            .then(() =>
+                              toast.success(
+                                "Respuesta copiada: pégala en tu correo y envíala",
+                              ),
+                            );
+                        }}
+                        className="btn-primary mt-2 inline-flex items-center gap-1.5 text-xs"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                        Copiar respuesta
+                      </button>
+                      <p className="mt-1.5 text-[10px] text-faint">
+                        El agente nunca envía: revisa, copia, pega y envía tú.
+                      </p>
+                    </div>
+                  );
+                })()}
 
               {/* Aprobar / rechazar lo que quedó para revisión */}
               {canReview && (

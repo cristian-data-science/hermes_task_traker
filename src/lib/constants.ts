@@ -22,6 +22,7 @@ import {
   ListTodo,
   ListChecks,
   Compass,
+  Mail,
   ShieldCheck,
   Rocket,
   Target,
@@ -90,6 +91,7 @@ export const TASK_TYPES = [
   "desarrollo",
   "analisis",
   "ops",
+  "correo",
   "otro",
 ] as const;
 export type TaskType = (typeof TASK_TYPES)[number];
@@ -112,6 +114,12 @@ export const TASK_TYPE_META: Record<
   },
   analisis: { label: "Análisis", hint: "Investigar y medir sin cambiar nada", Icon: Search, vcs: null },
   ops: { label: "Ops", hint: "Solo lecturas/diagnóstico de infraestructura", Icon: Server, vcs: null },
+  correo: {
+    label: "Correo",
+    hint: "Redactar la respuesta del correo de origen, con contexto de consulta",
+    Icon: Mail,
+    vcs: null,
+  },
   otro: { label: "Otro", hint: "Instrucciones de la tarea", Icon: ListTodo, vcs: null },
 };
 

@@ -64,6 +64,8 @@ If hostPart = "file" Then
   mode = "file"
 ElseIf hostPart = "md" Then
   mode = "md"
+ElseIf hostPart = "pick" Then
+  mode = "pick"
 ElseIf hostPart = "zcode" Then
   mode = "zcode"
   agentKind = "zcode"
@@ -86,6 +88,22 @@ If qs <> "" Then
       If LCase(Left(pair, eq - 1)) = "session" Then session = URLDecode(Mid(pair, eq + 1))
     End If
   Next
+End If
+
+' ===== Modo pick: selector NATIVO de carpetas/archivos para la web =====
+' La web abre hermesagent://pick?kind=folder|files&key=<id>; acá se lanza el
+' picker local (diálogo de Windows) que publica el resultado en Convex con
+' las credenciales del puente. No requiere path.
+If mode = "pick" Then
+  Dim pkKind, pkKey
+  pkKind = qsValue(qs, "kind")
+  pkKey = qsValue(qs, "key")
+  If (pkKind = "folder" Or pkKind = "files") And Len(pkKey) > 7 And IsSafeToken(pkKey) Then
+    CreateObject("WScript.Shell").Run _
+      "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\picker.mjs"" " & pkKey & " " & pkKind, _
+      0, False
+  End If
+  WScript.Quit
 End If
 
 ' ===== Ejecutar el modo =====

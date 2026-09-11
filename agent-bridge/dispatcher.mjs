@@ -41,11 +41,13 @@ import {
   buildPrompt,
   buildRedirectPrompt,
   buildPlanPrompt,
+  buildCorreoPrompt,
   parsePlanBlock,
   parsePlanQuestion,
 } from "./prompts.mjs";
 import { notifyAgent } from "./notify.mjs";
 import { adapterFor } from "./agents/index.mjs";
+import { mkdirSync } from "node:fs";
 
 const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000);
 const MAX_PARALLEL_DEFAULT = Number(process.env.MAX_PARALLEL_DEFAULT || 2);
@@ -181,12 +183,30 @@ async function dispatchTask(entry) {
 
 async function dispatchTaskInner({ task, workspace }, run, adapter) {
   const taskId = task._id;
-  const folder = task.workspacePath || workspace?.path || "";
   const notifyMode = task.notifyWhatsapp ?? "off";
 
   // Contrato operativo vigente (editable por Cris en la app): fresco en cada
   // despacho, así una edición aplica sin reiniciar el puente.
   const contract = await q("agent:getContract").catch(() => null);
+
+  // Carpeta de trabajo. Tareas de CORREO: el agente no escribe — corre en la
+  // primera carpeta de CONTEXTO si existe, o en una neutra del puente.
+  let folder = task.workspacePath || workspace?.path || "";
+  if (task.taskType === "correo") {
+    const ctxFolder = task.contextPaths?.carpetas?.[0];
+    folder =
+      ctxFolder && existsSync(ctxFolder)
+        ? ctxFolder
+        : path.join(BRIDGE_DIR, "workspace-correo");
+    try {
+      mkdirSync(folder, { recursive: true });
+    } catch {}
+  }
+
+  // Cuerpo COMPLETO del correo de origen (para el prompt de respuesta).
+  const correo = task.correoId
+    ? await q("correos:correoDeTarea", { taskId }).catch(() => null)
+    : null;
 
   // 1) Carpeta en disco: sin carpeta el agente no sabe dónde trabajar →
   //    pregunta (no error): Cris elige la carpeta en la app y re-encola.
@@ -252,15 +272,23 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
         contract,
         agentLabel: adapter.label,
       })
-    : buildPrompt({
-        task,
-        workspacePath: folder,
-        runId,
-        followUp,
-        resumed: !!task.agentSessionId,
-        contract,
-        agentLabel: adapter.label,
-      });
+    : task.taskType === "correo" && correo
+      ? buildCorreoPrompt({
+          task,
+          runId,
+          followUp,
+          correo,
+          agentLabel: adapter.label,
+        })
+      : buildPrompt({
+          task,
+          workspacePath: folder,
+          runId,
+          followUp,
+          resumed: !!task.agentSessionId,
+          contract,
+          agentLabel: adapter.label,
+        });
   const needsSwap = adapter.needsSwap(run.effectiveModel, defaultModel);
 
   log(

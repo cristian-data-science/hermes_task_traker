@@ -39,12 +39,19 @@ const reportableStateUnion = v.union(
   v.literal("cancelada"),
 );
 
-const taskTypeUnion = v.union(
-  v.literal("reporte"),
-  v.literal("desarrollo"),
-  v.literal("analisis"),
-  v.literal("ops"),
-  v.literal("otro"),
+/** Tipos válidos para carpetas del registro agentWorkspaces. SIN "correo":
+ *  el contexto de una respuesta de correo se elige con el picker nativo,
+ *  no es una carpeta de trabajo registrada. */
+const workspaceTypesUnion = v.optional(
+  v.array(
+    v.union(
+      v.literal("reporte"),
+      v.literal("desarrollo"),
+      v.literal("analisis"),
+      v.literal("ops"),
+      v.literal("otro"),
+    ),
+  ),
 );
 
 const areaUnion = v.union(
@@ -632,6 +639,7 @@ export const _seedDelegatedTask = internalMutation({
       v.literal("desarrollo"),
       v.literal("analisis"),
       v.literal("ops"),
+      v.literal("correo"),
       v.literal("otro"),
     ),
     autonomy: v.union(
@@ -1167,8 +1175,15 @@ export const taskForNotify = query({
 /** Responde una pregunta del agente: re-encola con la respuesta como followUp.
  *  También sirve para RE-DESPACHAR una delegación cancelada (nuevo intento). */
 export const answerQuestion = mutation({
-  args: { ...sessionArg, taskId: v.id("tasks"), answer: v.string() },
-  handler: async (ctx, { sessionToken, taskId, answer }) => {
+  args: {
+    ...sessionArg,
+    taskId: v.id("tasks"),
+    answer: v.string(),
+    /** Contexto adicional (picker nativo): carpetas/archivos que se SUMAN. */
+    carpetas: v.optional(v.array(v.string())),
+    archivos: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, { sessionToken, taskId, answer, carpetas, archivos }) => {
     await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(taskId);
     if (!task || task.deletedAt !== undefined)
@@ -1181,9 +1196,28 @@ export const answerQuestion = mutation({
       throw new Error(
         `La tarea no está esperando tu respuesta (estado: ${task.agentState ?? "sin delegar"})`,
       );
+    // Contexto acumulable: las rutas nuevas se AGREGAN a las existentes
+    // (sin duplicar) y el followUp se las lista al agente.
+    const rutasNuevas = [...(carpetas ?? []), ...(archivos ?? [])];
+    const extraFollowUp = rutasNuevas.length
+      ? `\n\nMaterial de contexto agregado por Cris (CONSULTA, solo lectura):\n${rutasNuevas
+          .map((p) => `- ${p}`)
+          .join("\n")}`
+      : "";
+    const merged = {
+      carpetas: [
+        ...new Set([...(task.contextPaths?.carpetas ?? []), ...(carpetas ?? [])]),
+      ],
+      archivos: [
+        ...new Set([...(task.contextPaths?.archivos ?? []), ...(archivos ?? [])]),
+      ],
+    };
     await applyAgentState(ctx, task, "encolada", sessionToken, {
       agentQuestion: undefined,
-      agentFollowUp: answer.slice(0, FOLLOWUP_MAX),
+      agentFollowUp:
+        answer.slice(0, Math.max(0, FOLLOWUP_MAX - extraFollowUp.length)) +
+        extraFollowUp,
+      ...(rutasNuevas.length ? { contextPaths: merged } : {}),
     });
     await logEvent(ctx, {
       taskId,
@@ -1477,7 +1511,7 @@ export const addWorkspace = mutation({
     path: v.string(),
     area: areaUnion,
     vcs: v.union(v.literal("git"), v.literal("ninguno")),
-    types: v.optional(v.array(taskTypeUnion)),
+    types: workspaceTypesUnion,
   },
   handler: async (ctx, { sessionToken, label, path, area, vcs, types }) => {
     await requireAuth(ctx, sessionToken);
@@ -1506,7 +1540,7 @@ export const updateWorkspace = mutation({
     path: v.optional(v.string()),
     area: v.optional(areaUnion),
     vcs: v.optional(v.union(v.literal("git"), v.literal("ninguno"))),
-    types: v.optional(v.array(taskTypeUnion)),
+    types: workspaceTypesUnion,
     enabled: v.optional(v.boolean()),
   },
   handler: async (ctx, { sessionToken, id, ...patch }) => {
