@@ -248,7 +248,7 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
             {/* Header */}
             <div className="flex items-center justify-between border-b border-line px-4 py-3.5 sm:px-5 sm:py-4">
               <h2 className="font-display text-lg font-semibold text-ink">
-                ClickUp · Patagonia
+                Configuración
               </h2>
               <button
                 onClick={onClose}
@@ -316,6 +316,97 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                       </div>
                     </div>
                   )}
+
+                  {/* ===== Períodos de ausencia (anotación de insights) =====
+                      Primera sección del panel: es config general, no ClickUp. */}
+                  <div>
+                    <p className="label">Períodos de ausencia (Patagonia)</p>
+                    <p className="mb-2 text-xs text-mute">
+                      Cuando un rango de insights pisa un período, se muestra
+                      el aviso para dar contexto a los números. No cambia
+                      ningún cálculo. "Hasta" es tu último día ausente: si
+                      vuelves el lunes 21, el período termina el domingo 20.
+                    </p>
+                    {periodos === null ? (
+                      <p className="text-xs text-faint">Cargando…</p>
+                    ) : (
+                      <>
+                        <div className="space-y-2">
+                          {periodos.map((p, i) => (
+                            <div
+                              key={i}
+                              className="flex flex-wrap items-center gap-1.5"
+                            >
+                              <input
+                                value={p.etiqueta ?? ""}
+                                onChange={(e) =>
+                                  editarPeriodo(i, { etiqueta: e.target.value })
+                                }
+                                placeholder="Vacaciones"
+                                className="input w-32 text-xs"
+                              />
+                              <input
+                                type="date"
+                                value={p.desde}
+                                onChange={(e) =>
+                                  editarPeriodo(i, { desde: e.target.value })
+                                }
+                                className="input w-36 text-xs"
+                                title="Primer día ausente"
+                              />
+                              <span className="text-[10px] text-faint">a</span>
+                              <input
+                                type="date"
+                                value={p.hasta}
+                                onChange={(e) =>
+                                  editarPeriodo(i, { hasta: e.target.value })
+                                }
+                                className="input w-36 text-xs"
+                                title="Último día ausente"
+                              />
+                              <button
+                                onClick={() =>
+                                  setPeriodos(
+                                    (prev) =>
+                                      prev?.filter((_, j) => j !== i) ?? null,
+                                  )
+                                }
+                                className="rounded-el p-1.5 text-faint transition-colors hover:bg-panel2 hover:text-danger"
+                                title="Quitar este período"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            onClick={() =>
+                              setPeriodos((prev) => [
+                                ...(prev ?? []),
+                                { desde: "", hasta: "", etiqueta: "" },
+                              ])
+                            }
+                            className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+                          >
+                            <Plus className="h-3.5 w-3.5" /> Agregar período
+                          </button>
+                          <button
+                            disabled={savingAusencias}
+                            onClick={() => void handleSaveAusencias()}
+                            className="btn-primary inline-flex items-center gap-1.5 text-xs"
+                          >
+                            {savingAusencias ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Check className="h-3.5 w-3.5" />
+                            )}
+                            Guardar períodos
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
 
                   {/* Toggle global */}
                   <div className="flex items-center justify-between gap-3 rounded-el border-el border-line bg-panel2 p-3">
@@ -431,96 +522,6 @@ export function ClickUpSettings({ open, onClose, onGoToSync }: ClickUpSettingsPr
                         );
                       })}
                     </div>
-                  </div>
-
-                  {/* Períodos de ausencia (anotación de insights) */}
-                  <div>
-                    <p className="label">Períodos de ausencia (Patagonia)</p>
-                    <p className="mb-2 text-xs text-mute">
-                      Cuando un rango de insights pisa un período, se muestra
-                      el aviso para dar contexto a los números. No cambia
-                      ningún cálculo. "Hasta" es tu último día ausente: si
-                      vuelves el lunes 21, el período termina el domingo 20.
-                    </p>
-                    {periodos === null ? (
-                      <p className="text-xs text-faint">Cargando…</p>
-                    ) : (
-                      <>
-                        <div className="space-y-2">
-                          {periodos.map((p, i) => (
-                            <div
-                              key={i}
-                              className="flex flex-wrap items-center gap-1.5"
-                            >
-                              <input
-                                value={p.etiqueta ?? ""}
-                                onChange={(e) =>
-                                  editarPeriodo(i, { etiqueta: e.target.value })
-                                }
-                                placeholder="Vacaciones"
-                                className="input w-32 text-xs"
-                              />
-                              <input
-                                type="date"
-                                value={p.desde}
-                                onChange={(e) =>
-                                  editarPeriodo(i, { desde: e.target.value })
-                                }
-                                className="input w-36 text-xs"
-                                title="Primer día ausente"
-                              />
-                              <span className="text-[10px] text-faint">a</span>
-                              <input
-                                type="date"
-                                value={p.hasta}
-                                onChange={(e) =>
-                                  editarPeriodo(i, { hasta: e.target.value })
-                                }
-                                className="input w-36 text-xs"
-                                title="Último día ausente"
-                              />
-                              <button
-                                onClick={() =>
-                                  setPeriodos(
-                                    (prev) =>
-                                      prev?.filter((_, j) => j !== i) ?? null,
-                                  )
-                                }
-                                className="rounded-el p-1.5 text-faint transition-colors hover:bg-panel2 hover:text-danger"
-                                title="Quitar este período"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="mt-2 flex items-center gap-2">
-                          <button
-                            onClick={() =>
-                              setPeriodos((prev) => [
-                                ...(prev ?? []),
-                                { desde: "", hasta: "", etiqueta: "" },
-                              ])
-                            }
-                            className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
-                          >
-                            <Plus className="h-3.5 w-3.5" /> Agregar período
-                          </button>
-                          <button
-                            disabled={savingAusencias}
-                            onClick={() => void handleSaveAusencias()}
-                            className="btn-primary inline-flex items-center gap-1.5 text-xs"
-                          >
-                            {savingAusencias ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Check className="h-3.5 w-3.5" />
-                            )}
-                            Guardar períodos
-                          </button>
-                        </div>
-                      </>
-                    )}
                   </div>
 
                   {/* Info de timestamps */}

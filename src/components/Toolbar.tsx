@@ -214,8 +214,8 @@ export function Toolbar({
             <button
               onClick={onOpenSettings}
               className="btn-ghost p-2 hover:text-accent"
-              title="ClickUp"
-              aria-label="ClickUp"
+              title="Configuración"
+              aria-label="Configuración"
             >
               <Settings className="h-4 w-4" />
             </button>
