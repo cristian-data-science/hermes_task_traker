@@ -296,6 +296,9 @@ export function buildPrompt(input) {
     'AL TERMINAR — apenas el objetivo esté VERIFICADO, ejecuta INMEDIATAMENTE el reporte final (no lo dejes para después de tareas de embellecimiento):',
   );
   lines.push(
+    `Antes del reporte final, CIERRA EL PLAN: manda UN --step por cada ítem de tu plan que completaste y no reportaste aún, con el ítem nombrado (ej: --step "hecho: prueba empírica con audio real"). Así el roadmap del tracker refleja exactamente qué quedó hecho y qué pendiente — sin ese cierre, los ítems silenciosos aparecen como pendientes para siempre.`,
+  );
+  lines.push(
     `node "${REPORT_CLI}" --task ${task._id} --run ${runId} --state <para-revision|pregunta|hecho> --summary "<máx 3 líneas, evidencia; SIN enumerar pasos adentro>"`,
   );
   lines.push(

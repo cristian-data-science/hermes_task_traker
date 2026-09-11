@@ -476,9 +476,27 @@ function computeTracker(task, runs) {
   const planRun = list.find((r) => Array.isArray(r.plan) && r.plan.length) || null;
   const plan = planRun?.plan ?? planFromLink;
   const steps = (planRun ?? latest)?.progressLog ?? [];
-  const planOpen = !!planRun && !planRun.endedAt;
-  const doneCount = steps.length;
-  const current = plan.length ? Math.min(doneCount + (planOpen ? 1 : 0), plan.length) : 0;
+  // Tarea ya terminada (aprobada/cancelada): una corrida "abierta" es un
+  // zombi — se muestra como cerrada (misma sanidad que el panel del tracker).
+  const taskDone =
+    !!task &&
+    (task.agentState === "hecho" ||
+      task.agentState === "cancelada" ||
+      task.status === "completado");
+  const planOpen = !!planRun && !planRun.endedAt && !taskDone;
+  // Corrida terminada BIEN: el roadmap se marca completo — el agente no
+  // siempre reporta un --step por cada ítem del plan (los agrupa), y sin
+  // esto el sidebar del chat los dejaba "pendientes" para siempre aunque la
+  // tarea estuviera aprobada (caso real: Hermes vs VoiceFlow, 3/6 mostrado).
+  const finishedOk =
+    (!!latest?.endedAt && ["para-revision", "hecho"].includes(latest.state)) ||
+    (taskDone && !["error", "cancelada"].includes(latest?.state ?? ""));
+  const doneCount = finishedOk ? plan.length : steps.length;
+  const current = finishedOk
+    ? plan.length
+    : plan.length
+      ? Math.min(steps.length + (planOpen ? 1 : 0), plan.length)
+      : 0;
   return {
     live: true,
     source: "convex",
