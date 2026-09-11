@@ -178,9 +178,11 @@ export function TaskModal({
   useEffect(() => {
     if (!open) return;
     // Si el contexto no cambió (reapertura del mismo modal tras un misclic),
-    // conservar el borrador tal cual está.
+    // conservar el borrador tal cual está — EXCEPTO la respuesta del correo:
+    // ese campo parte siempre vacío para dar contexto nuevo en cada envío.
     if (lastCtx.current === ctxKey) {
       setHydratedKey(ctxKey);
+      setCorreoInstruccion("");
       return;
     }
     lastCtx.current = ctxKey;
@@ -201,6 +203,7 @@ export function TaskModal({
       setClickupParentId(task.clickupParentId);
       setClickupListId(task.clickupListId);
       setClickupLocal(task.clickupLocal ?? false);
+      setCorreoInstruccion("");
       setAgentCfg(agentConfigFromTask(task));
       setDelegCtx({
         carpetas: task.contextPaths?.carpetas ?? [],
@@ -342,6 +345,9 @@ export function TaskModal({
         await createTask({ sessionToken: token!, ...payload });
         toast.success("Tarea creada");
       }
+      // La indicación de la respuesta del correo ya viajó en el guardado:
+      // no dejarla pegada para el próximo contexto (siempre parte nueva).
+      setCorreoInstruccion("");
       // Invalidar el borrador: la próxima apertura empieza limpio (y el picker
       // se re-monta recién cuando el estado esté hidratado de nuevo).
       lastCtx.current = null;
