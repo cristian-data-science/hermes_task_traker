@@ -5,7 +5,7 @@
 | Fecha | 2026-09-11 |
 | Dueño | Cristian |
 | Módulo | correos + capa agente (Convex, web, agent-bridge) |
-| Estado | en desarrollo |
+| Estado | hecho |
 | Rama / PR | master (deploy directo, patrón del repo) |
 | Relacionados | `2026-09-08-auto-tarea-pendiente.md` (correo → tarea), `2026-08-31-ingesta-outlook-power-automate.md` (ingesta), CONTRATO_AGENTE.md §5 (el agente nunca envía correos) |
 
