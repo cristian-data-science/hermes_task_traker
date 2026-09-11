@@ -184,13 +184,16 @@ cubren el caso "el contexto de ESTE correo está acá".
 
 ## 8. Riesgos y notas
 
-- **AMPLIACIÓN (2026-09-11, post-feedback)**: el contexto con picker nativo
-  se extendió a TODA delegación (no solo correo): bloque "Contexto adicional
-  (opcional)" en la sección de delegación del TaskModal, persistido en
-  `tasks.contextPaths` vía tasks.create/update, e incluido en el prompt
-  genérico del puente (`contextoLines`). El diálogo de carpetas ahora trae
-  el botón nativo "Crear nueva carpeta" (ShowNewFolderButton), así la
-  carpeta custom puede crearse en el momento, donde el usuario quiera.
+- **AMPLIACIÓN (2026-09-11, post-feedback ×2)**: la respuesta del correo se
+  integró a la sección de delegación del TaskModal (sin bloque suelto): al
+  elegir ejecutor ZCode/Claude se despliega la sección; al elegir el tipo
+  "Correo" (habilitado solo en tareas de origen correo) aparecen la
+  indicación y el contexto con picker nativo, y se oculta el selector de
+  carpeta del registro. La indicación viaja como agentFollowUp vía
+  tasks.update (arg `correoInstruccion`). El diálogo de carpetas permite
+  CREAR la carpeta en el momento (botón nativo). El contexto persiste en
+  `tasks.contextPaths` y viaja en el prompt genérico del puente
+  (`contextoLines`) como material de solo lectura para cualquier tipo.
 
 - **El picker depende del puente corriendo** (credenciales): mismo trust y
   misma limitación que "Abrir carpeta" y el chat hoy. Mensaje claro si no.
