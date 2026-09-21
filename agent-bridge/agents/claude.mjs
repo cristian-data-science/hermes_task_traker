@@ -171,7 +171,12 @@ export const claudeAdapter = {
       const desc = describeAssistant(j);
       if (desc) {
         run.lastActivityAt = Date.now();
-        api.activity(desc);
+        // Sin reenvíos idénticos consecutivos: cada activity parchea la
+        // corrida en Convex y dispara el re-envío de las suscripciones.
+        if (desc !== run._lastSentActivity) {
+          run._lastSentActivity = desc;
+          api.activity(desc);
+        }
       }
     }
   },

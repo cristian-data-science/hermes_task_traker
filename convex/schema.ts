@@ -373,7 +373,10 @@ export default defineSchema({
     .index("by_area", ["area", "order"])
     .index("by_area_status", ["area", "status", "order"])
     .index("by_clickup_id", ["clickupId"])
-    .index("by_agent_state", ["agentState", "createdAt"]),
+    .index("by_agent_state", ["agentState", "createdAt"])
+    // Redirecciones pendientes: el índice solo contiene tareas CON
+    // agentRedirect definido (redirectQueue, suscripción 24/7 del puente).
+    .index("by_agent_redirect", ["agentRedirect"]),
 
   subtasks: defineTable({
     taskId: v.id("tasks"),

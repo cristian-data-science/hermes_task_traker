@@ -221,6 +221,7 @@ export const zcodeAdapter = {
   startTailer(run, api) {
     let fileSize = 0;
     let lastText = "";
+    let lastSent = null;
     let file = null;
     const timer = setInterval(() => {
       try {
@@ -246,7 +247,13 @@ export const zcodeAdapter = {
         }
         if (lastText) {
           run.lastActivityAt = Date.now();
-          api.activity(lastText);
+          // A Convex SOLO cuando la actividad CAMBIÓ: reenviar el mismo texto
+          // cada tick parcheaba la corrida cada 5 s y cada parche re-enviaba
+          // runsByTask/insights a todos los suscritos, sin información nueva.
+          if (lastText !== lastSent) {
+            lastSent = lastText;
+            api.activity(lastText);
+          }
         }
       } catch {
         // transcript puede rotar/desaparecer: el tailer es best-effort
