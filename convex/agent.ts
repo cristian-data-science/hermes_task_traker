@@ -23,7 +23,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
-import { isDelegatedExecutor } from "./schema";
+import { isDelegatedExecutor, agentStates } from "./schema";
 import { logEvent, logStatusChange } from "./events";
 import { internal } from "./_generated/api";
 
@@ -432,12 +432,18 @@ export const redirectQueue = query({
   args: sessionArg,
   handler: async (ctx, { sessionToken }) => {
     await requireAuth(ctx, sessionToken);
-    const tasks = await ctx.db.query("tasks").collect();
+    // Índice by_agent_redirect: solo entran las tareas CON redirección
+    // pendiente (las filas sin el campo quedan fuera del índice). Antes era
+    // un collect() de TODA la tabla que se re-leía con cada escritura de
+    // cualquier tarea — caro para una suscripción 24/7 del puente.
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_agent_redirect")
+      .collect();
     return tasks
       .filter(
         (t) =>
           t.deletedAt === undefined &&
-          t.agentRedirect !== undefined &&
           (t.agentState === "despachada" ||
             t.agentState === "trabajando" ||
             t.agentState === "pregunta"),
@@ -456,13 +462,24 @@ export const agentOverview = query({
   args: { ...sessionArg, since: v.optional(v.number()) },
   handler: async (ctx, { sessionToken, since }) => {
     await requireAuth(ctx, sessionToken);
-    const all = await ctx.db.query("tasks").collect();
-    const delegated = all.filter(
-      (t) =>
-        t.deletedAt === undefined &&
-        isDelegatedExecutor(t.executor) &&
-        t.agentState !== undefined,
-    );
+    // Por índice by_agent_state: se leen SOLO las tareas con estado de agente
+    // (antes era un collect() de toda la tabla, re-leído con cada escritura
+    // de cualquier tarea). El orden por createdAt replica el del escaneo.
+    const rows = (
+      await Promise.all(
+        agentStates.map((s) =>
+          ctx.db
+            .query("tasks")
+            .withIndex("by_agent_state", (q) => q.eq("agentState", s))
+            .collect(),
+        ),
+      )
+    ).flat();
+    const delegated = rows
+      .filter(
+        (t) => t.deletedAt === undefined && isDelegatedExecutor(t.executor),
+      )
+      .sort((a, b) => a.createdAt - b.createdAt);
     const cut = since ?? Date.now() - 24 * 60 * 60 * 1000;
     const pick = (states: string[]) =>
       delegated.filter((t) => states.includes(t.agentState!));
@@ -489,7 +506,16 @@ export const agentOverview = query({
   },
 });
 
-/** Corridas de una tarea, más reciente primero. */
+/**
+ * Corridas de una tarea, más reciente primero.
+ *
+ * PROYECCIÓN: solo los campos que consumen el panel del tablero
+ * (AgentRunsPanel) y el tracker en vivo del chat (zchat) — verificado por
+ * grep + typecheck. Fuera quedan `promptDigest`, `autonomy`, `exitCode`,
+ * `activityCount` y `updatedAt`, que nadie lee. Esta query se re-envía con
+ * cada parche de actividad (suscripción reactiva), así que cada byte viaja
+ * a todos los clientes en cada actualización.
+ */
 export const runsByTask = query({
   args: { ...sessionArg, taskId: v.id("tasks") },
   handler: async (ctx, { sessionToken, taskId }) => {
@@ -498,7 +524,31 @@ export const runsByTask = query({
       .query("agentRuns")
       .withIndex("by_task", (q) => q.eq("taskId", taskId))
       .collect();
-    return runs.sort((a, b) => b.startedAt - a.startedAt);
+    return runs
+      .sort((a, b) => b.startedAt - a.startedAt)
+      .map((r) => ({
+        _id: r._id,
+        taskId: r.taskId,
+        agent: r.agent,
+        state: r.state,
+        model: r.model,
+        sessionId: r.sessionId,
+        workspacePath: r.workspacePath,
+        resumed: r.resumed,
+        startedAt: r.startedAt,
+        endedAt: r.endedAt,
+        stalled: r.stalled,
+        phases: r.phases,
+        firstActivityAt: r.firstActivityAt,
+        lastActivity: r.lastActivity,
+        lastActivityAt: r.lastActivityAt,
+        progressLog: r.progressLog,
+        plan: r.plan,
+        planDetail: r.planDetail,
+        summary: r.summary,
+        error: r.error,
+        followUp: r.followUp,
+      }));
   },
 });
 

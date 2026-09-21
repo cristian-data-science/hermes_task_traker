@@ -13,6 +13,10 @@ import {
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
 import { api } from "~/convex/_generated/api";
+import type { FunctionReturnType } from "convex/server";
+
+/** Corrida tal como viaja por runsByTask (proyección, ver convex/agent.ts). */
+type RunView = FunctionReturnType<typeof api.agent.runsByTask>[number];
 import { useAuth } from "../hooks/useAuth";
 import {
   AGENT_STATE_META,
@@ -202,7 +206,7 @@ function RunTiming({
   run,
   queuedAt,
 }: {
-  run: Doc<"agentRuns">;
+  run: RunView;
   queuedAt?: number;
 }) {
   const spawnAt = run.phases?.find((p) => p.phase === "spawn")?.at;
@@ -351,7 +355,7 @@ function SummaryBlock({
  *  `taskDone`: la tarea ya terminó (hecha/cancelada/completada) — una corrida
  *  "abierta" en una tarea terminada es un zombi (quedó así por un camino que
  *  no la cerró): se muestra como cerrada para que el plan no quede atorado. */
-function StepList({ run, taskDone }: { run: Doc<"agentRuns">; taskDone?: boolean }) {
+function StepList({ run, taskDone }: { run: RunView; taskDone?: boolean }) {
   const steps = run.progressLog ?? [];
   const plan = run.plan ?? [];
   const open = !run.endedAt && !taskDone;
