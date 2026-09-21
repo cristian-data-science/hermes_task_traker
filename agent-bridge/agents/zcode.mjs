@@ -98,17 +98,26 @@ function describeLine(line) {
 
 /**
  * Bind TEMPRANO de la sesión: busca en db.sqlite la sesión nueva de esta
- * corrida por título (el prompt arranca con "agente- <título>…", que ZCode
- * usa como título de sesión) y la reporta apenas aparece — así el 💬 del chat
- * está disponible DURANTE la corrida y no solo al terminar.
+ * corrida y la reporta apenas aparece — así el 💬 del chat está disponible
+ * DURANTE la corrida y no solo al terminar.
+ *
+ * OJO con el título: el CLI trunca los títulos de sesión a 60 chars con "…"
+ * final, así que un LIKE con el prefijo completo ("agente- <título>" sin
+ * truncar) NUNCA matchea en títulos largos — el chat se quedaba esperando
+ * sesión minutos enteros. Se matchea por:
+ *   1) misma CARPETA (directory = --cwd de esta corrida) + título con
+ *      prefijo CORTO (40 chars, muy por debajo del truncado del CLI);
+ *   2) respaldo: misma carpeta y ventana de tiempo (el título puede venir
+ *      raro, pero carpeta + ventana recién-creada identifica la corrida).
  *
  * Devuelve el timer del poll (3 s, hasta 10 min) o null si no pudo abrir la
  * DB. Defensivo: si la tabla no tiene columna de tiempo, matchea por título
- * y orden de inserción (rowid DESC).
+ * (prefijo corto) y orden de inserción (rowid DESC).
  */
 function watchSessionDb(run, api) {
   let stopped = false;
-  const titlePrefix = `agente- ${run.title}`.slice(0, 60);
+  const needle = `agente- ${run.title}`.slice(0, 40);
+  const since = (run.spawnedAt - 60_000) / 1000;
   const timer = setInterval(() => {
     if (stopped || run.sessionId) return;
     let row = null;
@@ -118,16 +127,22 @@ function watchSessionDb(run, api) {
         { readOnly: true },
       );
       try {
-        row = db
+        const rows = db
           .prepare(
-            "SELECT id FROM session WHERE title LIKE ? AND time_created >= ? ORDER BY time_created DESC LIMIT 1",
+            "SELECT id, title, directory FROM session WHERE time_created >= ? ORDER BY time_created DESC LIMIT 20",
           )
-          .get(`${titlePrefix}%`, (run.spawnedAt - 60_000) / 1000);
+          .all(since);
+        row =
+          rows.find(
+            (r) => r.directory === run.folder && r.title.startsWith(needle),
+          ) ??
+          rows.find((r) => r.directory === run.folder) ??
+          null;
       } catch {
         // Sin columna time_created (schema viejo): por título, la más nueva.
         row = db
           .prepare("SELECT id FROM session WHERE title LIKE ? ORDER BY rowid DESC LIMIT 1")
-          .get(`${titlePrefix}%`);
+          .get(`${needle}%`);
       }
       db.close();
     } catch {

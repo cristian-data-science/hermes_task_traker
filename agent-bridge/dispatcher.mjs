@@ -233,6 +233,10 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     return;
   }
 
+  // Carpeta final de esta corrida: el bind temprano de sesión (watchSession)
+  // la usa para identificar la sesión nueva en db.sqlite por directory.
+  run.folder = folder;
+
   // 2) Resume REAL de la sesión del agente: si la tarea tiene agentSessionId
   //    y la sesión sigue viva en el motor (db.sqlite para zcode, JSONL para
   //    claude), el agente retoma TODO su contexto. Va ANTES del claim: el
