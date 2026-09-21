@@ -5,6 +5,7 @@
  */
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { existsSync } from "node:fs";
 
 const REPORT_CLI = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -51,6 +52,18 @@ const TYPE_RECIPES = {
 const CORREO_CUERPO_MAX = 30_000;
 
 /**
+ * Ruta de contexto lista para el prompt, marcada si ya no está en disco.
+ * Corre en la máquina de Cris (dispatcher): si el archivo/carpeta se movió
+ * entre el pick y el despacho, el agente lo ve avisado en vez de salir a
+ * buscar un fantasma (o peor, inventar su contenido).
+ */
+function marcarRuta(ruta) {
+  return existsSync(ruta)
+    ? ruta
+    : `${ruta} (ya no existe en disco — avísale a Cris si lo necesitabas)`;
+}
+
+/**
  * Sección de material de contexto (solo lectura) para cualquier tarea: las
  * carpetas/archivos elegidos con el picker nativo (contextPaths). Retorna un
  * array de líneas (vacío si no hay contexto).
@@ -62,11 +75,11 @@ function contextoLines(task) {
   const lines = ["\n=== MATERIAL DE CONTEXTO ELEGIDO POR CRIS (solo lectura) ==="];
   if (carpetas.length) {
     lines.push("Carpetas para explorar:");
-    for (const c of carpetas) lines.push(`- ${c}`);
+    for (const c of carpetas) lines.push(`- ${marcarRuta(c)}`);
   }
   if (archivos.length) {
     lines.push("Archivos para leer:");
-    for (const a of archivos) lines.push(`- ${a}`);
+    for (const a of archivos) lines.push(`- ${marcarRuta(a)}`);
   }
   lines.push(
     "Son material de CONSULTA: úsalos como fuente de datos (cita números/archivos concretos cuando aplique) pero NO los modifiques ni ejecutes cambios sobre ellos.",
@@ -126,11 +139,11 @@ export function buildCorreoPrompt(input) {
     lines.push(`\n=== MATERIAL DE CONTEXTO (solo lectura) ===`);
     if (carpetas.length) {
       lines.push("Carpetas para explorar:");
-      for (const c of carpetas) lines.push(`- ${c}`);
+      for (const c of carpetas) lines.push(`- ${marcarRuta(c)}`);
     }
     if (archivos.length) {
       lines.push("Archivos para leer:");
-      for (const a of archivos) lines.push(`- ${a}`);
+      for (const a of archivos) lines.push(`- ${marcarRuta(a)}`);
     }
     lines.push("Úsalos como fuente de datos para fundamentar la respuesta; cita números/archivos concretos cuando aplique.");
   }

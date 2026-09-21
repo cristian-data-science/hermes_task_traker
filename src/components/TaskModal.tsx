@@ -724,7 +724,16 @@ export function TaskModal({
                             nunca envía.
                           </p>
                         </div>
-                      ) : undefined
+                      ) : (
+                        <div>
+                          <ContextPicker value={delegCtx} onChange={setDelegCtx} />
+                          <p className="mt-1.5 text-[10px] leading-snug text-faint">
+                            Contexto para el agente (solo lectura): carpetas para
+                            explorar y archivos (ej. un Excel) que leerá directo
+                            de tu disco — no se suben a la nube.
+                          </p>
+                        </div>
+                      )
                     }
                   />
                 </>
