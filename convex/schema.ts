@@ -359,10 +359,16 @@ export default defineSchema({
      *  - "rama-pr" (default): rama agent/<slug> + pull request, jamás master.
      *  - "main-directo": excepción elegida al crear la tarea — commits y push
      *    directo en master/main (producción se despliega por el pipeline).
+     *  - "solo-local": carpeta customizada sin registro — PROHIBIDO git
+     *    (init/commit/push); los adjuntos se copian a la carpeta al despachar.
      * Sin campo (tareas viejas) = rama-pr.
      */
     gitStrategy: v.optional(
-      v.union(v.literal("rama-pr"), v.literal("main-directo")),
+      v.union(
+        v.literal("rama-pr"),
+        v.literal("main-directo"),
+        v.literal("solo-local"),
+      ),
     ),
     /** Notificaciones WhatsApp vía Hermes para esta tarea. */
     notifyWhatsapp: v.optional(

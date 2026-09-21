@@ -72,17 +72,27 @@ function contextoLines(task) {
   const carpetas = task.contextPaths?.carpetas ?? [];
   const archivos = task.contextPaths?.archivos ?? [];
   if (!carpetas.length && !archivos.length) return [];
-  const lines = ["\n=== MATERIAL DE CONTEXTO ELEGIDO POR CRIS (solo lectura) ==="];
+  // Carpeta customizada: los archivos ya están DENTRO de la carpeta de
+  // trabajo (el despachador los copió) — son material base para trabajar,
+  // no referencias externas de solo lectura.
+  const soloLocal = task.gitStrategy === "solo-local";
+  const lines = [
+    soloLocal
+      ? "\n=== MATERIAL BASE DE LA TAREA (copiado a tu carpeta de trabajo) ==="
+      : "\n=== MATERIAL DE CONTEXTO ELEGIDO POR CRIS (solo lectura) ===",
+  ];
   if (carpetas.length) {
     lines.push("Carpetas para explorar:");
     for (const c of carpetas) lines.push(`- ${marcarRuta(c)}`);
   }
   if (archivos.length) {
-    lines.push("Archivos para leer:");
+    lines.push(soloLocal ? "Archivos base:" : "Archivos para leer:");
     for (const a of archivos) lines.push(`- ${marcarRuta(a)}`);
   }
   lines.push(
-    "Son material de CONSULTA: úsalos como fuente de datos (cita números/archivos concretos cuando aplique) pero NO los modifiques ni ejecutes cambios sobre ellos.",
+    soloLocal
+      ? "Son tu PUNTO DE PARTIDA: léelos y trabaja con ellos; los resultados guárdalos en archivos NUEVOS dentro de la carpeta (conserva los base sin editarlos salvo que la tarea lo pida)."
+      : "Son material de CONSULTA: úsalos como fuente de datos (cita números/archivos concretos cuando aplique) pero NO los modifiques ni ejecutes cambios sobre ellos.",
   );
   return lines;
 }
@@ -246,6 +256,26 @@ function taskContextLines({ task, workspacePath, contract, agentLabel }) {
     );
     lines.push(
       "- El resto de los límites del contrato siguen vigentes (ERP, correos, producción de OTROS sistemas).",
+    );
+  }
+
+  // Carpeta customizada (solo-local): pisa CUALQUIER receta de tipo — la
+  // tarea vive en una carpeta suelta de Cris, no en un repo, y no se versiona.
+  if (task.gitStrategy === "solo-local") {
+    lines.push(
+      "\n=== ESTRATEGIA GIT: SOLO LOCAL (carpeta customizada elegida por Cris) ===",
+    );
+    lines.push(
+      "Esta tarea PISA la receta de tu tipo y la regla de oro de ramas en lo que haga al flujo git:",
+    );
+    lines.push(
+      "- PROHIBIDO cualquier comando git (init/add/commit/push): la carpeta NO es un repo y nada se versiona.",
+    );
+    lines.push(
+      "- Nada sale de la carpeta: no subas archivos a ningún remoto ni servicio.",
+    );
+    lines.push(
+      "- Todo el trabajo y sus resultados quedan como archivos locales en la carpeta.",
     );
   }
   return lines;

@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
+import { useNativePicker } from "../hooks/useNativePicker";
 import {
   TASK_TYPES,
   TASK_TYPE_META,
@@ -42,9 +43,15 @@ import { AGENT_UI_ENABLED, cn } from "../lib/utils";
 export interface AgentConfig {
   taskType: TaskType | "";
   workspaceId: string;
+  /** Modo carpeta customizada: opción B bajo el selector de registradas. */
+  customMode: boolean;
+  /** Carpeta customizada (ruta absoluta): el agente trabaja ahí SIN git. */
+  customFolder: string;
+  /** Adjuntos del modo custom: se COPIAN a customFolder al despachar. */
+  customArchivos: string[];
   autonomy: Autonomy;
   model: string;
-  /** Estrategia Git (solo desarrollo): rama-pr default | main-directo. */
+  /** Estrategia Git (solo desarrollo): rama-pr default | main-directo; "solo-local" la fija el modo custom. */
   gitStrategy: GitStrategy;
   notifyWhatsapp: NotifyMode;
   /** Modo plan: primero planifica (solo lectura) y espera tu OK antes de ejecutar. */
@@ -54,6 +61,9 @@ export interface AgentConfig {
 export const EMPTY_AGENT_CONFIG: AgentConfig = {
   taskType: "",
   workspaceId: "",
+  customMode: false,
+  customFolder: "",
+  customArchivos: [],
   autonomy: "supervisado",
   model: "",
   gitStrategy: "rama-pr",
@@ -64,22 +74,33 @@ export const EMPTY_AGENT_CONFIG: AgentConfig = {
 export function agentConfigFromTask(t: {
   taskType?: string;
   workspaceId?: string;
+  workspacePath?: string;
   autonomy?: string;
   model?: string;
   gitStrategy?: string;
   notifyWhatsapp?: string;
   planMode?: boolean;
+  archivos?: string[];
 }): AgentConfig {
+  // Modo customizada: ruta suelta sin workspace registrado + estrategia
+  // solo-local (la única que produce ese par hoy).
+  const customMode = t.gitStrategy === "solo-local" && !t.workspaceId;
   return {
     taskType: (TASK_TYPES as readonly string[]).includes(t.taskType ?? "")
       ? (t.taskType as TaskType)
       : "",
     workspaceId: t.workspaceId ?? "",
+    customMode,
+    customFolder: customMode ? (t.workspacePath ?? "") : "",
+    customArchivos: customMode ? (t.archivos ?? []) : [],
     autonomy: (AUTONOMIES as readonly string[]).includes(t.autonomy ?? "")
       ? (t.autonomy as Autonomy)
       : "supervisado",
     model: t.model ?? "",
-    gitStrategy: t.gitStrategy === "main-directo" ? "main-directo" : "rama-pr",
+    gitStrategy:
+      t.gitStrategy === "main-directo" || t.gitStrategy === "solo-local"
+        ? t.gitStrategy
+        : "rama-pr",
     notifyWhatsapp: (NOTIFY_MODES as readonly string[]).includes(t.notifyWhatsapp ?? "")
       ? (t.notifyWhatsapp as NotifyMode)
       : "off",
@@ -130,6 +151,20 @@ export function AgentDelegationSection({
     api.agent.bridgeStatus,
     token ? { sessionToken: token } : "skip",
   );
+
+  // Picker nativo del modo customizada: carpeta (se puede crear en el
+  // diálogo) + archivos que se copiarán adentro al despachar.
+  const picker = useNativePicker((kind, paths) => {
+    if (!paths.length) return;
+    if (kind === "folder") {
+      onChange({ ...value, customFolder: paths[0] });
+    } else {
+      onChange({
+        ...value,
+        customArchivos: [...new Set([...value.customArchivos, ...paths])],
+      });
+    }
+  });
 
   const meta = EXECUTOR_META[executor];
   const HeadIcon = executor === "claude" ? BrainCircuit : Sparkles;
@@ -230,7 +265,7 @@ export function AgentDelegationSection({
           archivos); recomendada para el resto (el despachador la exige para
           saber dónde trabajar). Para CORREO no aplica: el agente no escribe —
           corre en la carpeta de contexto (picker) o en la neutra del puente. */}
-      {value.taskType !== "correo" && (
+      {value.taskType !== "correo" && !value.customMode && (
         <>
           <label className="label">
             Carpeta destino
@@ -273,6 +308,120 @@ export function AgentDelegationSection({
           )}
           {!chosen && <div className="mb-3" />}
         </>
+      )}
+
+      {/* Opción B — carpeta customizada: cuando no aplica el predeterminado
+          (o no existe todavía), Cris elige/crea una carpeta cualquiera y el
+          agente trabaja ahí SIN git. Los adjuntos se copian adentro al
+          despachar (los originales quedan donde están). */}
+      {value.taskType !== "correo" && (
+        <div className="mb-3">
+          <button
+            type="button"
+            onClick={() =>
+              onChange(
+                value.customMode
+                  ? // Volver a la opción A: soltar lo custom y restablecer la
+                    // estrategia por defecto.
+                    {
+                      ...value,
+                      customMode: false,
+                      customFolder: "",
+                      customArchivos: [],
+                      gitStrategy: "rama-pr",
+                    }
+                  : // Ir a la opción B: sin carpeta registrada y estrategia
+                    // fija solo-local (sin git).
+                    {
+                      ...value,
+                      customMode: true,
+                      workspaceId: "",
+                      gitStrategy: "solo-local",
+                    },
+              )
+            }
+            className={cn(
+              "flex w-full items-center gap-2 rounded-el border-el px-2.5 py-2 text-left text-[11px] transition-colors",
+              value.customMode
+                ? cn(accent.border, accent.bg, "text-ink")
+                : "border-line text-mute hover:bg-panel2",
+            )}
+          >
+            <CircleDot
+              className={cn("h-3.5 w-3.5 shrink-0", value.customMode && accent.text)}
+            />
+            <span className="leading-snug">
+              <span className="font-semibold">Carpeta customizada</span> — local,
+              sin git {value.customMode ? "(activa)" : "(si el predeterminado no aplica o no existe aún)"}
+            </span>
+          </button>
+
+          {value.customMode && (
+            <div className="mt-2 rounded-el border-el border-line bg-panel/60 p-2">
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  disabled={picker.esperando}
+                  onClick={() => picker.abrir("folder")}
+                  className="rounded-el border-el border-line px-2 py-1 text-[10px] font-medium text-ink hover:bg-panel2 disabled:opacity-50"
+                >
+                  📁 {picker.esperando ? "Eligiendo…" : "Elegir carpeta…"}
+                </button>
+                <button
+                  type="button"
+                  disabled={picker.esperando}
+                  onClick={() => picker.abrir("files")}
+                  className="rounded-el border-el border-line px-2 py-1 text-[10px] font-medium text-ink hover:bg-panel2 disabled:opacity-50"
+                >
+                  📎 Agregar archivos…
+                </button>
+              </div>
+              {picker.esperando && (
+                <p className="mt-1.5 text-[10px] text-faint">
+                  Abre el diálogo de Windows… puedes crear la carpeta en el momento.
+                </p>
+              )}
+              {value.customFolder && (
+                <p
+                  className="mt-1.5 truncate rounded-el bg-panel2 px-1.5 py-1 font-mono text-[10px] text-ink"
+                  title={value.customFolder}
+                >
+                  📂 {value.customFolder}
+                </p>
+              )}
+              {value.customArchivos.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {value.customArchivos.map((a) => (
+                    <span
+                      key={a}
+                      title={a}
+                      className="inline-flex max-w-full items-center gap-1 rounded-el border-el border-line bg-panel2 px-1.5 py-0.5 font-mono text-[10px] text-ink"
+                    >
+                      <span className="truncate">{a.split(/[\\/]/).pop()}</span>
+                      <button
+                        type="button"
+                        title={a}
+                        onClick={() =>
+                          onChange({
+                            ...value,
+                            customArchivos: value.customArchivos.filter((x) => x !== a),
+                          })
+                        }
+                        className="shrink-0 text-faint hover:text-ink"
+                      >
+                        ✕
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <p className="mt-1.5 text-[10px] leading-snug text-faint">
+                Sin git: nada se versiona ni sube. Los archivos se copian a esta
+                carpeta al despachar; los originales quedan donde están.
+              </p>
+            </div>
+          )}
+        </div>
       )}
       {value.taskType === "correo" && <div className="mb-3" />}
 
@@ -354,8 +503,9 @@ export function AgentDelegationSection({
 
       {/* Estrategia de Git: desarrollo y ops. Elección explícita de Cris —
           rama+PR (default) o directo a main (excepción que viaja en el
-          contrato del despacho). */}
-      {(value.taskType === "desarrollo" || value.taskType === "ops") && (
+          contrato del despacho). En modo customizada queda FIJA en
+          solo-local: no se elige. */}
+      {(value.taskType === "desarrollo" || value.taskType === "ops") && !value.customMode && (
         <>
           <label className="label">Estrategia de Git</label>
           <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">

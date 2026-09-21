@@ -284,9 +284,13 @@ const taskFields = {
     ),
   ),
   model: v.optional(v.string()),
-  /** Estrategia Git para desarrollo: rama-pr (default) | main-directo. */
+  /** Estrategia Git: rama-pr (default) | main-directo | solo-local (custom sin git). */
   gitStrategy: v.optional(
-    v.union(v.literal("rama-pr"), v.literal("main-directo")),
+    v.union(
+      v.literal("rama-pr"),
+      v.literal("main-directo"),
+      v.literal("solo-local"),
+    ),
   ),
   notifyWhatsapp: v.optional(
     v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
@@ -356,8 +360,10 @@ export const create = mutation({
       // para el puente.
       taskType: isDelegatedExecutor(args.executor) ? args.taskType : undefined,
       workspaceId: isDelegatedExecutor(args.executor) ? args.workspaceId : undefined,
+      // Con workspaceId registrado va la ruta del registro; sin él, la ruta
+      // suelta es la carpeta CUSTOMIZADA de la tarea (modo solo-local).
       workspacePath:
-        isDelegatedExecutor(args.executor) && args.workspaceId
+        isDelegatedExecutor(args.executor) && (args.workspaceId || args.workspacePath)
           ? (args.workspacePath ?? undefined)
           : undefined,
       autonomy: isDelegatedExecutor(args.executor) ? args.autonomy : undefined,
@@ -460,9 +466,13 @@ export const update = mutation({
       ),
     ),
     model: v.optional(v.string()),
-    /** Estrategia Git para desarrollo: rama-pr (default) | main-directo. */
+    /** Estrategia Git: rama-pr (default) | main-directo | solo-local (custom sin git). */
     gitStrategy: v.optional(
-      v.union(v.literal("rama-pr"), v.literal("main-directo")),
+      v.union(
+        v.literal("rama-pr"),
+        v.literal("main-directo"),
+        v.literal("solo-local"),
+      ),
     ),
     notifyWhatsapp: v.optional(
       v.union(v.literal("off"), v.literal("final"), v.literal("periodica")),
@@ -501,8 +511,20 @@ export const update = mutation({
       asPatch.agentFollowUp = correoInstruccion.trim().slice(0, 3000);
     }
     if (delegating) {
+      // Modo customizada (solo-local): la carpeta registrada se SUELTA — el
+      // agente trabaja en la ruta suelta (workspacePath) sin git. El id no
+      // puede vaciarse con "" desde el cliente (v.id lo rechaza), así que se
+      // limpia acá al ver la estrategia.
+      if (patch.gitStrategy === "solo-local") {
+        asPatch.workspaceId = undefined;
+      }
       const nextType = patch.taskType ?? task.taskType;
-      const nextWs = patch.workspaceId !== undefined ? patch.workspaceId : task.workspaceId;
+      const nextWs =
+        patch.gitStrategy === "solo-local"
+          ? undefined
+          : patch.workspaceId !== undefined
+            ? patch.workspaceId
+            : task.workspaceId;
       await validateDelegation(ctx, { taskType: nextType, workspaceId: nextWs });
       // Asignación nueva (o re-delegación tras cancelar): vuelve a la cola.
       if (task.agentState === undefined || task.agentState === "cancelada") {

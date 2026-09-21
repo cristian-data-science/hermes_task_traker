@@ -17,6 +17,7 @@ import {
   BrainCircuit,
   ChartColumn,
   GitBranch,
+  FolderLock,
   Search,
   Server,
   ListTodo,
@@ -150,9 +151,10 @@ export const AUTONOMY_META: Record<
 /**
  * Estrategia de Git para tareas de desarrollo (elección explícita al delegar).
  * Sin especificar (o tarea vieja) = "rama-pr".
+ * "solo-local" no se elige a mano: la fija el modo de carpeta customizada.
  */
 export const GIT_STRATEGIES = ["rama-pr", "main-directo"] as const;
-export type GitStrategy = (typeof GIT_STRATEGIES)[number];
+export type GitStrategy = (typeof GIT_STRATEGIES)[number] | "solo-local";
 
 export const GIT_STRATEGY_META: Record<
   GitStrategy,
@@ -167,6 +169,11 @@ export const GIT_STRATEGY_META: Record<
     label: "Directo a main",
     desc: "Commits y push directo en master/main: la producción se despliega por el pipeline del repo.",
     Icon: Target,
+  },
+  "solo-local": {
+    label: "Solo local — sin git",
+    desc: "Carpeta customizada: el agente trabaja sin git y los adjuntos se copian a la carpeta al despachar.",
+    Icon: FolderLock,
   },
 };
 

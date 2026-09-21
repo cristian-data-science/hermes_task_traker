@@ -46,6 +46,7 @@ import {
   parsePlanQuestion,
 } from "./prompts.mjs";
 import { notifyAgent } from "./notify.mjs";
+import { copiarMaterial } from "./material.mjs";
 import { adapterFor } from "./agents/index.mjs";
 import { mkdirSync } from "node:fs";
 
@@ -216,6 +217,32 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
       guiaCris = readFileSync(path.join(BRIDGE_DIR, "guia-correo-cris.md"), "utf8");
     } catch {
       // sin guía: la regla de fidelidad sigue vigente (va en el prompt)
+    }
+  }
+
+  // 0) Carpeta customizada (gitStrategy solo-local): los adjuntos que Cris
+  //    eligió se COPIAN dentro de la carpeta (se crea si no existe — puede
+  //    ser nueva) para que la corrida sea autocontenida. Idempotente: nunca
+  //    pisa lo que ya está (re-despachos/resumes no re-copian).
+  if (task.gitStrategy === "solo-local") {
+    const origenArchivos = task.contextPaths?.archivos ?? [];
+    const res = copiarMaterial(folder, origenArchivos);
+    if (res.copiados.length)
+      log(
+        `📎 material copiado a "${folder}": ${res.copiados.map((f) => path.basename(f)).join(", ")}`,
+      );
+    if (res.saltados.length)
+      log(`📎 material ya presente (no se pisa): ${res.saltados.map((f) => path.basename(f)).join(", ")}`);
+    for (const f of res.fallidos) log(`⚠ material no copiado: ${f.origen} (${f.error})`);
+    // El prompt apunta a las COPIAS dentro de la carpeta, no a los originales.
+    if (origenArchivos.length) {
+      task = {
+        ...task,
+        contextPaths: {
+          ...task.contextPaths,
+          archivos: origenArchivos.map((a) => path.join(folder, path.basename(a))),
+        },
+      };
     }
   }
 
