@@ -204,11 +204,22 @@ export function TaskModal({
       setClickupListId(task.clickupListId);
       setClickupLocal(task.clickupLocal ?? false);
       setCorreoInstruccion("");
-      setAgentCfg(agentConfigFromTask(task));
-      setDelegCtx({
-        carpetas: task.contextPaths?.carpetas ?? [],
-        archivos: task.contextPaths?.archivos ?? [],
+      const cfg = agentConfigFromTask({
+        ...task,
+        archivos: task.contextPaths?.archivos,
       });
+      setAgentCfg(cfg);
+      // En modo customizada los adjuntos viven en cfg.customArchivos (se
+      // copian a la carpeta al despachar); delegCtx queda para el modo
+      // registrado (referencias de solo lectura).
+      setDelegCtx(
+        cfg.customMode
+          ? { carpetas: [], archivos: [] }
+          : {
+              carpetas: task.contextPaths?.carpetas ?? [],
+              archivos: task.contextPaths?.archivos ?? [],
+            },
+      );
     } else {
       setTitle("");
       setArea(
@@ -245,12 +256,22 @@ export function TaskModal({
     // Capa agente: los tipos con mundo de trabajo definido exigen carpeta.
     if (executor === "zcode" && AGENT_UI_ENABLED) {
       const t = agentCfg.taskType;
-      const needsFolder = t ? TASK_TYPE_META[t]?.vcs : null;
-      if (needsFolder && !agentCfg.workspaceId) {
-        toast.error(
-          `Elige la carpeta destino (${needsFolder === "git" ? "repo Git" : "reporte"}) para la tarea delegada`,
-        );
-        return;
+      if (agentCfg.customMode) {
+        // Modo customizada: la carpeta elegida reemplaza al registro.
+        if (!agentCfg.customFolder.trim()) {
+          toast.error(
+            "Elige (o crea) la carpeta customizada para la tarea delegada",
+          );
+          return;
+        }
+      } else {
+        const needsFolder = t ? TASK_TYPE_META[t]?.vcs : null;
+        if (needsFolder && !agentCfg.workspaceId) {
+          toast.error(
+            `Elige la carpeta destino (${needsFolder === "git" ? "repo Git" : "reporte"}) para la tarea delegada`,
+          );
+          return;
+        }
       }
       // Respuesta de correo: la indicación de Cris es obligatoria (es lo que
       // guía al agente sobre qué responder).
@@ -317,20 +338,34 @@ export function TaskModal({
         ...(isDelegatedExecutor(executor)
           ? {
               taskType: agentCfg.taskType || undefined,
-              workspaceId: (agentCfg.workspaceId ||
-                undefined) as Doc<"tasks">["workspaceId"],
+              // Modo customizada: sin workspace registrado, con ruta suelta;
+              // al volver de custom a registrado se limpia la ruta vieja
+              // ("" la vacía en el backend, que la normaliza a undefined).
+              workspaceId: (agentCfg.customMode
+                ? undefined
+                : agentCfg.workspaceId || undefined) as Doc<"tasks">["workspaceId"],
+              workspacePath: agentCfg.customMode
+                ? agentCfg.customFolder
+                : isEdit && task && !task.workspaceId && task.workspacePath
+                  ? ""
+                  : undefined,
               autonomy: agentCfg.autonomy,
               model: agentCfg.model || undefined,
-              // Estrategia Git: viaja con desarrollo y ops (default rama-pr).
-              gitStrategy:
-                agentCfg.taskType === "desarrollo" || agentCfg.taskType === "ops"
+              // Estrategia Git: solo-local la fija el modo customizada;
+              // rama-pr/main-directo viajan con desarrollo y ops.
+              gitStrategy: agentCfg.customMode
+                ? "solo-local"
+                : agentCfg.taskType === "desarrollo" || agentCfg.taskType === "ops"
                   ? agentCfg.gitStrategy
                   : undefined,
               notifyWhatsapp: agentCfg.notifyWhatsapp,
               // Modo plan: planifica primero (solo lectura) y espera tu OK.
               planMode: agentCfg.planMode,
-              // Contexto de consulta (picker nativo): carpetas/archivos.
-              contextPaths: delegCtx,
+              // Contexto: custom → archivos que se COPIAN a la carpeta al
+              // despachar; registrado → referencias de solo lectura.
+              contextPaths: agentCfg.customMode
+                ? { carpetas: [], archivos: agentCfg.customArchivos }
+                : delegCtx,
               // Respuesta de correo: la indicación viaja como followUp.
               ...(agentCfg.taskType === "correo"
                 ? { correoInstruccion: correoInstruccion.trim() }
@@ -705,7 +740,10 @@ export function TaskModal({
                     executor={executor}
                     correoOrigen={!!task?.correoId}
                     contextSlot={
-                      agentCfg.taskType === "correo" ? (
+                      // En modo customizada el contexto viaja dentro del
+                      // bloque de carpeta custom (se copia al despachar).
+                      !agentCfg.customMode ? (
+                        agentCfg.taskType === "correo" ? (
                         <div>
                           <label className="label">Respuesta del correo</label>
                           <textarea
@@ -734,6 +772,7 @@ export function TaskModal({
                           </p>
                         </div>
                       )
+                      ) : undefined
                     }
                   />
                 </>
