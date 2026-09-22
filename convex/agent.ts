@@ -99,6 +99,7 @@ export const FALLBACK_MODELS = [
 export const FALLBACK_MODELS_CLAUDE = [
   { id: "claude/sonnet-5-high", label: "Sonnet 5 High" },
   { id: "claude/opus-5-high", label: "Opus 5 High" },
+  { id: "claude/opus-5.5-high", label: "Opus 5.5 High" },
 ];
 
 /**
