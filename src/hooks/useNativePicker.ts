@@ -11,12 +11,20 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "./useAuth";
+import { deploymentParam } from "../lib/utils";
+
+/**
+ * Si el diálogo no responde en este tiempo (puente sin el protocolo, diálogo
+ * cerrado sin reportar, deployment equivocado), se deja de esperar: antes el
+ * botón quedaba en "Eligiendo…" para siempre.
+ */
+const PICK_TIMEOUT_MS = 3 * 60 * 1000;
 
 export type PickerKind = "folder" | "files";
 
 export function useNativePicker(
   onResult: (kind: PickerKind, paths: string[]) => void,
-  onCancel?: () => void,
+  onCancel?: (reason?: "timeout") => void,
 ) {
   const { token } = useAuth();
   const [key, setKey] = useState<string | null>(null);
@@ -37,8 +45,17 @@ export function useNativePicker(
       .slice(2, 10)}`;
     kindRef.current = k;
     setKey(id);
-    window.location.href = `hermesagent://pick?kind=${k}&key=${id}`;
+    window.location.href = `hermesagent://pick?kind=${k}&key=${id}${deploymentParam()}`;
   }, []);
+
+  useEffect(() => {
+    if (!key) return;
+    const timer = setTimeout(() => {
+      setKey(null);
+      onCancelRef.current?.("timeout");
+    }, PICK_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [key]);
 
   useEffect(() => {
     if (!key || !res) return;

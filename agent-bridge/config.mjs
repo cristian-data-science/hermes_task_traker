@@ -37,8 +37,24 @@ const repoEnv = parseEnvFile(path.join(REPO_DIR, ".env.local"));
  * Para pruebas contra dev: CONVEX_URL=https://adept-lyrebird-492.convex.cloud
  */
 const PROD_CONVEX_URL = "https://effervescent-crab-895.convex.cloud";
+/**
+ * Deployments conocidos. Los procesos que lanza el protocolo hermesagent://
+ * (selector de carpetas, chat) reciben `--deployment=<nombre>` con el
+ * deployment de la app que los pidió: antes siempre publicaban en producción
+ * y, probando en dev, la carpeta elegida nunca llegaba (quedaba "esperando").
+ * Lista CERRADA a propósito: la URL la dispara cualquier página web y las
+ * credenciales del puente no deben viajar a un host arbitrario.
+ */
+const KNOWN_DEPLOYMENTS = {
+  "effervescent-crab-895": PROD_CONVEX_URL,
+  "adept-lyrebird-492": "https://adept-lyrebird-492.convex.cloud",
+};
+const argDeployment = process.argv
+  .find((a) => a.startsWith("--deployment="))
+  ?.slice("--deployment=".length);
 export const CONVEX_URL =
   process.env.CONVEX_URL ||
+  (argDeployment && KNOWN_DEPLOYMENTS[argDeployment]) ||
   repoEnv.CONVEX_URL ||
   PROD_CONVEX_URL;
 

@@ -9,6 +9,7 @@
  */
 import type { ReactNode } from "react";
 import { useQuery } from "convex/react";
+import toast from "react-hot-toast";
 import {
   Sparkles,
   BrainCircuit,
@@ -154,17 +155,22 @@ export function AgentDelegationSection({
 
   // Picker nativo del modo customizada: carpeta (se puede crear en el
   // diálogo) + archivos que se copiarán adentro al despachar.
-  const picker = useNativePicker((kind, paths) => {
-    if (!paths.length) return;
-    if (kind === "folder") {
-      onChange({ ...value, customFolder: paths[0] });
-    } else {
-      onChange({
-        ...value,
-        customArchivos: [...new Set([...value.customArchivos, ...paths])],
-      });
-    }
-  });
+  const picker = useNativePicker(
+    (kind, paths) => {
+      if (!paths.length) return;
+      if (kind === "folder") {
+        onChange({ ...value, customFolder: paths[0] });
+      } else {
+        onChange({
+          ...value,
+          customArchivos: [...new Set([...value.customArchivos, ...paths])],
+        });
+      }
+    },
+    (reason) => {
+      if (reason === "timeout") toast.error("El selector de Windows no respondió. Revisa que el protocolo hermesagent esté instalado, o escribe la ruta a mano.");
+    },
+  );
 
   const meta = EXECUTOR_META[executor];
   const HeadIcon = executor === "claude" ? BrainCircuit : Sparkles;
@@ -381,12 +387,19 @@ export function AgentDelegationSection({
                   Abre el diálogo de Windows… puedes crear la carpeta en el momento.
                 </p>
               )}
-              {value.customFolder && (
-                <p
-                  className="mt-1.5 truncate rounded-el bg-panel2 px-1.5 py-1 font-mono text-[10px] text-ink"
-                  title={value.customFolder}
-                >
-                  📂 {value.customFolder}
+              {/* Ruta escrita a mano: respaldo si el diálogo de Windows no
+                  responde (o para pegar una ruta que ya conoces). */}
+              <input
+                value={value.customFolder}
+                onChange={(e) => onChange({ ...value, customFolder: e.target.value })}
+                placeholder="…o pega la ruta, p. ej. C:\proyectos\mi-carpeta"
+                spellCheck={false}
+                className="input mt-1.5 font-mono text-[10px]"
+                aria-label="Ruta de la carpeta customizada"
+              />
+              {value.customFolder && !/^([a-zA-Z]:\\|\\\\)/.test(value.customFolder.trim()) && (
+                <p className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
+                  Debe ser una ruta absoluta de este PC (C:\… o \\servidor\…).
                 </p>
               )}
               {value.customArchivos.length > 0 && (

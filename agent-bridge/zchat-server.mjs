@@ -106,7 +106,11 @@ const log = (m) => {
 };
 
 // ---- Argumentos ----
-const argv = process.argv.slice(2).map((a) => (a === "-" ? "" : a));
+// --deployment=<nombre> lo consume config.mjs (deployment de la app que abrió el chat).
+const argv = process.argv
+  .slice(2)
+  .filter((a) => !a.startsWith("--deployment="))
+  .map((a) => (a === "-" ? "" : a));
 let [sessionId, workspacePath, planB64 = "", statusArg = "", stateArg = "", taskIdArg = "", themeArg = "", agentArg = ""] = argv;
 // Sesión PENDIENTE: el botón del panel puede abrir el chat ANTES de que el
 // agente registre su sesión (ZCode la crea al arrancar el proceso). Con taskId

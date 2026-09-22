@@ -695,6 +695,40 @@ export const update = mutation({
       });
     }
 
+    // ===== Capa agente: carpeta configurada tras la pregunta "sin carpeta" =====
+    // El puente pregunta cuando la tarea no tiene carpeta (o no existe en el
+    // PC). Si este guardado la deja CON carpeta, la tarea vuelve sola a la
+    // cola: antes había que guardar y además responder la pregunta, y la
+    // tarea parecía "no tomar" la carpeta.
+    if (
+      delegating &&
+      task.agentState === "pregunta" &&
+      /^\[sin-carpeta\]|carpeta destino/i.test(task.agentQuestion ?? "")
+    ) {
+      const after = await ctx.db.get(id);
+      const folderChanged =
+        !!after &&
+        (after.workspacePath !== task.workspacePath ||
+          after.workspaceId !== task.workspaceId);
+      if (
+        after &&
+        after.agentState === "pregunta" &&
+        folderChanged &&
+        (after.workspacePath || after.workspaceId)
+      ) {
+        await applyAgentState(ctx, after, "encolada", sessionToken, {
+          agentQuestion: undefined,
+        });
+        await logEvent(ctx, {
+          taskId: id,
+          kind: "agent_answer",
+          task: snapshot,
+          at: now,
+          detail: `carpeta configurada (${after.workspacePath ?? "registro"}): reintento automático`,
+        });
+      }
+    }
+
     // ===== Sync ClickUp outbound (solo patagonia, no local) =====
     // El área final puede haber cambiado: releemos para decidir.
     const updated = await ctx.db.get(id);

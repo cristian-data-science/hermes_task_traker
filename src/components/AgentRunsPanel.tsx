@@ -28,7 +28,7 @@ import {
   type Autonomy,
   type TaskType,
 } from "../lib/constants";
-import { cn, formatRelative, formatAgo, agentModelLabel } from "../lib/utils";
+import { cn, formatRelative, formatAgo, agentModelLabel, deploymentParam } from "../lib/utils";
 import {
   ContextPicker,
   EMPTY_CONTEXT,
@@ -142,7 +142,7 @@ function ArtifactsBlock({
               // La sesión puede NO existir todavía (corrida recién arrancada):
               // el chat abre en modo "esperando sesión" y la adopta apenas
               // el agente la registre.
-              window.location.href = `hermesagent://${host}?path=${encodeURIComponent(task.workspacePath!)}${session ? `&session=${encodeURIComponent(session)}` : ""}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
+              window.location.href = `hermesagent://${host}?path=${encodeURIComponent(task.workspacePath!)}${session ? `&session=${encodeURIComponent(session)}` : ""}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}${deploymentParam()}`;
             }}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
             title={

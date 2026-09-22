@@ -83,6 +83,21 @@ export function isSuperUrgent(t: {
 export const AGENT_UI_ENABLED = !ANDROID_TWA;
 
 /**
+ * Nombre del deployment Convex de esta app (p. ej. "adept-lyrebird-492").
+ * Viaja como `cx` en los enlaces hermesagent:// para que el selector de
+ * carpetas y el chat del PC hablen con el MISMO deployment que la app.
+ */
+export function convexDeploymentName(): string {
+  const url = String(import.meta.env.VITE_CONVEX_URL ?? "");
+  return url.match(/^https?:\/\/([a-z0-9-]+)\./i)?.[1] ?? "";
+}
+/** Sufijo `&cx=<deployment>` para los enlaces hermesagent:// que usan Convex. */
+export function deploymentParam(): string {
+  const name = convexDeploymentName();
+  return name ? `&cx=${encodeURIComponent(name)}` : "";
+}
+
+/**
  * Label legible del modelo de una delegación, por agente:
  *  - Claude: id interno "claude/sonnet-5-high" → "Sonnet 5 High".
  *  - ZCode: "builtin:zai-coding-plan/GLM-5.3" → "GLM-5.3".

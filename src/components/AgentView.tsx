@@ -36,7 +36,7 @@ import {
   type TaskType,
   type Area,
 } from "../lib/constants";
-import { cn, formatAgo, formatRelative, agentModelLabel } from "../lib/utils";
+import { cn, formatAgo, formatRelative, agentModelLabel, deploymentParam } from "../lib/utils";
 import { AgentRunsPanel } from "./AgentRunsPanel";
 import { AgentContractSection } from "./AgentContractSection";
 
@@ -531,7 +531,7 @@ function HistoryRow({
       </span>
       {task.agentSessionId && task.workspacePath ? (
         <a
-          href={`hermesagent://${task.executor === "claude" ? "claude" : "zcode"}?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}&task=${encodeURIComponent(task._id)}&st=${encodeURIComponent(task.status ?? "")}&ag=${encodeURIComponent(task.agentState ?? "")}`}
+          href={`hermesagent://${task.executor === "claude" ? "claude" : "zcode"}?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}&task=${encodeURIComponent(task._id)}&st=${encodeURIComponent(task.status ?? "")}&ag=${encodeURIComponent(task.agentState ?? "")}${deploymentParam()}`}
           onClick={(e) => e.stopPropagation()}
           title={
             ["despachada", "trabajando"].includes(task.agentState ?? "")

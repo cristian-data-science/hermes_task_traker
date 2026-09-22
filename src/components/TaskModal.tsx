@@ -266,6 +266,10 @@ export function TaskModal({
           );
           return;
         }
+        if (!/^([a-zA-Z]:\\|\\\\)/.test(agentCfg.customFolder.trim())) {
+          toast.error("La carpeta customizada debe ser una ruta absoluta de este PC (C:\\…)");
+          return;
+        }
       } else {
         const needsFolder = t ? TASK_TYPE_META[t]?.vcs : null;
         if (needsFolder && !agentCfg.workspaceId) {

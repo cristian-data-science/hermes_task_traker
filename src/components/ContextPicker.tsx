@@ -41,7 +41,10 @@ export function ContextPicker({
           : `${paths.length} archivo(s) agregado(s)`,
       );
     },
-    () => toast("Selección cancelada"),
+    (reason) =>
+      reason === "timeout"
+        ? toast.error("El selector de Windows no respondió. Revisa que el protocolo hermesagent esté instalado, o escribe la ruta a mano.")
+        : toast("Selección cancelada"),
   );
 
   const quitar = (kind: "carpetas" | "archivos", p: string) =>
