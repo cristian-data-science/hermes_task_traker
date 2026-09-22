@@ -126,8 +126,20 @@ export const HERMES_CLI = resolveHermesCli();
 /** Target de WhatsApp según `hermes send --list`. */
 export const WHATSAPP_TARGET = process.env.HERMES_WHATSAPP_TARGET || "whatsapp:Criss";
 
+/**
+ * Sufijo por deployment para archivos locales del puente: dev y producción
+ * pueden correr A LA VEZ desde la misma carpeta (antes compartían candado y
+ * un puente dev no podía arrancar con el de producción vivo: las tareas de
+ * dev quedaban encoladas para siempre). Producción conserva los nombres de
+ * siempre (sin sufijo) para no romper instalaciones existentes.
+ */
+export const DEPLOYMENT_TAG =
+  CONVEX_URL === PROD_CONVEX_URL
+    ? ""
+    : `.${(CONVEX_URL.match(/https?:\/\/([^.]+)/)?.[1] ?? "custom").replace(/[^a-z0-9-]/gi, "")}`;
+
 /** Cache del token de sesión (30 días; gitignored). */
-export const TOKEN_CACHE = path.join(BRIDGE_DIR, ".token-cache.json");
+export const TOKEN_CACHE = path.join(BRIDGE_DIR, `.token-cache${DEPLOYMENT_TAG}.json`);
 
 /** Backup del config de ZCode durante el swap de modelo (gitignored). */
 export const MODEL_BACKUP = path.join(BRIDGE_DIR, ".model-backup.json");

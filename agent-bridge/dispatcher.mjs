@@ -30,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import { ConvexClient } from "convex/browser";
 import {
   CONVEX_URL,
+  DEPLOYMENT_TAG,
   MAX_PARALLEL_CLAUDE,
   assertConfig,
   claudeWarnings,
@@ -54,7 +55,8 @@ const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000
 const MAX_PARALLEL_DEFAULT = Number(process.env.MAX_PARALLEL_DEFAULT || 2);
 const STALL_MS = Number(process.env.AGENT_STALL_MS || 10 * 60 * 1000);
 const BRIDGE_DIR = path.dirname(fileURLToPath(import.meta.url));
-const LOCK_FILE = path.join(BRIDGE_DIR, ".bridge.lock");
+// Candado por deployment: un puente por deployment (prod y dev conviven).
+const LOCK_FILE = path.join(BRIDGE_DIR, `.bridge${DEPLOYMENT_TAG}.lock`);
 
 /** Corridas activas en este proceso: taskId → info de la corrida. */
 const activeRuns = new Map();
@@ -86,7 +88,7 @@ function acquireLock() {
       try {
         process.kill(prev.pid, 0);
         console.error(
-          `Ya hay un puente corriendo (pid ${prev.pid}, desde ${new Date(prev.startedAt).toLocaleTimeString()}). Cierra esa instancia o borra agent-bridge/.bridge.lock.`,
+          `Ya hay un puente corriendo (pid ${prev.pid}, desde ${new Date(prev.startedAt).toLocaleTimeString()}). Cierra esa instancia o borra ${path.basename(LOCK_FILE)}.`,
         );
         process.exit(1);
       } catch {
@@ -265,6 +267,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     // tarea" + "Reintentar" (escribir la ruta en la respuesta no sirve).
     // force: la tarea sigue en "encolada" (no hay corrida) y la matriz de
     // agentReport ignoraría el reporte.
+    log(`📁 "${task.title}": ${folder ? `carpeta inexistente (${folder})` : "sin carpeta destino"} — se le pide a Cris`);
     await m("agent:agentReport", {
       taskId,
       state: "pregunta",

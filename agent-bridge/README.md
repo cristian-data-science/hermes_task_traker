@@ -40,6 +40,7 @@ JSONL, streaming, tools, tracker — ver abajo).
 ## Arranque
 
 ```bash
+npm run agent-bridge:dev       # puente contra el deployment DEV (convive con el de producción)
 npm run agent-bridge:daemon    # daemon con auto-restart (recomendado)
 npm run agent-bridge           # dispatcher a pelo
 npm run agent-bridge:hooks     # una sola vez: registra hooks Stop/SessionStart
