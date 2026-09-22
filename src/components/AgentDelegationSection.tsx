@@ -1,8 +1,9 @@
 /**
- * Bloque "Delegación al agente" del TaskModal: tipo de tarea → carpeta destino
- * (con la separación dura Git vs archivos), nivel de autonomía, modelo y
- * notificaciones WhatsApp. Se muestra con ejecutor despachable (ZCode o
- * Claude Code) y en la web (AGENT_UI_ENABLED).
+ * Delegación al agente dentro del TaskModal, agrupada por DIMENSIÓN (riel de
+ * etiquetas a la izquierda): Trabajo (tipo) → Dónde (carpeta registrada o
+ * propia, en el mismo lugar, + material de contexto) → Cómo (autonomía, plan,
+ * git) → Avisos (WhatsApp). El modelo vive junto al selector de ejecutor
+ * (AgentModelSelect). Solo con ejecutor despachable y en la web.
  *
  * Controlado desde TaskModal vía value/onChange para que hidrate/beba del
  * mismo borrador que el resto del formulario.
@@ -10,14 +11,7 @@
 import type { ReactNode } from "react";
 import { useQuery } from "convex/react";
 import toast from "react-hot-toast";
-import {
-  Sparkles,
-  BrainCircuit,
-  Circle,
-  CircleDot,
-  Rocket,
-  Compass,
-} from "lucide-react";
+import { Circle, CircleDot, Rocket, Compass } from "lucide-react";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
 import { useNativePicker } from "../hooks/useNativePicker";
@@ -142,12 +136,6 @@ export function AgentDelegationSection({
       api.agent.listWorkspaces,
       token ? { sessionToken: token } : "skip",
     ) ?? [];
-  // Catálogo por agente: zcode lee la key histórica, claude la suya.
-  const models =
-    useQuery(
-      api.agent.listModels,
-      token ? { sessionToken: token, agent: executor } : "skip",
-    );
   const bridge = useQuery(
     api.agent.bridgeStatus,
     token ? { sessionToken: token } : "skip",
@@ -172,8 +160,6 @@ export function AgentDelegationSection({
     },
   );
 
-  const meta = EXECUTOR_META[executor];
-  const HeadIcon = executor === "claude" ? BrainCircuit : Sparkles;
   // Acento del agente: fucsia ZCode, naranja Claude.
   const accent =
     executor === "claude"
@@ -202,207 +188,225 @@ export function AgentDelegationSection({
   const isAllowed = (w: { vcs: string }) =>
     !typeMeta?.vcs || w.vcs === typeMeta.vcs;
   const chosen = workspaces.find((w) => w._id === value.workspaceId);
-  const modelList = models?.models ?? [];
-  const defaultModel = models?.default ?? "";
+  // Carpeta: una sola decisión con dos formas (registrada | propia) que
+  // comparten el MISMO lugar; el material de contexto va justo debajo.
+  const setFolderMode = (custom: boolean) => {
+    if (custom === value.customMode) return;
+    onChange(
+      custom
+        ? // Carpeta propia: sin carpeta registrada y estrategia fija
+          // solo-local (sin git).
+          { ...value, customMode: true, workspaceId: "", gitStrategy: "solo-local" }
+        : // Volver a la registrada: soltar lo custom y restablecer la
+          // estrategia por defecto.
+          { ...value, customMode: false, customFolder: "", customArchivos: [], gitStrategy: "rama-pr" },
+    );
+  };
+  const isCorreo = value.taskType === "correo";
+  const pathInvalid =
+    !!value.customFolder && !/^([a-zA-Z]:\\|\\\\)/.test(value.customFolder.trim());
 
   return (
-    <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
-      <div className="mb-2.5 flex items-center gap-1.5 text-xs font-semibold text-ink">
-        <HeadIcon className={cn("h-3.5 w-3.5", accent.text)} />
-        Delegación a {meta.label}
-      </div>
+    <div className="divide-y divide-line border-t border-line">
+      {/* Modelo: pegado al agente elegido arriba (el catálogo depende de él). */}
+      <Dim label="Modelo" hint={`de ${EXECUTOR_META[executor].label}`}>
+        <AgentModelSelect
+          executor={executor}
+          value={value.model}
+          onChange={(model) => onChange({ ...value, model })}
+        />
+      </Dim>
 
-      {/* Tipo de tarea */}
-      <label className="label">Tipo de tarea</label>
-      <div className="mb-3 grid grid-cols-3 gap-1 sm:grid-cols-6">
-        {TASK_TYPES.map((t) => {
-          const meta = TASK_TYPE_META[t];
-          const active = value.taskType === t;
-          // El tipo Correo solo aplica a tareas de origen correo (traen el
-          // correo completo para el prompt de la respuesta).
-          const bloqueado = t === "correo" && !correoOrigen;
-          return (
-            <button
-              key={t}
-              type="button"
-              disabled={bloqueado}
-              title={
-                bloqueado
-                  ? "Solo para tareas que nacieron de un correo marcado"
-                  : meta.hint
-              }
-              onClick={() => {
-                // Si la carpeta elegida no sirve para el nuevo tipo, soltarla.
-                const newMeta = TASK_TYPE_META[t];
-                const stillValid = workspaces.some(
-                  (w) =>
-                    w._id === value.workspaceId &&
-                    w.enabled &&
-                    (!newMeta.vcs || w.vcs === newMeta.vcs),
-                );
-                onChange({ ...value, taskType: t, workspaceId: stillValid ? value.workspaceId : "" });
-              }}
-              className={cn(
-                "flex flex-col items-center gap-1 rounded-el border-el px-1 py-2 text-[10px] font-medium transition-all",
-                active
-                  ? cn(accent.border, accent.bg, "text-ink")
-                  : "border-line text-mute hover:bg-panel2",
-                bloqueado && "cursor-not-allowed opacity-40 hover:bg-transparent",
-              )}
-            >
-              <meta.Icon
-                className={cn("h-4 w-4", active && accent.text)}
-              />
-              {meta.label}
-            </button>
-          );
-        })}
-      </div>
-      {typeMeta && (
-        <p className="mb-3 text-[11px] leading-snug text-faint">
-          {typeMeta.hint}
-          {typeMeta.vcs === "ninguno" &&
-            " · prohibido git: ni .md ni .pbix se versionan"}
-          {typeMeta.vcs === "git" && " · rama agent/*, nunca master"}
-        </p>
-      )}
-
-      {/* Carpeta destino: obligatoria para reporte/desarrollo (mundos Git vs
-          archivos); recomendada para el resto (el despachador la exige para
-          saber dónde trabajar). Para CORREO no aplica: el agente no escribe —
-          corre en la carpeta de contexto (picker) o en la neutra del puente. */}
-      {value.taskType !== "correo" && !value.customMode && (
-        <>
-          <label className="label">
-            Carpeta destino
-            {typeMeta?.vcs === "git" && " (repo Git) *"}
-            {typeMeta?.vcs === "ninguno" && " (reporte) *"}
-          </label>
-          <select
-            value={value.workspaceId}
-            onChange={(e) => onChange({ ...value, workspaceId: e.target.value })}
-            className="input mb-1"
-          >
-            <option value="">
-              {typeMeta?.vcs ? "Elige carpeta…" : "Elige carpeta (el agente trabaja ahí)…"}
-            </option>
-            {repGroup.length > 0 && (
-              <optgroup label="📊 Reportes — carpetas locales (sin git)">
-                {repGroup.map((w) => (
-                  <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
-                    {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
-                    {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-            {devGroup.length > 0 && (
-              <optgroup label="🔀 Desarrollo — repos Git">
-                {devGroup.map((w) => (
-                  <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
-                    {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
-                    {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
-                  </option>
-                ))}
-              </optgroup>
-            )}
-          </select>
-          {chosen && (
-            <p className="mb-3 truncate font-mono text-[10px] text-faint" title={chosen.path}>
-              {workspaceLabel(chosen)}
-            </p>
+      {/* Trabajo: el tipo decide el mundo (Git vs archivos) y las reglas. */}
+      <Dim label="Trabajo" hint="Define reglas y carpetas válidas">
+        <div
+          role="radiogroup"
+          aria-label="Tipo de trabajo"
+          className="grid grid-cols-3 gap-1 sm:grid-cols-6"
+        >
+          {TASK_TYPES.map((t) => {
+            const meta = TASK_TYPE_META[t];
+            const active = value.taskType === t;
+            // El tipo Correo solo aplica a tareas de origen correo (traen el
+            // correo completo para el prompt de la respuesta).
+            const bloqueado = t === "correo" && !correoOrigen;
+            return (
+              <button
+                key={t}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                disabled={bloqueado}
+                title={bloqueado ? "Solo para tareas que nacieron de un correo marcado" : meta.hint}
+                onClick={() => {
+                  // Si la carpeta elegida no sirve para el nuevo tipo, soltarla.
+                  const newMeta = TASK_TYPE_META[t];
+                  const stillValid = workspaces.some(
+                    (w) =>
+                      w._id === value.workspaceId &&
+                      w.enabled &&
+                      (!newMeta.vcs || w.vcs === newMeta.vcs),
+                  );
+                  onChange({ ...value, taskType: t, workspaceId: stillValid ? value.workspaceId : "" });
+                }}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-el border-el px-1 py-2 text-[10px] font-medium transition-colors",
+                  active ? cn(accent.border, accent.bg, "text-ink") : "border-line text-mute hover:bg-panel2",
+                  bloqueado && "cursor-not-allowed opacity-40 hover:bg-transparent",
+                )}
+              >
+                <meta.Icon className={cn("h-4 w-4", active && accent.text)} />
+                {meta.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-1.5 text-[11px] leading-snug text-faint">
+          {typeMeta ? (
+            <>
+              {typeMeta.hint}
+              {typeMeta.vcs === "ninguno" && " · prohibido git: ni .md ni .pbix se versionan"}
+              {typeMeta.vcs === "git" && " · rama agent/*, nunca master"}
+            </>
+          ) : (
+            "Elige qué tipo de trabajo es."
           )}
-          {!chosen && <div className="mb-3" />}
-        </>
-      )}
+        </p>
+      </Dim>
 
-      {/* Opción B — carpeta customizada: cuando no aplica el predeterminado
-          (o no existe todavía), Cris elige/crea una carpeta cualquiera y el
-          agente trabaja ahí SIN git. Los adjuntos se copian adentro al
-          despachar (los originales quedan donde están). */}
-      {value.taskType !== "correo" && (
-        <div className="mb-3">
-          <button
-            type="button"
-            onClick={() =>
-              onChange(
-                value.customMode
-                  ? // Volver a la opción A: soltar lo custom y restablecer la
-                    // estrategia por defecto.
-                    {
-                      ...value,
-                      customMode: false,
-                      customFolder: "",
-                      customArchivos: [],
-                      gitStrategy: "rama-pr",
-                    }
-                  : // Ir a la opción B: sin carpeta registrada y estrategia
-                    // fija solo-local (sin git).
-                    {
-                      ...value,
-                      customMode: true,
-                      workspaceId: "",
-                      gitStrategy: "solo-local",
-                    },
-              )
-            }
-            className={cn(
-              "flex w-full items-center gap-2 rounded-el border-el px-2.5 py-2 text-left text-[11px] transition-colors",
-              value.customMode
-                ? cn(accent.border, accent.bg, "text-ink")
-                : "border-line text-mute hover:bg-panel2",
-            )}
-          >
-            <CircleDot
-              className={cn("h-3.5 w-3.5 shrink-0", value.customMode && accent.text)}
-            />
-            <span className="leading-snug">
-              <span className="font-semibold">Carpeta customizada</span> — local,
-              sin git {value.customMode ? "(activa)" : "(si el predeterminado no aplica o no existe aún)"}
-            </span>
-          </button>
+      {/* Dónde: carpeta de trabajo (registrada o propia) + contexto. */}
+      <Dim
+        label={isCorreo ? "Contexto" : "Dónde"}
+        hint={isCorreo ? "El agente no escribe: redacta" : "Carpeta y material"}
+      >
+        {!isCorreo && (
+          <>
+            <div
+              role="radiogroup"
+              aria-label="Carpeta de trabajo"
+              className="mb-2 inline-flex w-full rounded-el border-el border-line p-0.5 sm:w-auto"
+            >
+              {[
+                { custom: false, label: "Carpeta registrada", sub: "repos y reportes" },
+                { custom: true, label: "Carpeta propia", sub: "local, sin git" },
+              ].map((opt) => {
+                const active = value.customMode === opt.custom;
+                return (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setFolderMode(opt.custom)}
+                    className={cn(
+                      "flex-1 rounded-[calc(var(--radius)-2px)] px-3 py-1.5 text-left text-xs transition-colors sm:flex-none",
+                      active ? cn(accent.bg, "text-ink") : "text-mute hover:text-ink",
+                    )}
+                  >
+                    <span className="font-semibold">{opt.label}</span>
+                    <span className="ml-1.5 hidden text-[10px] text-faint sm:inline">{opt.sub}</span>
+                  </button>
+                );
+              })}
+            </div>
 
-          {value.customMode && (
-            <div className="mt-2 rounded-el border-el border-line bg-panel/60 p-2">
-              <div className="flex flex-wrap gap-1.5">
-                <button
-                  type="button"
-                  disabled={picker.esperando}
-                  onClick={() => picker.abrir("folder")}
-                  className="rounded-el border-el border-line px-2 py-1 text-[10px] font-medium text-ink hover:bg-panel2 disabled:opacity-50"
+            {!value.customMode ? (
+              <>
+                <select
+                  value={value.workspaceId}
+                  onChange={(e) => onChange({ ...value, workspaceId: e.target.value })}
+                  className="input"
+                  aria-label={`Carpeta registrada${typeMeta?.vcs ? " (obligatoria)" : ""}`}
                 >
-                  📁 {picker.esperando ? "Eligiendo…" : "Elegir carpeta…"}
-                </button>
+                  <option value="">
+                    {typeMeta?.vcs === "git"
+                      ? "Elige el repo Git…"
+                      : typeMeta?.vcs === "ninguno"
+                        ? "Elige la carpeta del reporte…"
+                        : "Elige la carpeta donde trabaja…"}
+                  </option>
+                  {repGroup.length > 0 && (
+                    <optgroup label="📊 Reportes — carpetas locales (sin git)">
+                      {repGroup.map((w) => (
+                        <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
+                          {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
+                          {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {devGroup.length > 0 && (
+                    <optgroup label="🔀 Desarrollo — repos Git">
+                      {devGroup.map((w) => (
+                        <option key={w._id} value={w._id} disabled={!isAllowed(w)}>
+                          {w.label} · {AREA_META[w.area as Area]?.label ?? w.area}
+                          {!isAllowed(w) ? " (no aplica a este tipo)" : ""}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+                {chosen && (
+                  <p className="mt-1 truncate font-mono text-[10px] text-faint" title={chosen.path}>
+                    {workspaceLabel(chosen)}
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="flex gap-1.5">
+                  <input
+                    value={value.customFolder}
+                    onChange={(e) => onChange({ ...value, customFolder: e.target.value })}
+                    placeholder="C:\proyectos\mi-carpeta"
+                    spellCheck={false}
+                    className="input min-w-0 flex-1 font-mono text-xs"
+                    aria-label="Ruta de la carpeta propia"
+                    aria-invalid={pathInvalid}
+                  />
+                  <button
+                    type="button"
+                    disabled={picker.esperando}
+                    onClick={() => picker.abrir("folder")}
+                    className="btn-secondary shrink-0 px-2.5 text-xs"
+                    title="Abre el diálogo de Windows (puedes crear la carpeta ahí mismo)"
+                  >
+                    {picker.esperando ? "Eligiendo…" : "Elegir…"}
+                  </button>
+                </div>
+                <p
+                  className={cn(
+                    "mt-1 text-[10px] leading-snug",
+                    pathInvalid ? "text-amber-600 dark:text-amber-400" : "text-faint",
+                  )}
+                >
+                  {pathInvalid
+                    ? "Debe ser una ruta absoluta de este PC (C:\\… o \\\\servidor\\…)."
+                    : picker.esperando
+                      ? "Se abrió el diálogo de Windows: elige o crea la carpeta."
+                      : "Pega la ruta o elígela. Sin git: nada se versiona ni sube."}
+                </p>
+              </>
+            )}
+          </>
+        )}
+
+        {/* Material de contexto: justo debajo de la carpeta. */}
+        <div className={cn(!isCorreo && "mt-3")}>
+          {value.customMode && !isCorreo ? (
+            <>
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-semibold text-ink">Archivos para el agente</p>
                 <button
                   type="button"
                   disabled={picker.esperando}
                   onClick={() => picker.abrir("files")}
                   className="rounded-el border-el border-line px-2 py-1 text-[10px] font-medium text-ink hover:bg-panel2 disabled:opacity-50"
                 >
-                  📎 Agregar archivos…
+                  + Agregar archivos…
                 </button>
               </div>
-              {picker.esperando && (
-                <p className="mt-1.5 text-[10px] text-faint">
-                  Abre el diálogo de Windows… puedes crear la carpeta en el momento.
-                </p>
-              )}
-              {/* Ruta escrita a mano: respaldo si el diálogo de Windows no
-                  responde (o para pegar una ruta que ya conoces). */}
-              <input
-                value={value.customFolder}
-                onChange={(e) => onChange({ ...value, customFolder: e.target.value })}
-                placeholder="…o pega la ruta, p. ej. C:\proyectos\mi-carpeta"
-                spellCheck={false}
-                className="input mt-1.5 font-mono text-[10px]"
-                aria-label="Ruta de la carpeta customizada"
-              />
-              {value.customFolder && !/^([a-zA-Z]:\\|\\\\)/.test(value.customFolder.trim()) && (
-                <p className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
-                  Debe ser una ruta absoluta de este PC (C:\… o \\servidor\…).
-                </p>
-              )}
-              {value.customArchivos.length > 0 && (
+              {value.customArchivos.length > 0 ? (
                 <div className="mt-1.5 flex flex-wrap gap-1">
                   {value.customArchivos.map((a) => (
                     <span
@@ -413,7 +417,7 @@ export function AgentDelegationSection({
                       <span className="truncate">{a.split(/[\\/]/).pop()}</span>
                       <button
                         type="button"
-                        title={a}
+                        aria-label={`Quitar ${a.split(/[\\/]/).pop()}`}
                         onClick={() =>
                           onChange({
                             ...value,
@@ -427,174 +431,140 @@ export function AgentDelegationSection({
                     </span>
                   ))}
                 </div>
-              )}
-              <p className="mt-1.5 text-[10px] leading-snug text-faint">
-                Sin git: nada se versiona ni sube. Los archivos se copian a esta
-                carpeta al despachar; los originales quedan donde están.
+              ) : null}
+              <p className="mt-1 text-[10px] leading-snug text-faint">
+                Se copian dentro de la carpeta al despachar; los originales quedan donde están.
               </p>
-            </div>
+            </>
+          ) : (
+            contextSlot
           )}
         </div>
-      )}
-      {value.taskType === "correo" && <div className="mb-3" />}
+      </Dim>
 
-      {/* Autonomía */}
-      <label className="label">Autonomía</label>
-      <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-3">
-        {AUTONOMIES.map((a) => {
-          const meta = AUTONOMY_META[a];
-          const active = value.autonomy === a;
-          return (
-            <button
-              key={a}
-              type="button"
-              onClick={() => onChange({ ...value, autonomy: a })}
-              className={cn(
-                "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
-                active
-                  ? cn(accent.border, accent.bg)
-                  : "border-line hover:bg-panel2",
-              )}
-            >
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
-                <meta.Icon
-                  className={cn("h-3.5 w-3.5", active && accent.text)}
-                />
-                {meta.label}
-              </span>
-              <span className="text-[10px] leading-snug text-mute">{meta.desc}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Modo plan: planifica primero y espera tu OK antes de ejecutar */}
-      <label className="label">Modo de ejecución</label>
-      <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-        <button
-          type="button"
-          onClick={() => onChange({ ...value, planMode: false })}
-          className={cn(
-            "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
-            !value.planMode
-              ? cn(accent.border, accent.bg)
-              : "border-line hover:bg-panel2",
-          )}
+      {/* Cómo: autonomía, plan antes de ejecutar y (si aplica) git. */}
+      <Dim label="Cómo" hint="Cuánto decide solo">
+        <div
+          role="radiogroup"
+          aria-label="Autonomía"
+          className="grid grid-cols-1 gap-1.5 sm:grid-cols-3"
         >
-          <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
-            <Rocket
-              className={cn("h-3.5 w-3.5", !value.planMode && accent.text)}
-            />
-            Directo
-          </span>
-          <span className="text-[10px] leading-snug text-mute">
-            Planifica y ejecuta de una: revisas el resultado al final.
-          </span>
-        </button>
-        <button
-          type="button"
-          onClick={() => onChange({ ...value, planMode: true })}
-          className={cn(
-            "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
-            value.planMode
-              ? cn(accent.border, accent.bg)
-              : "border-line hover:bg-panel2",
-          )}
-        >
-          <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
-            <Compass
-              className={cn("h-3.5 w-3.5", value.planMode && accent.text)}
-            />
-            Modo plan
-          </span>
-          <span className="text-[10px] leading-snug text-mute">
-            Primero planifica (solo lectura) y espera tu OK: apruebas el plan o
-            pides cambios antes de que ejecute.
-          </span>
-        </button>
-      </div>
+          {AUTONOMIES.map((a) => {
+            const meta = AUTONOMY_META[a];
+            const active = value.autonomy === a;
+            return (
+              <button
+                key={a}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => onChange({ ...value, autonomy: a })}
+                className={cn(
+                  "flex flex-col gap-0.5 rounded-el border-el p-2 text-left transition-colors",
+                  active ? cn(accent.border, accent.bg) : "border-line hover:bg-panel2",
+                )}
+              >
+                <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                  <meta.Icon className={cn("h-3.5 w-3.5", active && accent.text)} />
+                  {meta.label}
+                </span>
+                <span className="text-[10px] leading-snug text-mute">{meta.desc}</span>
+              </button>
+            );
+          })}
+        </div>
 
-      {/* Estrategia de Git: desarrollo y ops. Elección explícita de Cris —
-          rama+PR (default) o directo a main (excepción que viaja en el
-          contrato del despacho). En modo customizada queda FIJA en
-          solo-local: no se elige. */}
-      {(value.taskType === "desarrollo" || value.taskType === "ops") && !value.customMode && (
-        <>
-          <label className="label">Estrategia de Git</label>
-          <div className="mb-3 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-            {GIT_STRATEGIES.map((g) => {
-              const meta = GIT_STRATEGY_META[g];
-              const active = value.gitStrategy === g;
-              const danger = g === "main-directo";
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <div role="radiogroup" aria-label="Modo de ejecución" className="inline-flex rounded-el border-el border-line p-0.5">
+            {[
+              { plan: false, label: "Directo", Icon: Rocket },
+              { plan: true, label: "Plan primero", Icon: Compass },
+            ].map((opt) => {
+              const active = value.planMode === opt.plan;
               return (
                 <button
-                  key={g}
+                  key={opt.label}
                   type="button"
-                  title={meta.desc}
-                  onClick={() => onChange({ ...value, gitStrategy: g })}
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => onChange({ ...value, planMode: opt.plan })}
                   className={cn(
-                    "flex flex-col gap-1 rounded-el border-el p-2 text-left transition-all",
-                    active
-                      ? danger
-                        ? "border-red-500/60 bg-red-500/10"
-                        : cn(accent.border, accent.bg)
-                      : "border-line hover:bg-panel2",
+                    "inline-flex items-center gap-1.5 rounded-[calc(var(--radius)-2px)] px-2.5 py-1 text-xs font-medium transition-colors",
+                    active ? cn(accent.bg, "text-ink") : "text-mute hover:text-ink",
                   )}
                 >
-                  <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
-                    <meta.Icon
-                      className={cn("h-3.5 w-3.5", active && (danger ? "text-red-500" : accent.text))}
-                    />
-                    {meta.label}
-                  </span>
-                  <span className="text-[10px] leading-snug text-mute">
-                    {meta.desc}
-                    {danger && " ⚠ Se publica a producción al pushear."}
-                  </span>
+                  <opt.Icon className={cn("h-3.5 w-3.5", active && accent.text)} />
+                  {opt.label}
                 </button>
               );
             })}
           </div>
-        </>
-      )}
-
-      {/* Modelo + WhatsApp */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-        <div>
-          <label className="label">Modelo</label>
-          <select
-            value={value.model}
-            onChange={(e) => onChange({ ...value, model: e.target.value })}
-            className="input"
-          >
-            <option value="">
-              {defaultModel
-                ? `Default de tu config (${defaultModel.split("/").pop()})`
-                : "Default de tu config"}
-            </option>
-            {modelList.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+          <span className="text-[10px] leading-snug text-faint">
+            {value.planMode
+              ? "Planifica en solo lectura y espera tu OK antes de ejecutar."
+              : "Planifica y ejecuta de una: revisas el resultado al final."}
+          </span>
         </div>
-        <div>
-          <label className="label">WhatsApp (vía Hermes)</label>
-          <div className="flex gap-1">
+
+        {/* Estrategia de Git: desarrollo y ops, con carpeta registrada (la
+            propia queda fija en solo-local). */}
+        {(value.taskType === "desarrollo" || value.taskType === "ops") && !value.customMode && (
+          <div className="mt-3">
+            <p className="mb-1.5 text-[11px] font-semibold text-ink">Git</p>
+            <div role="radiogroup" aria-label="Estrategia de Git" className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              {GIT_STRATEGIES.map((g) => {
+                const meta = GIT_STRATEGY_META[g];
+                const active = value.gitStrategy === g;
+                const danger = g === "main-directo";
+                return (
+                  <button
+                    key={g}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    title={meta.desc}
+                    onClick={() => onChange({ ...value, gitStrategy: g })}
+                    className={cn(
+                      "flex flex-col gap-0.5 rounded-el border-el p-2 text-left transition-colors",
+                      active
+                        ? danger
+                          ? "border-red-500/60 bg-red-500/10"
+                          : cn(accent.border, accent.bg)
+                        : "border-line hover:bg-panel2",
+                    )}
+                  >
+                    <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                      <meta.Icon className={cn("h-3.5 w-3.5", active && (danger ? "text-red-500" : accent.text))} />
+                      {meta.label}
+                    </span>
+                    <span className="text-[10px] leading-snug text-mute">
+                      {meta.desc}
+                      {danger && " ⚠ Se publica a producción al pushear."}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+      </Dim>
+
+      {/* Avisos por WhatsApp (vía Hermes). */}
+      <Dim label="Avisos" hint="WhatsApp vía Hermes">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <div role="radiogroup" aria-label="Avisos por WhatsApp" className="inline-flex rounded-el border-el border-line p-0.5">
             {NOTIFY_MODES.map((n) => {
               const active = value.notifyWhatsapp === n;
               return (
                 <button
                   key={n}
                   type="button"
-                  title={NOTIFY_META[n].desc}
+                  role="radio"
+                  aria-checked={active}
                   onClick={() => onChange({ ...value, notifyWhatsapp: n })}
                   className={cn(
-                    "flex-1 rounded-el border-el px-1 py-1.5 text-[10px] font-medium transition-all",
-                    active
-                      ? "border-emerald-500/60 bg-emerald-500/10 text-ink"
-                      : "border-line text-mute hover:bg-panel2",
+                    "rounded-[calc(var(--radius)-2px)] px-2.5 py-1 text-xs font-medium transition-colors",
+                    active ? "bg-emerald-500/15 text-ink" : "text-mute hover:text-ink",
                   )}
                 >
                   {NOTIFY_META[n].label}
@@ -602,36 +572,82 @@ export function AgentDelegationSection({
               );
             })}
           </div>
+          <span className="text-[10px] leading-snug text-faint">{NOTIFY_META[value.notifyWhatsapp].desc}</span>
         </div>
-      </div>
+      </Dim>
 
-      {/* Contexto adicional (picker nativo de Windows): carpeta custom (se
-          puede crear en el mismo momento) o archivos, en solo lectura. */}
-      {contextSlot}
-
-      {/* Estado del puente: activo/libre/ocupado/apagado, con motivo. */}
-      <p className="mt-2.5 flex items-center gap-1.5 text-[10px] text-faint">
+      {/* Estado del puente: qué pasa al guardar. */}
+      <p className="flex items-center gap-1.5 pt-3 text-[10px] text-faint">
         {bridge?.active ? (
-          (bridge.activeRuns ?? []).length > 0 ? (
-            <>
-              <CircleDot className="h-3 w-3 text-emerald-500" />
-              Puente activo pero ocupado con "{bridge.activeRuns[0].title}" (
-              {bridge.activeRuns[0].elapsedMin} min) — tu tarea sale al liberar
-              {(bridge.queueDepth ?? 0) > 0 && ` (${bridge.queueDepth} en cola)`}
-            </>
-          ) : (
-            <>
-              <CircleDot className="h-3 w-3 text-emerald-500" />
-              Puente activo — se despacha en segundos al guardar
-            </>
-          )
+          <>
+            <CircleDot className="h-3 w-3 shrink-0 text-emerald-500" />
+            {(bridge.activeRuns ?? []).length > 0
+              ? `Puente activo con ${bridge.activeRuns.length} corrida${bridge.activeRuns.length > 1 ? "s" : ""}: tu tarea sale en cuanto haya espacio${(bridge.queueDepth ?? 0) > 0 ? ` (${bridge.queueDepth} en cola)` : ""}.`
+              : "Puente activo: se despacha en segundos al guardar."}
+          </>
         ) : (
           <>
-            <Circle className="h-3 w-3" />
-            Puente apagado — quedará encolada y saldrá al encender el puente
+            <Circle className="h-3 w-3 shrink-0" />
+            Puente apagado: quedará en cola y saldrá al encender el puente.
           </>
         )}
       </p>
     </div>
+  );
+}
+
+/**
+ * Fila de dimensión: nombre corto a la izquierda (riel) y controles a la
+ * derecha; en pantallas chicas se apila. Las filas se separan con una línea
+ * (divide-y del contenedor), sin tarjetas anidadas.
+ */
+function Dim({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-2 py-3 sm:grid-cols-[6.5rem_minmax(0,1fr)] sm:gap-4">
+      <div className="sm:pt-1">
+        <p className="text-xs font-semibold text-ink">{label}</p>
+        {hint && <p className="text-[10px] leading-snug text-faint">{hint}</p>}
+      </div>
+      <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+/**
+ * Modelo del agente: vive junto al selector de ejecutor (el catálogo depende
+ * del agente elegido). Sin modelo = el default de su config.
+ */
+export function AgentModelSelect({
+  executor,
+  value,
+  onChange,
+}: {
+  executor: DelegatedExecutor;
+  value: string;
+  onChange: (model: string) => void;
+}) {
+  const { token } = useAuth();
+  const models = useQuery(
+    api.agent.listModels,
+    token ? { sessionToken: token, agent: executor } : "skip",
+  );
+  const modelList = models?.models ?? [];
+  const defaultModel = models?.default ?? "";
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="input"
+      aria-label={`Modelo de ${EXECUTOR_META[executor].label}`}
+    >
+      <option value="">
+        {defaultModel ? `Default (${defaultModel.split("/").pop()})` : "Default de su config"}
+      </option>
+      {modelList.map((m) => (
+        <option key={m.id} value={m.id}>
+          {m.label}
+        </option>
+      ))}
+    </select>
   );
 }

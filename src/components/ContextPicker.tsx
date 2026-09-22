@@ -67,7 +67,7 @@ export function ContextPicker({
           ) : (
             <FolderOpen className="h-3.5 w-3.5" />
           )}
-          Elegir carpeta…
+          Agregar carpeta…
         </button>
         <button
           type="button"
@@ -81,7 +81,7 @@ export function ContextPicker({
           ) : (
             <FileText className="h-3.5 w-3.5" />
           )}
-          Elegir archivos…
+          Agregar archivos…
         </button>
       </div>
       {hay && (

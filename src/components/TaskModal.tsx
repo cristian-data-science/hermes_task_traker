@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -65,6 +65,30 @@ import {
 } from "./ContextPicker";
 import { useAuth } from "../hooks/useAuth";
 import { isMobileLike } from "../hooks/usePwaInstall";
+
+/**
+ * Sección del modal: título en tipografía display (no otra etiqueta en
+ * mayúsculas: esas quedan para los campos) y separación por línea fina.
+ */
+function ModalSection({
+  title,
+  aside,
+  children,
+}: {
+  title: string;
+  aside?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="border-t border-line pt-5 first:border-t-0 first:pt-0">
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="font-display text-sm font-semibold text-ink">{title}</h3>
+        {aside}
+      </div>
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
+}
 
 interface TaskModalProps {
   task?: Doc<"tasks"> | null; // si viene, es edición; si no, crear
@@ -551,88 +575,125 @@ export function TaskModal({
               </button>
             </div>
 
-            {/* Body (scrollable) */}
-            <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-              {/* Título */}
-              <div className="mb-4">
-                <label className="label">Título *</label>
-                {/* En teléfono el teclado NO se abre solo: solo al tocar una
-                    caja de texto. Desktop conserva el autofocus. */}
-                <input
-                  autoFocus={!isMobileLike()}
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="¿Qué hay que hacer?"
-                  className="input text-base"
-                />
-              </div>
-
-              {/* Check "súper urgente": capa de visualización por encima de
-                  todo. Activa un preview del borde RGB que tendrá la tarjeta.
-                  Solo versión web: en el APK el control no se muestra (y el
-                  valor hidratado igual se reenvía al guardar, para no borrar
-                  una marca puesta desde la web). */}
-              {SUPER_URGENT_ENABLED && (
-              <button
-                type="button"
-                onClick={() => setSuperUrgent((v) => !v)}
-                style={
-                  {
-                    "--tone": "var(--status-urgente)",
-                    ...(superUrgent
-                      ? {
-                          borderColor:
-                            "color-mix(in srgb, var(--status-urgente) 55%, transparent)",
-                        }
-                      : {}),
-                  } as CSSProperties
-                }
-                className={cn(
-                  "relative mb-4 flex w-full items-center gap-2.5 overflow-hidden rounded-el border-el px-2.5 py-2 text-left transition-colors",
-                  superUrgent
-                    ? "bg-panel2"
-                    : "border-line hover:bg-panel2",
-                )}
-              >
-                {/* Preview del aro holográfico que llevará la tarjeta. */}
-                {superUrgent && (
-                  <span aria-hidden className="su-ring z-[1]" />
-                )}
-                <span
-                  className="grid h-4 w-4 shrink-0 place-items-center rounded border-el transition-colors"
-                  style={
-                    superUrgent
-                      ? {
-                          borderColor: "var(--tone)",
-                          background: "var(--tone)",
-                          color: "var(--accent-fg)",
-                        }
-                      : { borderColor: "var(--border)", background: "var(--surface)" }
-                  }
-                >
-                  {superUrgent && <Check className="h-3 w-3" />}
-                </span>
-                <span className="relative z-[1] min-w-0 flex-1">
-                  <span
-                    className="flex items-center gap-1 text-xs font-semibold"
-                    style={superUrgent ? { color: "var(--tone)" } : undefined}
-                  >
-                    <Zap className="h-3 w-3" />
-                    Súper urgente
-                  </span>
-                  <span className="block text-[10px] text-faint">
-                    Ignora los filtros del tablero: siempre visible y primera,
-                    con borde holográfico RGB
-                  </span>
-                </span>
-              </button>
-              )}
-
-              {/* Área + Estado + Ejecutor */}
-              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {/* Body (scrollable): secciones por DIMENSIÓN, en el orden en que
+                se piensa una tarea — qué es → cuándo/para quién → quién la
+                ejecuta y cómo → sincronización → seguimiento. */}
+            <div className="flex-1 space-y-6 overflow-y-auto px-4 py-4 sm:px-5">
+              {/* ===== Tarea: qué hay que hacer ===== */}
+              <ModalSection title="Tarea">
                 <div>
-                  <label className="label">Área</label>
+                  <label className="label" htmlFor="task-title">Título *</label>
+                  {/* En teléfono el teclado NO se abre solo: solo al tocar una
+                      caja de texto. Desktop conserva el autofocus. */}
+                  <input
+                    id="task-title"
+                    autoFocus={!isMobileLike()}
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="¿Qué hay que hacer?"
+                    className="input text-base"
+                  />
+                </div>
+
+                {/* Notas: para una tarea delegada son las INSTRUCCIONES del
+                    agente, por eso van junto al título. Expandible (preferencia
+                    persistida en localStorage). */}
+                <div>
+                  <div className="flex items-center justify-between">
+                    <label className="label" htmlFor="task-notes">
+                      {isDelegatedExecutor(executor) ? "Instrucciones para el agente" : "Notas"}
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const next = !notesExpanded;
+                        setNotesExpanded(next);
+                        try {
+                          localStorage.setItem("hermes-notes-expanded", next ? "1" : "0");
+                        } catch {
+                          // localStorage lleno/bloqueado: la preferencia es
+                          // cosmética, no vale romper el modal por ella.
+                        }
+                      }}
+                      title={notesExpanded ? "Contraer el cuadro de notas" : "Expandir el cuadro de notas"}
+                      className="mb-1 inline-flex items-center gap-1 text-[10px] font-medium text-mute transition-colors hover:text-accent"
+                    >
+                      {notesExpanded ? <Minimize2 className="h-3 w-3" /> : <Maximize2 className="h-3 w-3" />}
+                      {notesExpanded ? "Contraer" : "Expandir"}
+                    </button>
+                  </div>
+                  <textarea
+                    id="task-notes"
+                    value={notes}
+                    onChange={(e) => setNotes(e.target.value)}
+                    placeholder={
+                      isDelegatedExecutor(executor)
+                        ? "Qué debe lograr, criterios de aceptación, contexto que necesita…"
+                        : "Detalles, criterios, contexto…"
+                    }
+                    rows={notesExpanded ? 16 : 3}
+                    className="input resize-y transition-[height] duration-150"
+                  />
+                </div>
+
+                {/* Check "súper urgente": capa de visualización por encima de
+                    todo. Activa un preview del borde RGB que tendrá la tarjeta.
+                    Solo versión web: en el APK el control no se muestra (y el
+                    valor hidratado igual se reenvía al guardar, para no borrar
+                    una marca puesta desde la web). */}
+                {SUPER_URGENT_ENABLED && (
+                  <button
+                    type="button"
+                    onClick={() => setSuperUrgent((v) => !v)}
+                    aria-pressed={superUrgent}
+                    style={
+                      {
+                        "--tone": "var(--status-urgente)",
+                        ...(superUrgent
+                          ? { borderColor: "color-mix(in srgb, var(--status-urgente) 55%, transparent)" }
+                          : {}),
+                      } as CSSProperties
+                    }
+                    className={cn(
+                      "relative flex w-full items-center gap-2.5 overflow-hidden rounded-el border-el px-2.5 py-2 text-left transition-colors",
+                      superUrgent ? "bg-panel2" : "border-line hover:bg-panel2",
+                    )}
+                  >
+                    {/* Preview del aro holográfico que llevará la tarjeta. */}
+                    {superUrgent && <span aria-hidden className="su-ring z-[1]" />}
+                    <span
+                      className="grid h-4 w-4 shrink-0 place-items-center rounded border-el transition-colors"
+                      style={
+                        superUrgent
+                          ? { borderColor: "var(--tone)", background: "var(--tone)", color: "var(--accent-fg)" }
+                          : { borderColor: "var(--border)", background: "var(--surface)" }
+                      }
+                    >
+                      {superUrgent && <Check className="h-3 w-3" />}
+                    </span>
+                    <span className="relative z-[1] min-w-0 flex-1">
+                      <span
+                        className="flex items-center gap-1 text-xs font-semibold"
+                        style={superUrgent ? { color: "var(--tone)" } : undefined}
+                      >
+                        <Zap className="h-3 w-3" />
+                        Súper urgente
+                      </span>
+                      <span className="block text-[10px] text-faint">
+                        Ignora los filtros del tablero: siempre visible y primera, con borde holográfico RGB
+                      </span>
+                    </span>
+                  </button>
+                )}
+              </ModalSection>
+
+              {/* ===== Planificación: dónde vive, en qué estado, cuándo ===== */}
+              <ModalSection title="Planificación">
+                <div>
+                  <p className="label">Área</p>
                   <div
+                    role="radiogroup"
+                    aria-label="Área"
                     className="grid gap-1"
                     style={{ gridTemplateColumns: `repeat(${visibleAreas.length}, minmax(0, 1fr))` }}
                   >
@@ -643,6 +704,8 @@ export function TaskModal({
                         <button
                           key={a}
                           type="button"
+                          role="radio"
+                          aria-checked={active}
                           onClick={() => setArea(a)}
                           style={
                             {
@@ -650,101 +713,195 @@ export function TaskModal({
                               ...(active
                                 ? {
                                     borderColor: "var(--tone)",
-                                    background:
-                                      "color-mix(in srgb, var(--tone) 12%, transparent)",
+                                    background: "color-mix(in srgb, var(--tone) 12%, transparent)",
                                   }
                                 : {}),
                             } as CSSProperties
                           }
                           className={cn(
-                            "flex flex-col items-center gap-1 rounded-el border-el px-2 py-2 text-xs font-medium transition-all",
-                            active
-                              ? "text-ink"
-                              : "border-line text-mute hover:bg-panel2",
+                            "flex items-center justify-center gap-1.5 rounded-el border-el px-2 py-2 text-xs font-medium transition-colors",
+                            active ? "text-ink" : "border-line text-mute hover:bg-panel2",
                           )}
                         >
-                          <meta.Icon
-                            className="h-4 w-4"
-                            style={active ? { color: "var(--tone)" } : undefined}
-                          />
+                          <meta.Icon className="h-4 w-4" style={active ? { color: "var(--tone)" } : undefined} />
                           {meta.label}
                         </button>
                       );
                     })}
                   </div>
                 </div>
-                <div>
-                  <label className="label">Estado</label>
-                  <select
-                    value={status}
-                    onChange={(e) => setStatus(e.target.value as Status)}
-                    className="input"
-                  >
-                    {STATUSES.map((s) => (
-                      <option key={s} value={s}>
-                        {STATUS_META[s].label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="label">Ejecutor</label>
-                  <div className="relative">
-                    {(() => {
-                      const ExecIcon = EXECUTOR_META[executor].Icon;
-                      return (
-                        <ExecIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-mute" />
-                      );
-                    })()}
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="label" htmlFor="task-status">Estado</label>
                     <select
-                      value={executor}
-                      onChange={(e) => {
-                        const next = e.target.value as Executor;
-                        if (next !== executor) {
-                          setExecutor(next);
-                          // Catálogos por agente: al cambiar de agente (o a
-                          // cris/claw) el modelo elegido ya no aplica.
-                          setAgentCfg((prev) => ({ ...prev, model: "" }));
-                        }
-                      }}
-                      className="input pl-9"
+                      id="task-status"
+                      value={status}
+                      onChange={(e) => setStatus(e.target.value as Status)}
+                      className="input"
                     >
-                      {EXECUTORS.map((ex) => (
-                        <option key={ex} value={ex}>
-                          {EXECUTOR_META[ex].label}
+                      {STATUSES.map((s) => (
+                        <option key={s} value={s}>
+                          {STATUS_META[s].label}
                         </option>
                       ))}
                     </select>
                   </div>
+                  <div>
+                    <label className="label">Fecha de entrega</label>
+                    <DatePicker
+                      value={dueDate}
+                      onChange={setDueDate}
+                      placeholder="2026-07-29, mañana…"
+                      label="Calendario de fecha de entrega"
+                    />
+                  </div>
                 </div>
-              </div>
 
-              {/* Delegación al agente (ZCode/Claude): tipo → carpeta →
-                  autonomía → modelo → WhatsApp. Solo con ejecutor despachable
-                  y en la web. */}
-              {isDelegatedExecutor(executor) && AGENT_UI_ENABLED && (
-                <>
-                  {isEdit && task?.agentState && (
+                {/* Standby (condicional al estado) */}
+                {(status === "standby" || standbyFrom || standbyUntil) && (
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="label">Standby desde</label>
+                      <DatePicker
+                        value={standbyFrom}
+                        onChange={setStandbyFrom}
+                        placeholder="08-jul-2026"
+                        label="Calendario de standby desde"
+                      />
+                    </div>
+                    <div>
+                      <label className="label">Pasa a pendiente el</label>
+                      <DatePicker
+                        value={standbyUntil}
+                        onChange={setStandbyUntil}
+                        placeholder="29-jul-2026"
+                        label="Calendario de pasa a pendiente el"
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Programado (condicional al estado) */}
+                {(status === "programado" || scheduledDates) && (
+                  <div>
+                    <label className="label" htmlFor="task-scheduled">Fechas programadas</label>
+                    <input
+                      id="task-scheduled"
+                      value={scheduledDates}
+                      onChange={(e) => setScheduledDates(e.target.value)}
+                      placeholder="29 y 30 de julio 2026"
+                      className="input"
+                    />
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  <div className="col-span-2 sm:col-span-1">
+                    <label className="label" htmlFor="task-requested">Solicitado por</label>
+                    <input
+                      id="task-requested"
+                      value={requestedBy}
+                      onChange={(e) => setRequestedBy(e.target.value)}
+                      placeholder="Persona / equipo"
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="task-estimate">Estimación</label>
+                    <input
+                      id="task-estimate"
+                      value={estimate}
+                      onChange={(e) => setEstimate(e.target.value)}
+                      placeholder="30 min, ~4 h…"
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label className="label" htmlFor="task-progress">Progreso (%)</label>
+                    <input
+                      id="task-progress"
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={progress}
+                      onChange={(e) => setProgress(e.target.value === "" ? "" : Number(e.target.value))}
+                      placeholder="0–100"
+                      className="input"
+                    />
+                  </div>
+                </div>
+              </ModalSection>
+
+              {/* ===== Quién la ejecuta: persona o agente (+ modelo) y, si es
+                  agente, cómo trabaja (riel de dimensiones). ===== */}
+              <ModalSection
+                title="Quién la ejecuta"
+                aside={
+                  isEdit && task?.agentState && isDelegatedExecutor(executor) && AGENT_UI_ENABLED ? (
                     <button
                       type="button"
                       onClick={() => setRunsOpen(true)}
-                      className="mb-2 flex w-full items-center justify-between rounded-el border-el px-3 py-2 text-left transition-colors hover:bg-panel2"
+                      className="inline-flex items-center gap-1.5 rounded-full border-el px-2 py-0.5 text-[10px] font-semibold text-ink transition-colors hover:bg-panel2"
                       style={{
                         borderColor: `color-mix(in srgb, ${
-                          AGENT_STATE_META[task.agentState as AgentState]?.tone ??
-                          "var(--border)"
-                        } 45%, transparent)`,
+                          AGENT_STATE_META[task.agentState as AgentState]?.tone ?? "var(--border)"
+                        } 55%, transparent)`,
                       }}
+                      title="Ver corridas y acciones del agente"
                     >
-                      <span className="flex items-center gap-2 text-xs font-semibold text-ink">
-                        Estado del agente:{" "}
-                        {AGENT_STATE_META[task.agentState as AgentState]?.label}
-                      </span>
-                      <span className="text-[10px] text-faint">
-                        Ver corridas y acciones →
-                      </span>
+                      <span
+                        className="h-1.5 w-1.5 rounded-full"
+                        style={{ background: AGENT_STATE_META[task.agentState as AgentState]?.tone }}
+                      />
+                      {AGENT_STATE_META[task.agentState as AgentState]?.label} · ver corridas →
                     </button>
-                  )}
+                  ) : undefined
+                }
+              >
+                <div>
+                  <div>
+                    <p className="label">Ejecutor</p>
+                    <div role="radiogroup" aria-label="Ejecutor" className="grid grid-cols-2 gap-1 sm:grid-cols-4">
+                      {EXECUTORS.map((ex) => {
+                        const m = EXECUTOR_META[ex];
+                        const active = executor === ex;
+                        return (
+                          <button
+                            key={ex}
+                            type="button"
+                            role="radio"
+                            aria-checked={active}
+                            onClick={() => {
+                              if (ex === executor) return;
+                              setExecutor(ex);
+                              // Catálogos por agente: al cambiar de agente (o a
+                              // cris/claw) el modelo elegido ya no aplica.
+                              setAgentCfg((prev) => ({ ...prev, model: "" }));
+                            }}
+                            style={
+                              active
+                                ? {
+                                    borderColor: "var(--accent)",
+                                    background: "color-mix(in srgb, var(--accent) 12%, transparent)",
+                                  }
+                                : undefined
+                            }
+                            className={cn(
+                              "flex items-center justify-center gap-1.5 rounded-el border-el px-2 py-2 text-xs font-medium transition-colors",
+                              active ? "font-semibold text-ink" : "border-line text-mute hover:bg-panel2",
+                            )}
+                          >
+                            <m.Icon className={cn("h-4 w-4 shrink-0", active && m.color)} />
+                            <span className="truncate">{m.label}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                {isDelegatedExecutor(executor) && AGENT_UI_ENABLED && (
                   <AgentDelegationSection
                     value={agentCfg}
                     onChange={setAgentCfg}
@@ -752,13 +909,11 @@ export function TaskModal({
                     executor={executor}
                     correoOrigen={!!task?.correoId}
                     contextSlot={
-                      // En modo customizada el contexto viaja dentro del
-                      // bloque de carpeta custom (se copia al despachar).
-                      !agentCfg.customMode ? (
-                        agentCfg.taskType === "correo" ? (
+                      agentCfg.taskType === "correo" ? (
                         <div>
-                          <label className="label">Respuesta del correo</label>
+                          <label className="label" htmlFor="task-correo">Respuesta del correo</label>
                           <textarea
+                            id="task-correo"
                             value={correoInstruccion}
                             onChange={(e) => setCorreoInstruccion(e.target.value)}
                             rows={2}
@@ -767,325 +922,174 @@ export function TaskModal({
                           />
                           <ContextPicker value={delegCtx} onChange={setDelegCtx} />
                           <p className="mt-1.5 text-[10px] leading-snug text-faint">
-                            El agente recibe el correo COMPLETO + tu indicación +
-                            este contexto (solo lectura: puedes crear la carpeta
-                            en el momento desde el diálogo). Te devuelve una
-                            propuesta lista para copiar y pegar en tu correo —
-                            nunca envía.
+                            Recibe el correo completo, tu indicación y este contexto (solo lectura).
+                            Te devuelve una propuesta para copiar y pegar: nunca envía.
                           </p>
                         </div>
                       ) : (
                         <div>
+                          <p className="mb-1.5 text-[11px] font-semibold text-ink">
+                            Material de contexto <span className="font-normal text-faint">· opcional, solo lectura</span>
+                          </p>
                           <ContextPicker value={delegCtx} onChange={setDelegCtx} />
-                          <p className="mt-1.5 text-[10px] leading-snug text-faint">
-                            Contexto para el agente (solo lectura): carpetas para
-                            explorar y archivos (ej. un Excel) que leerá directo
-                            de tu disco — no se suben a la nube.
+                          <p className="mt-1 text-[10px] leading-snug text-faint">
+                            Carpetas para explorar y archivos (ej. un Excel) que lee directo de tu disco: no se suben a la nube.
                           </p>
                         </div>
                       )
-                      ) : undefined
                     }
                   />
-                </>
-              )}
+                )}
+              </ModalSection>
 
-              {/* Destino ClickUp (solo Patagonia) */}
+              {/* ===== ClickUp (solo Patagonia) ===== */}
               {area === "patagonia" && (
-                <div className="mb-4">
-                  {/* Check "solo local": la tarea vive únicamente en Hermes y
-                      nunca se crea en ClickUp. */}
-                  <button
-                    type="button"
-                    onClick={() => setClickupLocal((v) => !v)}
-                    className={cn(
-                      "mb-2 flex w-full items-center gap-2.5 rounded-el border-el px-2.5 py-2 text-left transition-colors",
-                      clickupLocal
-                        ? "border-accent/50 bg-accent/5"
-                        : "border-line hover:bg-panel2",
-                    )}
-                  >
-                    <span
+                <ModalSection title="ClickUp">
+                  <div>
+                    {/* Check "solo local": la tarea vive únicamente en Hermes y
+                        nunca se crea en ClickUp. */}
+                    <button
+                      type="button"
+                      onClick={() => setClickupLocal((v) => !v)}
+                      aria-pressed={clickupLocal}
                       className={cn(
-                        "grid h-4 w-4 shrink-0 place-items-center rounded border-el transition-colors",
-                        clickupLocal
-                          ? "border-accent bg-accent text-acfg"
-                          : "border-line bg-panel",
+                        "mb-2 flex w-full items-center gap-2.5 rounded-el border-el px-2.5 py-2 text-left transition-colors",
+                        clickupLocal ? "border-accent/50 bg-accent/5" : "border-line hover:bg-panel2",
                       )}
                     >
-                      {clickupLocal && <Check className="h-3 w-3" />}
-                    </span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-xs font-semibold text-ink">
-                        Solo local
-                      </span>
-                      <span className="block text-[10px] text-faint">
-                        Vive únicamente en Hermes: no se crea ni sincroniza con
-                        ClickUp
-                        {isEdit && task?.clickupId
-                          ? " (se desvinculará; la copia en ClickUp queda)"
-                          : ""}
-                      </span>
-                    </span>
-                  </button>
-
-                  {clickupLocal ? (
-                    <div className="rounded-el border-el border-line bg-panel px-3 py-2.5 text-xs text-mute">
-                      Esta tarea quedará solo en Convex con el badge{" "}
-                      <span className="font-medium text-mute">Local</span>.
-                    </div>
-                  ) : (
-                    hydratedKey === ctxKey && (
-                    <ClickUpDestinationPicker
-                      // Remount limpio al cambiar de tarea (o nueva↔edición).
-                      // El picker fija su estado de navegación una sola vez al
-                      // montar; el key + el guard de hidratación garantizan que
-                      // monte con el destino correcto de ESTA tarea.
-                      key={ctxKey}
-                      value={clickupParentId}
-                      listId={clickupListId}
-                      // Fuente de verdad para ubicar la tarea en ClickUp.
-                      taskClickupId={task?.clickupId}
-                      onChange={(parentId, lid) => {
-                        setClickupParentId(parentId);
-                        setClickupListId(lid);
-                      }}
-                    />
-                  )
-                  )}
-                  {/* Estado de sync / link. Se muestra también SIN clickupUrl:
-                      una creación en ClickUp que falló no tiene URL, y antes
-                      el error quedaba invisible (la tarea parecía "Local").
-                      Con clickupId la URL se puede reconstruir, así que el
-                      link también aparece en ese caso. */}
-                  {isEdit &&
-                    (task?.clickupUrl ||
-                      task?.clickupId ||
-                      task?.clickupSyncError) && (
-                    <div className="mt-2 flex flex-col gap-0.5 text-xs">
-                      {task.clickupSyncError ? (
-                        <>
-                          <span
-                            className="inline-flex items-center gap-1 text-danger"
-                            title={task.clickupSyncError}
-                          >
-                            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-                            <span className="min-w-0 break-words">
-                              Error de sync:{" "}
-                              {task.clickupSyncError.length > 140
-                                ? `${task.clickupSyncError.slice(0, 140)}…`
-                                : task.clickupSyncError}
-                            </span>
-                          </span>
-                          {!task.clickupId && (
-                            <span className="pl-5 text-[10px] text-faint">
-                              No llegó a crearse en ClickUp. Se reintenta al
-                              volver a guardar la tarea.
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        <a
-                          href={
-                            task.clickupUrl ??
-                            `https://app.clickup.com/t/${task.clickupId}`
-                          }
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-accent hover:underline"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          Ver en ClickUp
-                        </a>
-                      )}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Sub-tareas (solo en edición) */}
-              {isEdit && (
-                <div className="mb-4">
-                  <label className="label">Sub-tareas</label>
-                  <div className="space-y-1.5">
-                    <DndContext
-                      sensors={sensors}
-                      collisionDetection={closestCenter}
-                      onDragEnd={handleSubDragEnd}
-                    >
-                      <SortableContext
-                        items={(subtasks ?? []).map((s) => s._id)}
-                        strategy={verticalListSortingStrategy}
+                      <span
+                        className={cn(
+                          "grid h-4 w-4 shrink-0 place-items-center rounded border-el transition-colors",
+                          clickupLocal ? "border-accent bg-accent text-acfg" : "border-line bg-panel",
+                        )}
                       >
-                        {(subtasks ?? []).map((s) => (
-                          <SubtaskItem
-                            key={s._id}
-                            subtask={s}
-                            onToggle={(id) => toggleSub({ id, sessionToken: token! })}
-                            onRemove={(id) => removeSub({ id, sessionToken: token! })}
-                          />
-                        ))}
-                      </SortableContext>
-                    </DndContext>
-                    <div className="flex gap-1.5">
-                      <input
-                        value={newSub}
-                        onChange={(e) => setNewSub(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            e.preventDefault();
-                            handleAddSub();
-                          }
-                        }}
-                        placeholder="Añadir sub-tarea y Enter…"
-                        className="input flex-1 py-1.5 text-sm"
-                      />
-                      <button
-                        type="button"
-                        onClick={handleAddSub}
-                        disabled={!newSub.trim()}
-                        className="btn-secondary px-2.5"
-                      >
-                        <Plus className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
-                </div>
-              )}
+                        {clickupLocal && <Check className="h-3 w-3" />}
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-xs font-semibold text-ink">Solo local</span>
+                        <span className="block text-[10px] text-faint">
+                          Vive únicamente en Hermes: no se crea ni sincroniza con ClickUp
+                          {isEdit && task?.clickupId ? " (se desvinculará; la copia en ClickUp queda)" : ""}
+                        </span>
+                      </span>
+                    </button>
 
-              {/* Pin de catch-up: solo al editar una tarea existente, porque
-                  necesita un id para persistir la marca. */}
-              {task && <CatchupNoteField task={task} />}
-
-              {/* Notas. El textarea se puede expandir (preferencia persistida
-                  en localStorage) para releer cómodamente textos largos sin
-                  depender del mini-scroll interno. */}
-              <div className="mb-4">
-                <div className="flex items-center justify-between">
-                  <label className="label">Notas</label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = !notesExpanded;
-                      setNotesExpanded(next);
-                      try {
-                        localStorage.setItem(
-                          "hermes-notes-expanded",
-                          next ? "1" : "0",
-                        );
-                      } catch {
-                        // localStorage lleno/bloqueado: la preferencia es
-                        // cosmética, no vale romper el modal por ella.
-                      }
-                    }}
-                    title={
-                      notesExpanded
-                        ? "Contraer el cuadro de notas"
-                        : "Expandir el cuadro de notas"
-                    }
-                    className="mb-1 inline-flex items-center gap-1 text-[10px] font-medium text-mute transition-colors hover:text-accent"
-                  >
-                    {notesExpanded ? (
-                      <Minimize2 className="h-3 w-3" />
+                    {clickupLocal ? (
+                      <div className="rounded-el border-el border-line bg-panel px-3 py-2.5 text-xs text-mute">
+                        Esta tarea quedará solo en Convex con el badge{" "}
+                        <span className="font-medium text-mute">Local</span>.
+                      </div>
                     ) : (
-                      <Maximize2 className="h-3 w-3" />
+                      hydratedKey === ctxKey && (
+                        <ClickUpDestinationPicker
+                          // Remount limpio al cambiar de tarea (o nueva↔edición).
+                          // El picker fija su estado de navegación una sola vez al
+                          // montar; el key + el guard de hidratación garantizan que
+                          // monte con el destino correcto de ESTA tarea.
+                          key={ctxKey}
+                          value={clickupParentId}
+                          listId={clickupListId}
+                          // Fuente de verdad para ubicar la tarea en ClickUp.
+                          taskClickupId={task?.clickupId}
+                          onChange={(parentId, lid) => {
+                            setClickupParentId(parentId);
+                            setClickupListId(lid);
+                          }}
+                        />
+                      )
                     )}
-                    {notesExpanded ? "Contraer" : "Expandir"}
-                  </button>
-                </div>
-                <textarea
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Detalles, criterios, contexto…"
-                  rows={notesExpanded ? 16 : 3}
-                  className="input resize-y transition-[height] duration-150"
-                />
-              </div>
-
-              {/* Estimación + Fecha entrega */}
-              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="label">Estimación</label>
-                  <input
-                    value={estimate}
-                    onChange={(e) => setEstimate(e.target.value)}
-                    placeholder="30 min, ~4 h…"
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="label">Fecha de entrega</label>
-                  <DatePicker
-                    value={dueDate}
-                    onChange={setDueDate}
-                    placeholder="2026-07-29, mañana…"
-                    label="Calendario de fecha de entrega"
-                  />
-                </div>
-              </div>
-
-              {/* Progreso + Solicitado por */}
-              <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div>
-                  <label className="label">Progreso (%)</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={progress}
-                    onChange={(e) =>
-                      setProgress(e.target.value === "" ? "" : Number(e.target.value))
-                    }
-                    placeholder="0–100"
-                    className="input"
-                  />
-                </div>
-                <div>
-                  <label className="label">Solicitado por</label>
-                  <input
-                    value={requestedBy}
-                    onChange={(e) => setRequestedBy(e.target.value)}
-                    placeholder="Persona / equipo"
-                    className="input"
-                  />
-                </div>
-              </div>
-
-              {/* Standby (condicional) */}
-              {(status === "standby" || standbyFrom || standbyUntil) && (
-                <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="label">Standby desde</label>
-                    <DatePicker
-                      value={standbyFrom}
-                      onChange={setStandbyFrom}
-                      placeholder="08-jul-2026"
-                      label="Calendario de standby desde"
-                    />
+                    {/* Estado de sync / link. Se muestra también SIN clickupUrl:
+                        una creación en ClickUp que falló no tiene URL, y antes
+                        el error quedaba invisible (la tarea parecía "Local").
+                        Con clickupId la URL se puede reconstruir, así que el
+                        link también aparece en ese caso. */}
+                    {isEdit && (task?.clickupUrl || task?.clickupId || task?.clickupSyncError) && (
+                      <div className="mt-2 flex flex-col gap-0.5 text-xs">
+                        {task.clickupSyncError ? (
+                          <>
+                            <span className="inline-flex items-center gap-1 text-danger" title={task.clickupSyncError}>
+                              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                              <span className="min-w-0 break-words">
+                                Error de sync:{" "}
+                                {task.clickupSyncError.length > 140
+                                  ? `${task.clickupSyncError.slice(0, 140)}…`
+                                  : task.clickupSyncError}
+                              </span>
+                            </span>
+                            {!task.clickupId && (
+                              <span className="pl-5 text-[10px] text-faint">
+                                No llegó a crearse en ClickUp. Se reintenta al volver a guardar la tarea.
+                              </span>
+                            )}
+                          </>
+                        ) : (
+                          <a
+                            href={task.clickupUrl ?? `https://app.clickup.com/t/${task.clickupId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-accent hover:underline"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                            Ver en ClickUp
+                          </a>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <div>
-                    <label className="label">Pasa a pendiente el</label>
-                    <DatePicker
-                      value={standbyUntil}
-                      onChange={setStandbyUntil}
-                      placeholder="29-jul-2026"
-                      label="Calendario de pasa a pendiente el"
-                    />
-                  </div>
-                </div>
+                </ModalSection>
               )}
 
-              {/* Programado (condicional) */}
-              {(status === "programado" || scheduledDates) && (
-                <div className="mb-4">
-                  <label className="label">Fechas programadas</label>
-                  <input
-                    value={scheduledDates}
-                    onChange={(e) => setScheduledDates(e.target.value)}
-                    placeholder="29 y 30 de julio 2026"
-                    className="input"
-                  />
-                </div>
+              {/* ===== Seguimiento (solo al editar): sub-tareas y catch-up ===== */}
+              {isEdit && task && (
+                <ModalSection title="Seguimiento">
+                  <div>
+                    <p className="label">Sub-tareas</p>
+                    <div className="space-y-1.5">
+                      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleSubDragEnd}>
+                        <SortableContext
+                          items={(subtasks ?? []).map((s) => s._id)}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          {(subtasks ?? []).map((s) => (
+                            <SubtaskItem
+                              key={s._id}
+                              subtask={s}
+                              onToggle={(id) => toggleSub({ id, sessionToken: token! })}
+                              onRemove={(id) => removeSub({ id, sessionToken: token! })}
+                            />
+                          ))}
+                        </SortableContext>
+                      </DndContext>
+                      <div className="flex gap-1.5">
+                        <input
+                          value={newSub}
+                          onChange={(e) => setNewSub(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              handleAddSub();
+                            }
+                          }}
+                          placeholder="Añadir sub-tarea y Enter…"
+                          aria-label="Nueva sub-tarea"
+                          className="input flex-1 py-1.5 text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAddSub}
+                          disabled={!newSub.trim()}
+                          className="btn-secondary px-2.5"
+                          aria-label="Añadir sub-tarea"
+                        >
+                          <Plus className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Pin de catch-up: necesita un id para persistir la marca. */}
+                  <CatchupNoteField task={task} />
+                </ModalSection>
               )}
             </div>
 
