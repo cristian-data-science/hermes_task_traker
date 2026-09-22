@@ -124,7 +124,9 @@ export const claudeAdapter = {
         "stream-json",
         "--verbose",
       ],
-      options: { cwd: folder, env, windowsHide: true },
+      // stdin cerrado: con pipe abierto el CLI esperaba 3 s por datos en cada
+      // arranque ("no stdin data received in 3s", 18 veces en bridge.log).
+      options: { cwd: folder, env, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
     };
   },
 

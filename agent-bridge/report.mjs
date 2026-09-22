@@ -65,7 +65,7 @@ async function main() {
   }
   if (!step && !plan && (!state || !VALID_STATES.includes(state))) {
     console.error(
-      "necesitás --step <texto>, --plan <pasos separados por |> o --state <" +
+      "necesitas --step <texto>, --plan <pasos separados por |> o --state <" +
         VALID_STATES.join("|") + ">",
     );
     process.exit(2);
@@ -80,12 +80,18 @@ async function main() {
   const isFinalState = !isStepOnly && !isPlanOnly && state !== "trabajando";
 
   // Protección anti-pisado: pasos y planes siempre pasan; estados terminales
-  // solo si la corrida está abierta (o --force).
+  // solo si la corrida está abierta (o --force). Para el WATCHDOG (hook Stop)
+  // una corrida en "pregunta" NO cuenta como abierta: el agente dejó una
+  // pregunta a Cris y terminó — pisarla con para-revision la borraba (caso
+  // real 22-sep). La mutación aplica además la matriz de transiciones.
   if (!isStepOnly && !isPlanOnly && !args.force) {
     const runs = await q("agent:runsByTask", { taskId: task });
     const open = (runs || []).some(
       (r) =>
-        r.state === "despachada" || r.state === "trabajando" || r.state === "pregunta",
+        !r.endedAt &&
+        (r.state === "despachada" ||
+          r.state === "trabajando" ||
+          (r.state === "pregunta" && !args.watchdog)),
     );
     if (!open) {
       console.log("nada que reportar (la corrida ya está cerrada)");
@@ -111,7 +117,14 @@ async function main() {
     exitCode: args["exit-code"] !== undefined ? Number(args["exit-code"]) : undefined,
     error: args.error,
     watchdog: !!args.watchdog,
+    // Solo si es verdadero: un backend que aún no conoce el arg lo rechazaría
+    // (el puente de producción lanza este archivo desde disco en cada corrida).
+    ...(args.force ? { force: true } : {}),
   });
+  if (res?.ignored) {
+    console.log(`reporte ignorado: ${res.reason ?? "estado incompatible"}`);
+    return;
+  }
   console.log(
     isPlanOnly ? `plan registrado (${String(plan).split(/[|\n]/).length} pasos)`
       : isStepOnly ? `paso: ${step}`

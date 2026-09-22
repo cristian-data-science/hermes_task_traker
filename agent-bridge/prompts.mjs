@@ -293,6 +293,7 @@ export function buildPrompt(input) {
     workspacePath,
     runId,
     followUp,
+    followUpKind,
     resumed,
     contract,
     agentLabel = "ZCODE",
@@ -302,14 +303,38 @@ export function buildPrompt(input) {
 
   lines.push(`\n${AUTONOMY_RULES[task.autonomy] ?? AUTONOMY_RULES.supervisado}`);
 
-  if (resumed && followUp) {
-    lines.push("\n=== SEGUIMIENTO (retomas tu sesión anterior) ===");
-    lines.push(
-      "Cris respondió a tu pregunta o te dio feedback. Aplícalo y continúa la tarea:",
-    );
+  // Seguimiento: el bloque depende del TIPO (tasks.agentFollowUpKind). Cada
+  // seguimiento es una corrida NUEVA con su propio roadmap: sin un --plan
+  // propio, el tracker mostraba el plan viejo al 100 % y el trabajo nuevo
+  // quedaba invisible.
+  const sesion = resumed
+    ? "retomas tu sesión anterior: ya conoces lo que hiciste"
+    : "tu sesión anterior ya no está disponible: reconstruye el contexto desde la tarea, los archivos y el historial de la carpeta";
+  if (followUp && followUpKind === "consulta") {
+    lines.push(`\n=== CONSULTA DE CRIS (${sesion}) ===`);
     lines.push(`>>> ${followUp}`);
-  } else if (followUp) {
-    lines.push(`\nFeedback de Cris para esta corrida:\n>>> ${followUp}`);
+    lines.push(...contextoLines(task));
+    lines.push("\n=== CÓMO RESPONDER ===");
+    lines.push(
+      "Solo responde: no modifiques archivos, no ejecutes cambios y NO declares --plan ni --step.",
+    );
+    lines.push(
+      `Tu única acción de reporte, al terminar: node "${REPORT_CLI}" --task ${task._id} --run ${runId} --state para-revision --summary "<tu respuesta, clara y con evidencia (rutas, números)>"`,
+    );
+    return lines.join("\n");
+  }
+  if (followUp) {
+    const titulo =
+      followUpKind === "continuacion"
+        ? "CONTINUACIÓN: Cris te encarga trabajo NUEVO sobre lo que ya entregaste"
+        : followUpKind === "respuesta"
+          ? "SEGUIMIENTO: Cris respondió tu pregunta"
+          : "SEGUIMIENTO: Cris revisó tu entrega y pide ajustes";
+    lines.push(`\n=== ${titulo} (${sesion}) ===`);
+    lines.push(`>>> ${followUp}`);
+    lines.push(
+      "Esta es una corrida NUEVA: declara un --plan NUEVO y corto (2-5 pasos) SOLO para este seguimiento — no repitas pasos que ya hiciste — y luego reporta cada --step y el estado final como siempre.",
+    );
   }
 
   // Contexto adicional (picker nativo): carpetas/archivos de consulta para

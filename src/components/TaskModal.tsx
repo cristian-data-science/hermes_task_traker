@@ -254,7 +254,9 @@ export function TaskModal({
       return;
     }
     // Capa agente: los tipos con mundo de trabajo definido exigen carpeta.
-    if (executor === "zcode" && AGENT_UI_ENABLED) {
+    // Aplica a TODO agente despachable (antes solo zcode: una tarea de Claude
+    // se guardaba sin carpeta y el puente respondía con una pregunta).
+    if (isDelegatedExecutor(executor) && AGENT_UI_ENABLED) {
       const t = agentCfg.taskType;
       if (agentCfg.customMode) {
         // Modo customizada: la carpeta elegida reemplaza al registro.
@@ -270,6 +272,12 @@ export function TaskModal({
           toast.error(
             `Elige la carpeta destino (${needsFolder === "git" ? "repo Git" : "reporte"}) para la tarea delegada`,
           );
+          return;
+        }
+        // El puente no corre sin carpeta (salvo correo): pedirla aquí evita
+        // la vuelta "el agente pregunta por la carpeta" después de despachar.
+        if (!needsFolder && t !== "correo" && !agentCfg.workspaceId && !task?.workspacePath) {
+          toast.error("Elige la carpeta de trabajo para la tarea delegada");
           return;
         }
       }
@@ -1140,7 +1148,12 @@ export function TaskModal({
 
       {/* Panel de corridas del agente: por encima del modal (misma capa z). */}
       {isEdit && task && isDelegatedExecutor(task.executor) && AGENT_UI_ENABLED && (
-        <AgentRunsPanel task={task} open={runsOpen} onClose={() => setRunsOpen(false)} />
+        <AgentRunsPanel
+          task={task}
+          open={runsOpen}
+          onClose={() => setRunsOpen(false)}
+          onEditTask={() => setRunsOpen(false)}
+        />
       )}
     </AnimatePresence>
   );

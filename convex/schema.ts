@@ -330,6 +330,21 @@ export default defineSchema({
      */
     agentFollowUp: v.optional(v.string()),
     /**
+     * Tipo del followUp pendiente: respuesta (a una pregunta), feedback (al
+     * revisar), continuacion (trabajo nuevo sobre lo entregado, p.ej. desde el
+     * chat) o consulta (solo responder, sin tocar nada). El puente arma el
+     * bloque de seguimiento del prompt según esto. Sin valor = comportamiento
+     * clásico (feedback).
+     */
+    agentFollowUpKind: v.optional(
+      v.union(
+        v.literal("respuesta"),
+        v.literal("feedback"),
+        v.literal("continuacion"),
+        v.literal("consulta"),
+      ),
+    ),
+    /**
      * Último paso reportado por el agente (protocolo --step): texto corto de
      * lo que acaba de hacer. Espejo de la corrida para que la tarjeta lo
      * muestre sin query extra.
@@ -721,6 +736,15 @@ export default defineSchema({
     promptDigest: v.optional(v.string()),
     /** Contexto extra del seguimiento (respuesta de Cris, feedback). */
     followUp: v.optional(v.string()),
+    /** Tipo del seguimiento (copiado de tasks.agentFollowUpKind en el claim). */
+    followUpKind: v.optional(
+      v.union(
+        v.literal("respuesta"),
+        v.literal("feedback"),
+        v.literal("continuacion"),
+        v.literal("consulta"),
+      ),
+    ),
     exitCode: v.optional(v.number()),
     error: v.optional(v.string()),
     startedAt: v.number(),

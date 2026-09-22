@@ -8,6 +8,7 @@
  * la fase (aprobar en para-revisión, responder pregunta) sin abrir nada.
  */
 import { useEffect, useMemo, useState } from "react";
+import type { FunctionReturnType } from "convex/server";
 import { useMutation, useQuery } from "convex/react";
 import {
   Circle,
@@ -101,14 +102,51 @@ function NowLine({ text, at, stalled }: { text: string; at?: number; stalled?: b
   );
 }
 
+type BridgeStatus = FunctionReturnType<typeof api.agent.bridgeStatus>;
+
+/**
+ * Por qué una tarea encolada todavía no arranca, con la MISMA regla del
+ * puente (canDispatch en dispatcher.mjs) y los datos del heartbeat que ya se
+ * escribe cada 60 s (sin lecturas ni escrituras nuevas a Convex).
+ */
+export function queueReason(task: OverviewTask, bridge: BridgeStatus | undefined): string {
+  if (!bridge?.active) return "Esperando al puente (está apagado: enciéndelo en tu PC)";
+  const blocked = (bridge.blocked ?? []).find((b) => b.taskId === task._id);
+  if (blocked && blocked.until > Date.now()) {
+    const min = Math.max(1, Math.round((blocked.until - Date.now()) / 60000));
+    return `No se pudo despachar: ${blocked.reason} · reintento en ${min} min`;
+  }
+  const agent = task.executor === "claude" ? "claude" : "zcode";
+  const runs = bridge.activeRuns ?? [];
+  const laneOf = (r: (typeof runs)[number]) =>
+    r.agent ?? (r.model?.startsWith("claude:") ? "claude" : "zcode");
+  const lane = runs.filter((r) => laneOf(r) === agent);
+  const titles = lane.map((r) => `"${r.title}"`).join(", ");
+  const limits = bridge.limits;
+  if (agent === "claude") {
+    const max = limits?.claude ?? 1;
+    if (lane.length >= max)
+      return `Esperando espacio para Claude (${lane.length} de ${max} ocupados: ${titles})`;
+  } else {
+    const def = limits?.zcodeDefaultModel ?? "";
+    const effective = task.model || def;
+    const max = limits?.zcodeDefault ?? 2;
+    if (lane.length > 0 && def && (effective !== def || lane.some((r) => r.model !== def)))
+      return `Esperando: ZCode con otro modelo corre solo (hay ${lane.length} corrida${lane.length > 1 ? "s" : ""}: ${titles})`;
+    if (lane.length >= max)
+      return `Esperando espacio en ZCode (${lane.length} de ${max} ocupados: ${titles})`;
+  }
+  return "A punto de arrancar…";
+}
+
 function AgentCard({
   task,
-  bridgeBusyWith,
+  queueText,
   onOpen,
   onApprove,
 }: {
   task: OverviewTask;
-  bridgeBusyWith?: string;
+  queueText?: string;
   onOpen: () => void;
   onApprove: () => void;
 }) {
@@ -191,13 +229,9 @@ function AgentCard({
         {state === "encolada" && (
           <div className="flex items-center gap-2 rounded-el bg-panel px-2.5 py-2 text-xs text-mute">
             <Clock3 className="h-3.5 w-3.5 shrink-0 text-faint" />
-            {bridgeBusyWith ? (
-              <span className="min-w-0 truncate">
-                Esperando turno — el puente está con "{bridgeBusyWith}"
-              </span>
-            ) : (
-              <span>Esperando al puente (si está apagado, enciéndelo en tu PC)</span>
-            )}
+            <span className="min-w-0 truncate" title={queueText}>
+              {queueText ?? "Esperando al puente…"}
+            </span>
           </div>
         )}
 
@@ -502,7 +536,7 @@ function HistoryRow({
           title={
             ["despachada", "trabajando"].includes(task.agentState ?? "")
               ? "Ver razonamiento en vivo: el chat abre en modo observador contra la sesión EXACTA de esta tarea mientras corre."
-              : "Chatear con el agente: abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, con todo su contexto, razonamiento en vivo y el plan actualizado en tiempo real. Tildá 'Siempre permitir' en el diálogo del navegador la primera vez."
+              : "Chatear con el agente: abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, con todo su contexto, razonamiento en vivo y el plan actualizado en tiempo real. Marca 'Permitir siempre' en el diálogo del navegador la primera vez."
           }
           className="place-self-center rounded-el p-0.5 text-faint hover:text-accent"
         >
@@ -733,7 +767,7 @@ function WorkspaceGroup({
             ))}
             {items.length === 0 && (
               <p className="col-span-full px-1 py-2 text-[11px] text-faint">
-                Sin carpetas en este grupo — agregá la primera con el botón de arriba.
+                Sin carpetas en este grupo — agrega la primera con el botón de arriba.
               </p>
             )}
           </div>
@@ -745,11 +779,19 @@ function WorkspaceGroup({
 
 export function AgentView() {
   const { token } = useAuth();
+  // Reloj local (30 s): los "hace X" y los motivos de cola avanzan solos sin
+  // tocar Convex; también renueva el corte de "Hecho hoy" a medianoche.
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setClock(Date.now()), 30_000);
+    return () => clearInterval(id);
+  }, []);
+  const dayKey = new Date(clock).toDateString();
   const since = useMemo(() => {
-    const d = new Date();
+    const d = new Date(dayKey);
     d.setHours(0, 0, 0, 0);
     return d.getTime();
-  }, []);
+  }, [dayKey]);
   const overview = useQuery(
     api.agent.agentOverview,
     token ? { sessionToken: token, since } : "skip",
@@ -816,8 +858,17 @@ export function AgentView() {
     }
   }
 
-  const busyWith = bridge?.activeRuns?.[0]?.title;
-  const activeCount = (bridge?.activeRuns ?? []).length;
+  const activeRuns = bridge?.activeRuns ?? [];
+  const activeCount = activeRuns.length;
+  const claudeCount = activeRuns.filter(
+    (r) => (r.agent ?? (r.model?.startsWith("claude:") ? "claude" : "zcode")) === "claude",
+  ).length;
+  const agentsBreakdown =
+    activeCount > 0
+      ? [claudeCount && `${claudeCount} Claude`, activeCount - claudeCount && `${activeCount - claudeCount} ZCode`]
+          .filter(Boolean)
+          .join(" · ")
+      : "";
 
   return (
     <div className="space-y-5">
@@ -832,7 +883,7 @@ export function AgentView() {
             <CircleDot className="h-4 w-4 shrink-0 text-emerald-500" />
             <span className="font-medium text-ink">
               {activeCount > 0
-                ? `${activeCount} agente${activeCount > 1 ? "s" : ""} trabajando`
+                ? `${activeCount} agente${activeCount > 1 ? "s" : ""} trabajando (${agentsBreakdown})`
                 : "Puente activo — sin corridas"}
             </span>
             {(bridge.queueDepth ?? 0) > 0 && (
@@ -849,8 +900,10 @@ export function AgentView() {
                 {overview!.review.length} requieren tu OK
               </span>
             )}
-            {busyWith && (
-              <span className="truncate text-faint">· "{busyWith}"</span>
+            {activeCount > 0 && (
+              <span className="truncate text-faint" title={activeRuns.map((r) => r.title).join(" · ")}>
+                · {activeRuns.map((r) => `"${r.title}"`).join(", ")}
+              </span>
             )}
           </>
         ) : (
@@ -875,7 +928,7 @@ export function AgentView() {
             <AgentCard
               key={t._id}
               task={t}
-              bridgeBusyWith={busyWith}
+              queueText={queueReason(t, bridge)}
               onOpen={() => setPanelTask(t)}
               onApprove={() => void quickApprove(t)}
             />
@@ -886,7 +939,6 @@ export function AgentView() {
             <AgentCard
               key={t._id}
               task={t}
-              bridgeBusyWith={busyWith}
               onOpen={() => setPanelTask(t)}
               onApprove={() => void quickApprove(t)}
             />

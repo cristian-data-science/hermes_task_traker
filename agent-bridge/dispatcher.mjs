@@ -31,7 +31,6 @@ import { ConvexClient } from "convex/browser";
 import {
   CONVEX_URL,
   MAX_PARALLEL_CLAUDE,
-  NUDGE_MS,
   assertConfig,
   claudeWarnings,
 } from "./config.mjs";
@@ -48,6 +47,7 @@ import {
 import { notifyAgent } from "./notify.mjs";
 import { copiarMaterial } from "./material.mjs";
 import { adapterFor } from "./agents/index.mjs";
+import { killTree } from "./proc.mjs";
 import { mkdirSync } from "node:fs";
 
 const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000);
@@ -60,8 +60,18 @@ const LOCK_FILE = path.join(BRIDGE_DIR, ".bridge.lock");
 const activeRuns = new Map();
 /** Tareas ya reservadas por este pump (entre claim y arranque real). */
 const reserving = new Set();
+/**
+ * Backoff de tareas cuyo claim falló (validación de carpeta/tipo, error de
+ * red…): taskId → { until, reason, title }. Sin esto, el finally de cada
+ * despacho re-disparaba pump() y un claim que siempre falla entraba en bucle
+ * apretado (2286 intentos en 11 min en bridge.log). Se publica en el
+ * heartbeat para que la cola de la app explique por qué la tarea espera.
+ */
+const failedUntil = new Map();
+const CLAIM_BACKOFF_MS = 5 * 60 * 1000;
 let defaultModel = "";
 let queueDepth = 0;
+let lastBeatErrorAt = 0;
 /** Token de sesión para el env de las corridas (se renueva a diario). */
 let _tokenForChild = "";
 
@@ -76,7 +86,7 @@ function acquireLock() {
       try {
         process.kill(prev.pid, 0);
         console.error(
-          `Ya hay un puente corriendo (pid ${prev.pid}, desde ${new Date(prev.startedAt).toLocaleTimeString()}). Cerrá esa instancia o borrá agent-bridge/.bridge.lock.`,
+          `Ya hay un puente corriendo (pid ${prev.pid}, desde ${new Date(prev.startedAt).toLocaleTimeString()}). Cierra esa instancia o borra agent-bridge/.bridge.lock.`,
         );
         process.exit(1);
       } catch {
@@ -134,7 +144,7 @@ async function recoverStuck() {
         taskId: t._id,
         state: "error",
         error:
-          "Corrida interrumpida: el puente se reinició a mitad de la ejecución. Respondé acá para que reintente.",
+          "Corrida interrumpida: el puente se reinició a mitad de la ejecución. Responde aquí para que reintente.",
         watchdog: true,
       });
       log(`♻ corrida huérfana marcada error: ${t.title}`);
@@ -177,8 +187,10 @@ async function dispatchTask(entry) {
     await dispatchTaskInner(entry, run, adapter);
   } finally {
     activeRuns.delete(taskId);
-    // Un slot liberado puede habilitar tareas en cola.
-    pump().catch(() => {});
+    // Un slot liberado puede habilitar tareas en cola. Si la corrida ni
+    // siquiera se reclamó (claim fallido), no re-disparar: la suscripción y
+    // el pump de respaldo lo harán, y el backoff evita el bucle apretado.
+    if (run.runId) pump().catch(() => {});
   }
 }
 
@@ -249,13 +261,18 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   // 1) Carpeta en disco: sin carpeta el agente no sabe dónde trabajar →
   //    pregunta (no error): Cris elige la carpeta en la app y re-encola.
   if (!folder || !existsSync(folder)) {
+    // Prefijo estable [sin-carpeta]: el panel lo detecta y ofrece "Editar
+    // tarea" + "Reintentar" (escribir la ruta en la respuesta no sirve).
+    // force: la tarea sigue en "encolada" (no hay corrida) y la matriz de
+    // agentReport ignoraría el reporte.
     await m("agent:agentReport", {
       taskId,
       state: "pregunta",
       question: folder
-        ? `La carpeta destino no existe en este PC: ${folder}. Corrígela en la app y responde aquí para reintentar.`
-        : "La tarea no tiene carpeta destino. Elígela al editar la tarea y responde aquí para que reintente.",
+        ? `[sin-carpeta] La carpeta destino no existe en este PC: ${folder}. Edita la tarea y elige una carpeta válida; luego pulsa Reintentar.`
+        : "[sin-carpeta] La tarea no tiene carpeta destino. Edita la tarea y elige la carpeta; luego pulsa Reintentar.",
       error: folder ? `carpeta inexistente: ${folder}` : "sin carpeta destino",
+      force: true,
     }).catch((e) => log("report pregunta falló:", e.message));
     return;
   }
@@ -274,7 +291,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     : false;
 
   // 3) Reclamar (abre la corrida y entrega el followUp pendiente de Cris).
-  let runId, followUp;
+  let runId, followUp, followUpKind;
   try {
     const claimed = await m("agent:claimTask", {
       taskId,
@@ -285,8 +302,17 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     });
     runId = claimed.runId;
     followUp = claimed.followUp;
+    followUpKind = claimed.followUpKind;
+    failedUntil.delete(taskId);
   } catch (e) {
-    log(`claim ${taskId}: ${e.message}`);
+    const raw = String(e?.message ?? e);
+    const reason = (raw.match(/Uncaught Error:\s*([^\n]+)/)?.[1] ?? raw.split("\n")[0]).slice(0, 200);
+    failedUntil.set(taskId, {
+      until: Date.now() + CLAIM_BACKOFF_MS,
+      reason,
+      title: task.title,
+    });
+    log(`claim ${taskId} falló (reintento en ${CLAIM_BACKOFF_MS / 60000} min): ${reason}`);
     return;
   }
   run.runId = runId;
@@ -328,7 +354,10 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
           workspacePath: folder,
           runId,
           followUp,
-          resumed: !!task.agentSessionId,
+          followUpKind,
+          // La sesión REALMENTE retomable (no solo "había un id guardado"):
+          // si ya no existe, el prompt no debe decir "retomas tu sesión".
+          resumed: sessAlive,
           contract,
           agentLabel: adapter.label,
         });
@@ -344,6 +373,10 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   const restore = needsSwap ? adapter.swap(run.effectiveModel) : null;
   const childEnv = {
     ...process.env,
+    // El despachador cubre el fin de proceso con la respuesta REAL del agente
+    // (post-exit, abajo): el hook Stop queda como no-op en sus corridas (antes
+    // ganaba siempre con un resumen genérico y sin código de salida).
+    HERMES_BRIDGE_POSTEXIT: "1",
     ZCODE_TASK_ID: taskId,
     ZCODE_RUN_ID: runId,
     ZCODE_SESSION_TOKEN: _tokenForChild,
@@ -392,7 +425,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
           phase: "spawn",
         }).catch(() => {});
       }
-      run.kill = () => child.kill();
+      run.kill = () => killTree(child);
       run.childAlive = true;
       // ¿Quedó una redirección encolada mientras no había proceso vivo?
       // Revisar ahora que hay alguien a quien interrumpir.
@@ -423,19 +456,25 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
 
       const timeout = setTimeout(() => {
         log(`⏱ timeout ${RUN_TIMEOUT_MS / 60000}min — matando corrida "${task.title}"`);
-        child.kill();
+        killTree(child);
       }, RUN_TIMEOUT_MS);
 
-      child.on("error", (err) => {
-        clearTimeout(timeout);
-        run.childAlive = false;
-        resolve({ code: -1, err: String(err), stdout });
-      });
-      child.on("close", (code) => {
+      let settled = false;
+      const settle = (res) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
         run.childAlive = false;
         if (buf.trim()) adapter.onStdoutLine(run, buf, liveApi);
-        resolve({ code, stdout });
+        buf = "";
+        resolve({ ...res, stdout });
+      };
+      child.on("error", (err) => settle({ code: -1, err: String(err) }));
+      child.on("close", (code) => settle({ code }));
+      // Si un nieto heredó el stdout, "close" puede no llegar nunca: tras el
+      // exit del CLI se da una gracia para drenar la salida y se cierra igual.
+      child.on("exit", (code) => {
+        setTimeout(() => settle({ code }), 1500).unref?.();
       });
     });
 
@@ -516,19 +555,23 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
       return;
     }
 
-    // 5) Vincular sesión + watchdog si el agente no reportó.
+    // 5) Vincular sesión + watchdog si el agente no reportó. Se decide por
+    //    el estado de la TAREA: solo despachada/trabajando significan "el
+    //    proceso terminó sin reporte". Una pregunta abierta, una revisión o
+    //    una cancelación ya son resultados y NO se pisan (la mutación aplica
+    //    además la matriz de transiciones).
     const sessionId = adapter.extractSessionId(run, res.stdout);
     if (sessionId) {
       await m("agent:bindSession", { taskId, sessionId, runId }).catch(() => {});
     }
-    const runs = await q("agent:runsByTask", { taskId }).catch(() => []);
-    const open = (runs || []).some(
-      (r) =>
-        r.state === "planificando" ||
-        r.state === "despachada" ||
-        r.state === "trabajando" ||
-        r.state === "pregunta",
-    );
+    const fresh = await q("tasks:get", { id: taskId }).catch(() => null);
+    const open =
+      !!fresh &&
+      fresh.deletedAt === undefined &&
+      (fresh.agentState === "despachada" || fresh.agentState === "trabajando");
+    if (fresh?.agentState === "pregunta") {
+      log(`❓ "${task.title}": el agente dejó una pregunta abierta — sin watchdog`);
+    }
     if (open) {
       const response = adapter.extractResponse(res.stdout);
       if (res.code === 0) {
@@ -587,6 +630,8 @@ async function pump() {
   for (const entry of queue ?? []) {
     const id = entry.task._id;
     if (activeRuns.has(id) || reserving.has(id)) continue;
+    const blocked = failedUntil.get(id);
+    if (blocked && blocked.until > Date.now()) continue;
     const adapter = adapterFor(entry.task.executor);
     if (!canDispatch(entry.task, adapter)) continue;
     reserving.add(id);
@@ -619,21 +664,30 @@ async function handleRedirects() {
     return;
   }
   for (const it of items ?? []) {
-    const run = activeRuns.get(it.taskId);
-    if (!run || !run.runId) continue;
-    if (run.pendingRedirect) continue; // ya hay una en camino
-    if (!run.sessionId || !run.childAlive) continue; // nada vivo que interrumpir
-    run.pendingRedirect = it.redirect;
-    run.lastActivityAt = Date.now();
-    log(`🔄 redirección en vivo para "${run.title}": ${it.redirect.slice(0, 90)}`);
-    await m("agent:agentReport", {
-      taskId: it.taskId,
-      runId: run.runId,
-      state: "trabajando",
-      step: `🔄 redirección en vivo: ${it.redirect.slice(0, 100)}`,
-    }).catch((e) => log("report redirección falló:", e.message));
-    run.redirected = true;
-    run.kill?.();
+    // Un ítem malo nunca aborta el resto (antes: un redirect undefined tiraba
+    // "reading 'slice'" y las redirecciones de detrás no se entregaban).
+    try {
+      if (!it?.redirect) continue;
+      const run = activeRuns.get(it.taskId);
+      if (!run || !run.runId) continue;
+      if (run.pendingRedirect) continue; // ya hay una en camino
+      if (!run.sessionId || !run.childAlive) continue; // nada vivo que interrumpir
+      run.pendingRedirect = it.redirect;
+      run.lastActivityAt = Date.now();
+      log(`🔄 redirección en vivo para "${run.title}": ${it.redirect.slice(0, 90)}`);
+      // force: el puente SABE que el agente retoma (también desde "pregunta").
+      await m("agent:agentReport", {
+        taskId: it.taskId,
+        runId: run.runId,
+        state: "trabajando",
+        step: `🔄 redirección en vivo: ${it.redirect.slice(0, 100)}`,
+        force: true,
+      }).catch((e) => log("report redirección falló:", e.message));
+      run.redirected = true;
+      run.kill?.();
+    } catch (e) {
+      log("redirección falló:", e?.message ?? e);
+    }
   }
 }
 
@@ -668,6 +722,16 @@ async function beat() {
         log(`⚠ posible atasco en corrida ${run.runId} (${Math.round(silentFor / 60000)} min sin actividad)`);
       }
     }
+    for (const [id, b] of failedUntil) if (b.until < now) failedUntil.delete(id);
+    const legacy = {
+      activeRuns: [...activeRuns.values()].map((r) => ({
+        title: r.title ?? "(reservando)",
+        elapsedMin: Math.round((now - r.spawnedAt) / 60000),
+        model: r.agent === "claude" ? `claude:${r.effectiveModel}` : r.effectiveModel,
+      })),
+      queueDepth,
+      pid: process.pid,
+    };
     await m("agent:bridgeHeartbeat", {
       state: {
         activeRuns: [...activeRuns.values()].map((r) => ({
@@ -678,10 +742,32 @@ async function beat() {
         })),
         queueDepth,
         pid: process.pid,
+        // Misma escritura de cada 60 s (sin cadencia nueva): lo que la cola
+        // de la app necesita para explicar por qué una tarea espera.
+        blocked: [...failedUntil.entries()].map(([taskId, b]) => ({
+          taskId,
+          reason: b.reason,
+          until: b.until,
+        })),
+        limits: {
+          claude: MAX_PARALLEL_CLAUDE,
+          zcodeDefault: MAX_PARALLEL_DEFAULT,
+          zcodeDefaultModel: defaultModel || undefined,
+        },
       },
+    }).catch(async (e) => {
+      // Backend todavía sin los campos nuevos (deploy de Convex pendiente):
+      // el formato anterior mantiene vivo el "puente activo" de la app.
+      if (!/validator|Validator|extra field|ArgumentValidationError/i.test(String(e?.message ?? e))) throw e;
+      await m("agent:bridgeHeartbeat", { state: legacy });
     });
   } catch (e) {
-    // el heartbeat nunca tumba el puente
+    // El heartbeat nunca tumba el puente, pero tampoco falla en silencio
+    // (un validador que lo rechazaba dejó la app viendo el puente "apagado").
+    if (Date.now() - lastBeatErrorAt > 10 * 60 * 1000) {
+      lastBeatErrorAt = Date.now();
+      log("heartbeat falló:", e?.message ?? e);
+    }
   }
   await recoverStuck();
 }

@@ -155,18 +155,13 @@ export const AUTONOMY_MODE = {
   autonomo: "yolo",
 };
 
-/** Nudge de WhatsApp (modo periodica) si la corrida pasa esto sin novedades. */
-export const NUDGE_MS = 10 * 60 * 1000;
-
-/** Concurrencia: una tarea a la vez (el swap de modelo lo exige). */
-export const MAX_CONCURRENT = 1;
-
 /**
  * Corridas Claude en paralelo: el modelo va por flag (--model/--effort), no
  * hay swap global, así que el límite es solo cortesía con la cuenta
- * Enterprise (y con la máquina).
+ * Enterprise (y con la máquina). Default 2: delegar varias tareas a la vez
+ * sin que la segunda espere en cola (decisión de Cris, 22-sep).
  */
-export const MAX_PARALLEL_CLAUDE = Number(process.env.MAX_PARALLEL_CLAUDE || 1);
+export const MAX_PARALLEL_CLAUDE = Number(process.env.MAX_PARALLEL_CLAUDE || 2);
 
 export function assertConfig() {
   const problems = [];
@@ -197,6 +192,6 @@ export function claudeWarnings() {
   // Nombre pelado ("claude"): se resuelve por PATH, así que se busca ahí.
   const found = CLAUDE_CLI === "claude" ? existsInPath("claude") : existsSync(CLAUDE_CLI);
   if (!found)
-    warns.push(`CLI de Claude Code no encontrado (se usa "${CLAUDE_CLI}"): instalalo con npm i -g @anthropic-ai/claude-code o seteá CLAUDE_CLI`);
+    warns.push(`CLI de Claude Code no encontrado (se usa "${CLAUDE_CLI}"): instálalo con npm i -g @anthropic-ai/claude-code o define CLAUDE_CLI`);
   return warns;
 }

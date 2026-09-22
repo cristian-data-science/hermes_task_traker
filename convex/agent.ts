@@ -312,10 +312,11 @@ export async function closeOpenRun(
   const open = runs
     .filter(
       (r) =>
-        r.state === "planificando" ||
-        r.state === "despachada" ||
-        r.state === "trabajando" ||
-        r.state === "pregunta",
+        !r.endedAt &&
+        (r.state === "planificando" ||
+          r.state === "despachada" ||
+          r.state === "trabajando" ||
+          r.state === "pregunta"),
     )
     .sort((a, b) => b.startedAt - a.startedAt)[0];
   if (!open) return;
@@ -432,18 +433,20 @@ export const redirectQueue = query({
   args: sessionArg,
   handler: async (ctx, { sessionToken }) => {
     await requireAuth(ctx, sessionToken);
-    // Índice by_agent_redirect: solo entran las tareas CON redirección
-    // pendiente (las filas sin el campo quedan fuera del índice). Antes era
-    // un collect() de TODA la tabla que se re-leía con cada escritura de
-    // cualquier tarea — caro para una suscripción 24/7 del puente.
+    // Índice by_agent_redirect con RANGO > "": en Convex las filas sin el
+    // campo SÍ están en el índice (valor undefined, que ordena primero), así
+    // que sin el rango la query devolvía todas las tareas y el puente se caía
+    // con `redirect` undefined (bridge.log: "reading 'slice'"). El rango lee
+    // solo las tareas con redirección pendiente.
     const tasks = await ctx.db
       .query("tasks")
-      .withIndex("by_agent_redirect")
+      .withIndex("by_agent_redirect", (q) => q.gt("agentRedirect", ""))
       .collect();
     return tasks
       .filter(
         (t) =>
           t.deletedAt === undefined &&
+          !!t.agentRedirect &&
           (t.agentState === "despachada" ||
             t.agentState === "trabajando" ||
             t.agentState === "pregunta"),
@@ -451,7 +454,7 @@ export const redirectQueue = query({
       .map((t) => ({
         taskId: t._id,
         executor: t.executor,
-        redirect: t.agentRedirect!,
+        redirect: t.agentRedirect as string,
         redirectAt: t.agentRedirectAt ?? 0,
       }));
   },
@@ -548,6 +551,7 @@ export const runsByTask = query({
         summary: r.summary,
         error: r.error,
         followUp: r.followUp,
+        followUpKind: r.followUpKind,
       }));
   },
 });
@@ -618,9 +622,11 @@ export const bridgeStatus = query({
     const raw = await getSetting(ctx, "agent.bridgeHeartbeat");
     const ts = raw ? Number(raw) : undefined;
     let state: {
-      activeRuns: Array<{ title: string; elapsedMin: number; model?: string }>;
+      activeRuns: Array<{ title: string; elapsedMin: number; model?: string; agent?: string }>;
       queueDepth: number;
       pid: number;
+      blocked?: Array<{ taskId: string; reason: string; until: number }>;
+      limits?: { claude: number; zcodeDefault: number; zcodeDefaultModel?: string };
     } | undefined;
     const rawState = await getSetting(ctx, "agent.bridgeState");
     if (rawState) {
@@ -636,6 +642,8 @@ export const bridgeStatus = query({
       active: !!ts && Date.now() - ts < 3 * 60 * 1000,
       activeRuns: state?.activeRuns ?? [],
       queueDepth: state?.queueDepth ?? 0,
+      blocked: state?.blocked ?? [],
+      limits: state?.limits ?? null,
     };
   },
 });
@@ -825,10 +833,32 @@ export const bridgeHeartbeat = mutation({
             title: v.string(),
             elapsedMin: v.number(),
             model: v.optional(v.string()),
+            // El puente lo manda desde el multi-agente; sin declararlo, el
+            // validador estricto rechazaba el heartbeat DURANTE las corridas
+            // y la app veía el puente "apagado" justo cuando trabajaba.
+            agent: v.optional(v.string()),
           }),
         ),
         queueDepth: v.number(),
         pid: v.number(),
+        /** Tareas encoladas que el puente no puede despachar aún (backoff). */
+        blocked: v.optional(
+          v.array(
+            v.object({
+              taskId: v.string(),
+              reason: v.string(),
+              until: v.number(),
+            }),
+          ),
+        ),
+        /** Topes de paralelismo vigentes del puente (para explicar la cola). */
+        limits: v.optional(
+          v.object({
+            claude: v.number(),
+            zcodeDefault: v.number(),
+            zcodeDefaultModel: v.optional(v.string()),
+          }),
+        ),
       }),
     ),
   },
@@ -926,11 +956,24 @@ export const claimTask = mutation({
 
     const now = Date.now();
     const followUp = task.agentFollowUp;
+    const followUpKind = followUp ? task.agentFollowUpKind : undefined;
     // Modo plan: si el plan aún no fue aprobado, esta corrida es la FASE DE
     // PLANIFICACIÓN (solo lectura; el puente la lanza con --mode plan y
     // cosecha el plan con submitPlan). Tras aprobar (planApproved), el claim
     // siguiente abre la corrida de ejecución con el flujo clásico.
     const planningPhase = task.planMode === true && task.planApproved !== true;
+    // Corridas previas que quedaron "abiertas" (típico: la corrida que dejó
+    // una PREGUNTA — sigue sin endedAt hasta que Cris responde): se cierran
+    // aquí, conservando su estado. Si no, un reporte tardío de ese proceso
+    // viejo (hook Stop, watchdog) se aceptaba contra una corrida "abierta" y
+    // pisaba el estado de la tarea mientras corría la corrida nueva.
+    const previousRuns = await ctx.db
+      .query("agentRuns")
+      .withIndex("by_task", (q) => q.eq("taskId", taskId))
+      .collect();
+    for (const r of previousRuns) {
+      if (!r.endedAt) await ctx.db.patch(r._id, { endedAt: now, updatedAt: now });
+    }
     const runId = await ctx.db.insert("agentRuns", {
       taskId,
       agent: isDelegatedExecutor(task.executor) ? task.executor : "zcode",
@@ -941,6 +984,7 @@ export const claimTask = mutation({
       model: task.model,
       promptDigest: promptDigest?.slice(0, 500),
       followUp,
+      followUpKind,
       startedAt: now,
       updatedAt: now,
     });
@@ -952,6 +996,7 @@ export const claimTask = mutation({
       sessionToken,
       {
         agentFollowUp: undefined,
+        agentFollowUpKind: undefined,
         agentLastStep: undefined,
         agentLastStepAt: undefined,
         agentStepIndex: undefined,
@@ -970,7 +1015,7 @@ export const claimTask = mutation({
           ? "seguimiento (resume de sesión)"
           : undefined,
     });
-    return { runId, followUp };
+    return { runId, followUp, followUpKind };
   },
 });
 
@@ -1017,8 +1062,49 @@ export const redirectAgent = mutation({
 });
 
 /**
+ * Matriz de transiciones de agentReport: ¿se acepta este reporte dado el
+ * estado ACTUAL de la tarea? Los callers son el agente (report.mjs), el hook
+ * Stop y el despachador (post-exit, planificación, huérfanas, redirección), y
+ * nadie debe poder pisar un estado que ya no le corresponde:
+ *  - Una PREGUNTA del agente no se pisa con el watchdog de fin de proceso
+ *    (caso real 22-sep: pregunta borrada 17 s después por el hook Stop).
+ *  - Un reporte TARDÍO (proceso que muere tras cancelar/aprobar) no revive
+ *    una tarea ya cerrada.
+ * Lo no aceptado se IGNORA (no throw): los watchdogs no deben loguear errores.
+ * `force` (report.mjs --force, operación manual o el propio puente cuando
+ * sabe que el agente retoma) salta la matriz.
+ */
+function reportAllowed(
+  task: Doc<"tasks">,
+  args: { state: string; watchdog?: boolean; force?: boolean },
+): { accept: boolean; appendOnly?: boolean; reason?: string } {
+  if (args.force) return { accept: true };
+  const st = task.agentState;
+  const terminal = ["para-revision", "hecho", "error", "cancelada"].includes(args.state);
+  if (st === "despachada" || st === "trabajando") return { accept: true };
+  if (st === "planificando") {
+    // Solo el despachador reporta aquí (el modo plan bloquea report.mjs).
+    if (args.watchdog && (args.state === "para-revision" || args.state === "hecho"))
+      return { accept: false, reason: "planificando: el plan lo entrega submitPlan" };
+    return { accept: true };
+  }
+  if (st === "pregunta") {
+    // Pasos/plan se registran sin sacar a la tarea de la pregunta abierta.
+    if (args.state === "trabajando") return { accept: true, appendOnly: true };
+    if (args.state === "pregunta") return { accept: true };
+    if (terminal && !args.watchdog) return { accept: true };
+    return { accept: false, reason: "la tarea espera la respuesta de Cris a una pregunta" };
+  }
+  return {
+    accept: false,
+    reason: `la tarea ya no tiene corrida activa (estado: ${st ?? "sin delegar"})`,
+  };
+}
+
+/**
  * Reporte del agente (CLI report.mjs o hook Stop watchdog): transición de
  * estado + resumen + pregunta/progreso. Es EL punto de entrada de resultados.
+ * Pasa por la matriz reportAllowed (arriba) antes de tocar nada.
  */
 export const agentReport = mutation({
   args: {
@@ -1037,6 +1123,8 @@ export const agentReport = mutation({
     exitCode: v.optional(v.number()),
     error: v.optional(v.string()),
     watchdog: v.optional(v.boolean()),
+    /** Salta la matriz de transiciones (operación manual / el puente sabe que el agente retoma). */
+    force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     await requireAuth(ctx, args.sessionToken);
@@ -1049,6 +1137,9 @@ export const agentReport = mutation({
     if (args.state === "pregunta" && !args.question)
       throw new Error("Estado pregunta sin pregunta");
 
+    const gate = reportAllowed(task, args);
+    if (!gate.accept) return { ok: true, ignored: true, reason: gate.reason };
+
     const now = Date.now();
     const summary = args.summary?.slice(0, SUMMARY_MAX);
     const terminal =
@@ -1057,10 +1148,16 @@ export const agentReport = mutation({
       args.state === "error" ||
       args.state === "cancelada";
 
-    // Corrida: la indicada, o la abierta más reciente.
+    // Corrida: la indicada (debe ser de ESTA tarea y seguir abierta), o la
+    // abierta más reciente.
     let run: Doc<"agentRuns"> | null = null;
     if (args.runId) {
       run = (await ctx.db.get(args.runId)) ?? null;
+      if (run && run.taskId !== args.taskId) run = null;
+      // Reporte de una corrida YA cerrada (proceso viejo que muere tarde, hook
+      // Stop de una corrida anterior): no la reabre ni pisa la tarea.
+      if (run?.endedAt && !args.force)
+        return { ok: true, ignored: true, reason: "la corrida indicada ya está cerrada" };
     } else {
       const runs = await ctx.db
         .query("agentRuns")
@@ -1070,25 +1167,23 @@ export const agentReport = mutation({
         runs
           .filter(
             (r) =>
-              r.state === "despachada" || r.state === "trabajando" || r.state === "pregunta",
+              !r.endedAt &&
+              (r.state === "despachada" || r.state === "trabajando" || r.state === "pregunta"),
           )
           .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     }
-    // Conteo de pasos tras este reporte (para el "Paso N de M" en la tarjeta).
     // El plan PREVIO viaja al return: report.mjs lo usa para distinguir el
-    // plan inicial de un RE-plan (el WhatsApp de re-plan es compacto, con el
-    // diff del nuevo rumbo — no otro volcado completo).
+    // plan inicial de un RE-plan (el WhatsApp de re-plan es compacto).
     const previousPlan = run?.plan ?? null;
+    // Protocolo --plan: el roadmap que el agente INTENTA seguir (≤10 × 120).
+    const planList = args.plan
+      ?.map((p) => p.trim().slice(0, 120))
+      .filter(Boolean)
+      .slice(0, 10);
+    // Protocolo --step: cada paso se AGREGA (tope 20) y espeja en la tarea.
+    const stepText = args.step?.slice(0, 120);
     let stepCount: number | undefined;
     if (run) {
-      // Protocolo --plan: el roadmap que el agente INTENTA seguir (≤10 × 120).
-      const planList = args.plan
-        ?.map((p) => p.trim().slice(0, 120))
-        .filter(Boolean)
-        .slice(0, 10);
-
-      // Protocolo --step: cada paso se AGREGA (tope 20) y espeja en la tarea.
-      const stepText = args.step?.slice(0, 120);
       let progressLog = run.progressLog;
       if (stepText) {
         progressLog = [
@@ -1104,59 +1199,98 @@ export const agentReport = mutation({
         }
       }
       stepCount = progressLog?.length;
-      await ctx.db.patch(run._id, {
-        state: args.state as Doc<"agentRuns">["state"],
-        summary,
-        progressLog,
-        plan: planList ?? run.plan,
-        stalled: args.state === "trabajando" ? run.stalled : undefined,
-        endedAt: terminal ? now : undefined,
-        exitCode: args.exitCode,
-        error: args.error?.slice(0, 1000),
-        updatedAt: now,
-      });
+      if (gate.appendOnly) {
+        // Tarea en pregunta: solo la checklist/plan de la corrida; el estado
+        // de la corrida y el de la tarea quedan como están.
+        await ctx.db.patch(run._id, {
+          progressLog,
+          plan: planList?.length ? planList : run.plan,
+          updatedAt: now,
+        });
+      } else {
+        await ctx.db.patch(run._id, {
+          state: args.state as Doc<"agentRuns">["state"],
+          // Un paso sin resumen no borra el resumen/error previos de la corrida.
+          ...(summary !== undefined ? { summary } : {}),
+          progressLog,
+          plan: planList?.length ? planList : run.plan,
+          stalled: args.state === "trabajando" ? run.stalled : undefined,
+          endedAt: terminal ? now : undefined,
+          ...(args.exitCode !== undefined ? { exitCode: args.exitCode } : {}),
+          ...(args.error !== undefined ? { error: args.error.slice(0, 1000) } : {}),
+          updatedAt: now,
+        });
+      }
     }
 
-    // Tarea: estado + snapshot de sesión + pregunta/progreso + pasos espejo.
-    const stepText = args.step?.slice(0, 120);
-    await applyAgentState(ctx, task, args.state, args.sessionToken, {
-      agentSessionId: args.sessionId ?? task.agentSessionId,
-      agentQuestion:
-        args.state === "pregunta"
-          ? args.question!.slice(0, QUESTION_MAX)
-          : undefined,
-      // El último paso se limpia al re-despachar (claimTask) y se actualiza acá.
-      ...(stepText
-        ? { agentLastStep: stepText, agentLastStepAt: now }
-        : {}),
+    // Espejo de pasos en la tarea (último paso, posición, total del plan).
+    const mirror: Record<string, unknown> = {
+      ...(stepText ? { agentLastStep: stepText, agentLastStepAt: now } : {}),
       ...(stepText && stepCount ? { agentStepIndex: stepCount } : {}),
-      ...(args.plan?.length ? { agentPlanTotal: args.plan.length } : {}),
+      ...(planList?.length ? { agentPlanTotal: planList.length } : {}),
       // La redirección se ENTREGA en este contacto y se limpia (fail-once).
+      // Solo llega aquí un reporte aceptado: los ignorados salieron antes.
       agentRedirect: undefined,
       agentRedirectAt: undefined,
       ...(args.progress !== undefined
         ? { progress: Math.max(0, Math.min(100, Math.round(args.progress))) }
         : {}),
-    });
+    };
 
-    await logEvent(ctx, {
-      taskId: args.taskId,
-      kind: args.state === "pregunta" ? "agent_question" : "agent_update",
-      task,
-      at: now,
-      detail: [
-        args.state,
-        args.state === "pregunta" ? args.question : summary?.split("\n")[0],
-        args.watchdog ? "(watchdog)" : undefined,
-      ]
-        .filter(Boolean)
-        .join(" · ")
-        .slice(0, 300),
-    });
+    if (gate.appendOnly) {
+      await ctx.db.patch(task._id, { ...mirror, updatedAt: now });
+    } else {
+      // Tarea: estado + snapshot de sesión + pregunta/progreso + pasos espejo.
+      await applyAgentState(ctx, task, args.state, args.sessionToken, {
+        agentSessionId: args.sessionId ?? task.agentSessionId,
+        agentQuestion:
+          args.state === "pregunta"
+            ? args.question!.slice(0, QUESTION_MAX)
+            : undefined,
+        ...mirror,
+      });
+      await logEvent(ctx, {
+        taskId: args.taskId,
+        kind: args.state === "pregunta" ? "agent_question" : "agent_update",
+        task,
+        at: now,
+        detail: [
+          args.state,
+          args.state === "pregunta" ? args.question : summary?.split("\n")[0],
+          args.watchdog ? "(watchdog)" : undefined,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+          .slice(0, 300),
+      });
+    }
+    // Redirección que llegó cuando el agente ya estaba cerrando (no había
+    // proceso vivo que interrumpir): en vez de borrarse en silencio con el
+    // reporte final, se convierte en una CONTINUACIÓN — la tarea vuelve a la
+    // cola y el agente retoma su sesión con esa instrucción.
+    let carriedOver = false;
+    if (args.state === "para-revision" && !gate.appendOnly && task.agentRedirect) {
+      const fresh = await ctx.db.get(task._id);
+      if (fresh && fresh.agentState === "para-revision") {
+        carriedOver = true;
+        await requeueWithFollowUp(ctx, fresh, args.sessionToken, {
+          kind: "continuacion",
+          followUp: task.agentRedirect,
+        });
+        await logEvent(ctx, {
+          taskId: args.taskId,
+          kind: "agent_update",
+          task: fresh,
+          at: Date.now(),
+          detail: `redirección llegada al cierre → continuación: ${task.agentRedirect}`.slice(0, 300),
+        });
+      }
+    }
     return {
       ok: true,
-      // Redirección pendiente de Cris: report.mjs se la muestra al agente.
-      pendingInstruction: task.agentRedirect ?? undefined,
+      // Redirección pendiente de Cris: report.mjs se la muestra al agente
+      // (salvo que ya viaje como continuación: se ejecuta en la corrida nueva).
+      pendingInstruction: carriedOver ? undefined : (task.agentRedirect ?? undefined),
       // Plan que la corrida tenía ANTES de este reporte (null si no tenía).
       previousPlan,
     };
@@ -1255,6 +1389,77 @@ export const taskForNotify = query({
  * =====================
  */
 
+/**
+ * Contexto acumulable: las rutas nuevas se AGREGAN a las de la tarea (sin
+ * duplicar) y el followUp se las lista al agente. Compartido por
+ * answerQuestion y continueTask.
+ */
+function mergeContextPaths(
+  task: Doc<"tasks">,
+  carpetas?: string[],
+  archivos?: string[],
+): { extraFollowUp: string; patch: Record<string, unknown> } {
+  const rutasNuevas = [...(carpetas ?? []), ...(archivos ?? [])];
+  if (!rutasNuevas.length) return { extraFollowUp: "", patch: {} };
+  return {
+    extraFollowUp: `\n\nMaterial de contexto agregado por Cris (CONSULTA, solo lectura):\n${rutasNuevas
+      .map((p) => `- ${p}`)
+      .join("\n")}`,
+    patch: {
+      contextPaths: {
+        carpetas: [
+          ...new Set([...(task.contextPaths?.carpetas ?? []), ...(carpetas ?? [])]),
+        ],
+        archivos: [
+          ...new Set([...(task.contextPaths?.archivos ?? []), ...(archivos ?? [])]),
+        ],
+      },
+    },
+  };
+}
+
+type FollowUpKind = "respuesta" | "feedback" | "continuacion" | "consulta";
+
+/** Estados desde los que se puede seguir trabajando/preguntando sin corrida viva. */
+const CONTINUABLE_STATES = ["para-revision", "hecho", "error", "cancelada", "pregunta"];
+
+/**
+ * Núcleo de "seguir con una instrucción": re-encola la tarea con el followUp
+ * y su tipo; el puente la reclama y retoma la MISMA sesión (--resume) con el
+ * protocolo completo (plan, pasos, estado final, WhatsApp, 60 min).
+ */
+async function requeueWithFollowUp(
+  ctx: MutationCtx,
+  task: Doc<"tasks">,
+  sessionToken: string,
+  input: {
+    kind: FollowUpKind;
+    followUp: string;
+    carpetas?: string[];
+    archivos?: string[];
+  },
+): Promise<void> {
+  const { extraFollowUp, patch } = mergeContextPaths(task, input.carpetas, input.archivos);
+  await applyAgentState(ctx, task, "encolada", sessionToken, {
+    agentQuestion: undefined,
+    agentFollowUp:
+      input.followUp.slice(0, Math.max(0, FOLLOWUP_MAX - extraFollowUp.length)) +
+      extraFollowUp,
+    agentFollowUpKind: input.kind,
+    ...patch,
+  });
+}
+
+/** Envoltorio de una consulta: el agente responde sin tocar nada. */
+function wrapConsulta(question: string): string {
+  return (
+    `PREGUNTA DE CRIS sobre el trabajo ya entregado (no rehagas nada ni ` +
+    `toques archivos: solo responde. Si tu sesión previa ya no está ` +
+    `disponible, contesta desde lo que recuerdes del prompt y los ` +
+    `artefactos):\n${question.trim()}`
+  );
+}
+
 /** Responde una pregunta del agente: re-encola con la respuesta como followUp.
  *  También sirve para RE-DESPACHAR una delegación cancelada (nuevo intento). */
 export const answerQuestion = mutation({
@@ -1279,28 +1484,11 @@ export const answerQuestion = mutation({
       throw new Error(
         `La tarea no está esperando tu respuesta (estado: ${task.agentState ?? "sin delegar"})`,
       );
-    // Contexto acumulable: las rutas nuevas se AGREGAN a las existentes
-    // (sin duplicar) y el followUp se las lista al agente.
-    const rutasNuevas = [...(carpetas ?? []), ...(archivos ?? [])];
-    const extraFollowUp = rutasNuevas.length
-      ? `\n\nMaterial de contexto agregado por Cris (CONSULTA, solo lectura):\n${rutasNuevas
-          .map((p) => `- ${p}`)
-          .join("\n")}`
-      : "";
-    const merged = {
-      carpetas: [
-        ...new Set([...(task.contextPaths?.carpetas ?? []), ...(carpetas ?? [])]),
-      ],
-      archivos: [
-        ...new Set([...(task.contextPaths?.archivos ?? []), ...(archivos ?? [])]),
-      ],
-    };
-    await applyAgentState(ctx, task, "encolada", sessionToken, {
-      agentQuestion: undefined,
-      agentFollowUp:
-        answer.slice(0, Math.max(0, FOLLOWUP_MAX - extraFollowUp.length)) +
-        extraFollowUp,
-      ...(rutasNuevas.length ? { contextPaths: merged } : {}),
+    await requeueWithFollowUp(ctx, task, sessionToken, {
+      kind: "respuesta",
+      followUp: answer,
+      carpetas,
+      archivos,
     });
     await logEvent(ctx, {
       taskId,
@@ -1313,12 +1501,63 @@ export const answerQuestion = mutation({
 });
 
 /**
+ * Seguir con una instrucción nueva sobre una tarea SIN corrida viva
+ * (para-revisión, hecho, error, cancelada o pregunta). Es la puerta única que
+ * usan el chat del agente ("Encargar trabajo" / "Preguntar al tracker") y el
+ * panel ("Continuar con instrucción" / "Preguntarle"):
+ *  - mode "trabajo": el agente retoma su sesión y ejecuta con protocolo
+ *    completo; el trabajo queda como corrida nueva con su propio plan.
+ *  - mode "consulta": el agente solo responde (sin tocar archivos); la
+ *    respuesta llega como resumen de una corrida nueva.
+ * Con corrida viva la instrucción va por redirectAgent (redirección en vivo).
+ */
+export const continueTask = mutation({
+  args: {
+    ...sessionArg,
+    taskId: v.id("tasks"),
+    instruction: v.string(),
+    mode: v.union(v.literal("trabajo"), v.literal("consulta")),
+    carpetas: v.optional(v.array(v.string())),
+    archivos: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, { sessionToken, taskId, instruction, mode, carpetas, archivos }) => {
+    await requireAuth(ctx, sessionToken);
+    const task = await ctx.db.get(taskId);
+    if (!task || task.deletedAt !== undefined)
+      throw new Error("Tarea no encontrada");
+    if (!isDelegatedExecutor(task.executor) || !task.agentState)
+      throw new Error("La tarea no está delegada al agente");
+    if (!CONTINUABLE_STATES.includes(task.agentState))
+      throw new Error(
+        `La tarea está activa (estado: ${task.agentState}): usa la redirección en vivo`,
+      );
+    const text = instruction.trim();
+    if (!text) throw new Error("La instrucción no puede estar vacía");
+    if (mode === "consulta" && !task.agentSessionId)
+      throw new Error(
+        "Esta tarea no tiene sesión del agente guardada: no hay contexto al que preguntarle",
+      );
+    await requeueWithFollowUp(ctx, task, sessionToken, {
+      kind: mode === "consulta" ? "consulta" : "continuacion",
+      followUp: mode === "consulta" ? wrapConsulta(text) : text,
+      carpetas,
+      archivos,
+    });
+    await logEvent(ctx, {
+      taskId,
+      kind: mode === "consulta" ? "agent_update" : "agent_review",
+      task,
+      at: Date.now(),
+      detail: `${mode === "consulta" ? "consulta" : "continuar"}: ${text}`.slice(0, 300),
+    });
+    return { ok: true };
+  },
+});
+
+/**
  * Preguntarle al agente sobre una delegación ya terminada (historial).
- * Re-encola la tarea con la pregunta envuelta como followUp y el puente la
- * re-despacha con --resume: si el rollout de la sesión sigue vivo en ZCode,
- * el agente responde CON TODO el contexto de lo que hizo; si fue rotado,
- * contesta desde el prompt + artefactos (fallback del dispatcher). La
- * respuesta aparece como corrida nueva en el panel.
+ * Alias de continueTask({ mode: "consulta" }) que se conserva por
+ * compatibilidad con clientes viejos.
  */
 export const askHistory = mutation({
   args: { ...sessionArg, taskId: v.id("tasks"), question: v.string() },
@@ -1331,20 +1570,15 @@ export const askHistory = mutation({
       throw new Error("La tarea no está delegada al agente");
     if (!["hecho", "cancelada", "error", "para-revision"].includes(task.agentState))
       throw new Error(
-        `La tarea está activa (estado: ${task.agentState}) — usá "Redirigir al agente"`,
+        `La tarea está activa (estado: ${task.agentState}) — usa "Redirigir al agente"`,
       );
     if (!task.agentSessionId)
       throw new Error(
         "Esta tarea no tiene sesión del agente guardada — no hay contexto que retomar",
       );
-    const wrapped =
-      `PREGUNTA DE CRIS sobre el trabajo ya entregado (no rehagas nada ni ` +
-      `toques archivos: solo respondé. Si tu sesión previa ya no está ` +
-      `disponible, contestá desde lo que recuerdes del prompt y los ` +
-      `artefactos):\n${question.trim().slice(0, FOLLOWUP_MAX)}`;
-    await applyAgentState(ctx, task, "encolada", sessionToken, {
-      agentQuestion: undefined,
-      agentFollowUp: wrapped.slice(0, FOLLOWUP_MAX),
+    await requeueWithFollowUp(ctx, task, sessionToken, {
+      kind: "consulta",
+      followUp: wrapConsulta(question),
     });
     await logEvent(ctx, {
       taskId,
@@ -1376,10 +1610,11 @@ export const reviewResult = mutation({
       await applyAgentState(ctx, task, "hecho", sessionToken);
       await closeOpenRun(ctx, taskId, "hecho");
     } else {
-      if (!feedback)
+      if (!feedback?.trim())
         throw new Error("Para rechazar necesitas decir qué corregir");
-      await applyAgentState(ctx, task, "encolada", sessionToken, {
-        agentFollowUp: feedback.slice(0, FOLLOWUP_MAX),
+      await requeueWithFollowUp(ctx, task, sessionToken, {
+        kind: "feedback",
+        followUp: feedback.trim(),
       });
     }
     await logEvent(ctx, {
@@ -1410,7 +1645,9 @@ export const submitPlan = mutation({
     const task = await ctx.db.get(taskId);
     if (!task || task.deletedAt !== undefined)
       throw new Error("Tarea no encontrada");
-    if (task.executor !== "zcode")
+    // Cualquier agente despachable (antes solo zcode: el modo plan de Claude
+    // fallaba al entregar el plan aunque el adaptador corre --permission-mode plan).
+    if (!isDelegatedExecutor(task.executor))
       throw new Error("La tarea no está delegada al agente");
     const run = await ctx.db.get(runId);
     if (!run || run.taskId !== taskId) throw new Error("Corrida no encontrada");

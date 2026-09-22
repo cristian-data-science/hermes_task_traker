@@ -99,7 +99,9 @@ Otros tipos (`analisis`, `ops`, `otro`) no exigen carpeta: corren donde indique 
 
 - **Pasos en vivo (protocolo --step)**: el agente trabaja en pasos numerados y después de CADA paso ejecuta `report.mjs --step "<paso, ≤12 palabras>"`. Cada llamada se AGREGA a la checklist de la corrida en la app (y notifica por WhatsApp en modo `periodica`). El resumen final NO repite los pasos.
 - **Estado final inmediato**: apenas el objetivo esté verificado (incluye guardar .pbix / CAMBIOS.md, que son pasos previos visibles), **cierra el plan** — un `--step` por cada ítem del plan completado y no reportado (ej: `--step "hecho: prueba empírica con audio real"`), para que el roadmap del tracker refleje qué quedó hecho y qué pendiente — y luego ejecuta `--state para-revision` con un resumen de máximo 3 líneas. Nada de embellecimiento post-verificación antes del reporte.
-- **Vía watchdog**: hook `Stop` de ZCode. Si la sesión terminó sin reporte, el hook reporta con lo que haya. Además, el puente observa el transcript en vivo (última acción del agente) y marca "posible atasco" si pasa ~10 min sin actividad.
+- **Vía watchdog**: el despachador reporta el fin de proceso sin reporte con la respuesta real del agente (`para-revision` si salió bien, `error` si no). El hook `Stop` queda como respaldo solo para puentes viejos (en corridas del despachador actual es no-op). Además, el puente observa el transcript en vivo y marca "posible atasco" si pasa ~10 min sin actividad.
+- **Matriz de transiciones (agentReport)**: un reporte se aplica según el estado ACTUAL de la tarea. Una `pregunta` del agente nunca la pisa un watchdog (los `--step` se agregan a la checklist sin sacarla de `pregunta`); una tarea en `para-revision`/`hecho`/`error`/`cancelada` ignora reportes tardíos de procesos viejos; un reporte de una corrida ya cerrada se ignora. `--force` salta la matriz (operación manual).
+- **Seguimientos**: cada seguimiento es una corrida NUEVA con tipo (`tasks.agentFollowUpKind`): `respuesta` (a una pregunta), `feedback`, `continuacion` (trabajo nuevo sobre lo entregado, desde el panel o el chat) o `consulta` (solo responder, sin plan ni pasos). En los tres primeros el agente declara un `--plan` corto propio del seguimiento, así el roadmap refleja el trabajo actual. Una redirección que llega cuando el agente ya estaba cerrando se convierte en `continuacion`, no se pierde.
 - Cada reporte actualiza la tarea (agentState + resumen + progreso), escribe en la bitácora `events` y cierra/actualiza la corrida.
 - Las sesiones despachadas se pueden abrir después en el desktop de ZCode (comparten base de sesiones): `/resume <sessionId>` — el id se copia con un botón desde la app. La lista del desktop se refresca al reiniciarlo o cambiar de workspace, no en vivo.
 
@@ -109,7 +111,7 @@ Se eligen por tarea: `off` (nada) · `final` (solo resultado) · `periodica` (av
 
 - Canal: `hermes send --to whatsapp:Criss` — reusa el gateway ya conectado, sin LLM.
 - `final`: un mensaje al llegar a `pregunta`, `para-revisión`, `hecho` o `error`, con estado + resumen; también avisa "📋 Plan por tu OK" cuando un plan del modo plan queda esperando aprobación.
-- `periodica`: además, inicio de corrida, cada reporte de progreso y nudge si pasan ~10 min sin novedades.
+- `periodica`: además, inicio de corrida y cada reporte de progreso. (El "nudge" por ~10 min sin novedades nunca se implementó y se retiró; el "posible atasco" se ve en el panel.)
 - Los mensajes son cortos: estado, tarea, carpeta y última línea del resumen.
 
 ## 9. Modelos
