@@ -849,6 +849,7 @@ function newTurn(question) {
     openBlock: new Map(), // assistantMessageId → id del bloque text/reasoning abierto
     blockCount: new Map(), // assistantMessageId → contador de bloques
     toolInput: new Map(), // toolCallId → JSON acumulado del input
+    msgSeq: 0, // índice de mensaje del stream (ids de bloque únicos por mensaje)
     streamResponse: null,
     phase: "",
     // Watchdog de bloqueo: última señal de vida del turno (cualquier evento).
@@ -1154,6 +1155,13 @@ function handleClaudeStreamEvent(t, ev) {
     if (e.type === "message_start") {
       const m = e.message?.model;
       if (m) t.model = m;
+      // Cada mensaje del turno REINICIA los índices de bloque (0, 1, 2…):
+      // limpiar el mapa idx→tool acá evita que el content_block_stop de un
+      // texto posterior matchee la herramienta de un mensaje anterior (la
+      // re-enviaba como "running" ya completada y se tragaba el cierre del
+      // texto). El contador de mensaje además hace únicos los ids cb*.
+      t.toolInput = new Map();
+      t.msgSeq = (t.msgSeq ?? 0) + 1;
       setPhase(t, "El modelo empezó a responder…");
       return;
     }
@@ -1161,7 +1169,7 @@ function handleClaudeStreamEvent(t, ev) {
       const cb = e.content_block || {};
       if (cb.type === "text" || cb.type === "thinking") {
         const kind = cb.type === "thinking" ? "reasoning" : "text";
-        const id = `cb${e.index}`;
+        const id = `m${t.msgSeq ?? 0}b${e.index}`;
         addStreamPart(t, id, { kind, text: cb.text || cb.thinking || "", start: Date.now() });
         t.openBlock.set("m", id);
         setPhase(t, kind === "reasoning" ? "Razonando…" : "Escribiendo la respuesta…");
@@ -1189,17 +1197,19 @@ function handleClaudeStreamEvent(t, ev) {
       const d = e.delta || {};
       if (d.type === "text_delta" || d.type === "thinking_delta") {
         const kind = d.type === "thinking_delta" ? "reasoning" : "text";
+        // OJO: thinking_delta viaja en d.thinking (no en d.text).
+        const chunk = d.type === "thinking_delta" ? d.thinking : d.text;
         let id = t.openBlock.get("m");
         let part = id ? t.parts.get(id) : null;
         if (!part || part.kind !== kind) {
-          id = `cb${e.index}`;
+          id = `m${t.msgSeq ?? 0}b${e.index}`;
           part = t.parts.get(id);
           if (!part) part = addStreamPart(t, id, { kind, text: "", start: Date.now() });
           t.openBlock.set("m", id);
         }
-        if (d.text) {
-          part.text += d.text;
-          emit("delta", { turnId: t.id, id, delta: d.text, end: null });
+        if (chunk) {
+          part.text += chunk;
+          emit("delta", { turnId: t.id, id, delta: chunk, end: null });
         }
       } else if (d.type === "input_json_delta") {
         const callId = t.toolInput.get(`idx:${e.index}`);
