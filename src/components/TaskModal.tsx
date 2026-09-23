@@ -908,6 +908,7 @@ export function TaskModal({
                     area={area}
                     executor={executor}
                     correoOrigen={!!task?.correoId}
+                    contextCount={delegCtx.carpetas.length + delegCtx.archivos.length}
                     contextSlot={
                       agentCfg.taskType === "correo" ? (
                         <div>
@@ -928,9 +929,6 @@ export function TaskModal({
                         </div>
                       ) : (
                         <div>
-                          <p className="mb-1.5 text-[11px] font-semibold text-ink">
-                            Material de contexto <span className="font-normal text-faint">· opcional, solo lectura</span>
-                          </p>
                           <ContextPicker value={delegCtx} onChange={setDelegCtx} />
                           <p className="mt-1 text-[10px] leading-snug text-faint">
                             Carpetas para explorar y archivos (ej. un Excel) que lee directo de tu disco: no se suben a la nube.

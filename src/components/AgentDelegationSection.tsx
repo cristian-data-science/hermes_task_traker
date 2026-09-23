@@ -8,7 +8,7 @@
  * Controlado desde TaskModal vía value/onChange para que hidrate/beba del
  * mismo borrador que el resto del formulario.
  */
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useQuery } from "convex/react";
 import toast from "react-hot-toast";
 import { Circle, CircleDot, Rocket, Compass } from "lucide-react";
@@ -111,11 +111,48 @@ function workspaceLabel(
   return `${ws.path} · ${ws.vcs === "git" ? "Git" : "local (sin git)"}`;
 }
 
+/**
+ * Contexto adicional (solo lectura) colapsable: una carpeta DISTINTA de la
+ * destino o archivos que están en otro lado del disco. Cerrado por defecto
+ * para no sumar un tercer selector de carpeta al modal; si la tarea ya trae
+ * contexto (edición), arranca abierto para no esconder contenido existente.
+ */
+function ContextoAdicional({
+  count = 0,
+  children,
+}: {
+  count?: number;
+  children?: ReactNode;
+}) {
+  const [open, setOpen] = useState(count > 0);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 rounded-el border-el border-line px-2 py-1.5 text-[11px] font-medium text-ink transition-colors hover:bg-panel2"
+      >
+        <span>{open ? "−" : "＋"} Contexto adicional</span>
+        <span className="min-w-0 truncate text-[10px] font-normal text-faint">
+          {open
+            ? "carpetas o archivos de otro lado · solo lectura"
+            : count > 0
+              ? `${count} ${count === 1 ? "ítem listo" : "ítems listos"} · carpetas o archivos de otro lado`
+              : "carpeta distinta de la destino, o archivos de otro lado"}
+        </span>
+      </button>
+      {open && <div className="mt-2">{children}</div>}
+    </div>
+  );
+}
+
 export function AgentDelegationSection({
   value,
   onChange,
   executor,
   contextSlot,
+  contextCount = 0,
   correoOrigen = false,
 }: {
   value: AgentConfig;
@@ -125,6 +162,8 @@ export function AgentDelegationSection({
   executor: DelegatedExecutor;
   /** Bloque extra al final de la sección (respuesta del correo). */
   contextSlot?: ReactNode;
+  /** Ítems de contexto ya elegidos (carpetas+archivos): arranca abierto si >0. */
+  contextCount?: number;
   /** La tarea nació de un correo: habilita el tipo "Correo". */
   correoOrigen?: boolean;
 }) {
@@ -384,7 +423,7 @@ export function AgentDelegationSection({
                     ? "Debe ser una ruta absoluta de este PC (C:\\… o \\\\servidor\\…)."
                     : picker.esperando
                       ? "Se abrió el diálogo de Windows: elige o crea la carpeta."
-                      : "Pega la ruta o elígela. Sin git: nada se versiona ni sube."}
+                      : "Pega la ruta o elígela — si no existe, se crea al despachar. Sin git: nada se versiona ni sube."}
                 </p>
               </>
             )}
@@ -436,8 +475,10 @@ export function AgentDelegationSection({
                 Se copian dentro de la carpeta al despachar; los originales quedan donde están.
               </p>
             </>
-          ) : (
+          ) : isCorreo ? (
             contextSlot
+          ) : (
+            <ContextoAdicional count={contextCount}>{contextSlot}</ContextoAdicional>
           )}
         </div>
       </Dim>

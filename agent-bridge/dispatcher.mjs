@@ -239,6 +239,18 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   //    ser nueva) para que la corrida sea autocontenida. Idempotente: nunca
   //    pisa lo que ya está (re-despachos/resumes no re-copian).
   if (task.gitStrategy === "solo-local") {
+    // Carpeta propia escrita a mano (sin pasar por el diálogo): se crea en
+    // el mismo paso aunque no haya adjuntos — antes solo la creía
+    // copiarMaterial y el despacho rebotaba con [sin-carpeta]. Si la ruta es
+    // inválida, mkdir falla y el guard del paso 1 la sigue capturando.
+    if (!task.workspaceId && folder && !existsSync(folder)) {
+      try {
+        mkdirSync(folder, { recursive: true });
+        log(`📁 carpeta propia creada: ${folder}`);
+      } catch (e) {
+        log(`⚠ no se pudo crear la carpeta propia (${folder}): ${e.message}`);
+      }
+    }
     const origenArchivos = task.contextPaths?.archivos ?? [];
     const res = copiarMaterial(folder, origenArchivos);
     if (res.copiados.length)
