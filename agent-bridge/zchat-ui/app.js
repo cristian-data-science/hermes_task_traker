@@ -421,7 +421,9 @@
 
   // ---------- bloques ----------
   function makeThink() {
-    const root = el("details", { class: "think live", open: true });
+    // Cerrado por defecto (también en vivo): el razonamiento es una línea
+    // callada "Razonando…/Razonó · duración"; abrirlo es opt-in del lector.
+    const root = el("details", { class: "think live", open: false });
     const summary = el("summary");
     const label = el("span", { class: "t-label", text: "Razonando…" });
     const meta = el("span", { class: "t-meta" });
