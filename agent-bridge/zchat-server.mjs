@@ -37,8 +37,21 @@
  *
  * Multi-agente: mismo protocolo de eventos para la UI; el adaptador traduce
  * (zcode: model.streaming/tool.updated · claude: stream_event/assistant/user
- * tool_result). Ambos chatean en modo read-only (zcode --mode plan ·
+ * tool_result). Los turnos locales son SOLO CONSULTA (zcode --mode plan ·
  * claude --permission-mode plan).
+ *
+ * Un solo motor de ejecución: el despachador. El chat NO ejecuta trabajo por
+ * su cuenta (el viejo "modo ejecución" corría fuera del tracker: sin corrida,
+ * sin pasos, con tope de 15 min). En su lugar:
+ *  - /continue  "Encargar trabajo" / "Preguntar al tracker": re-encola la
+ *               tarea en Convex (agent:continueTask, o answerQuestion si hay
+ *               una pregunta abierta). El despachador retoma la MISMA sesión
+ *               con protocolo completo y el chat pasa a modo observador.
+ *               Candado: si hay una consulta local corriendo se detiene ANTES
+ *               de encolar (dos procesos --resume sobre la misma sesión se
+ *               pisan).
+ *  - /redirect  Con una corrida activa, escribir = redirección en vivo
+ *               (agent:redirectAgent): el puente interrumpe y retoma.
  *
  * Robustez: un turno a la vez con timeout (15 min) y /cancel; instancia única
  * por sesión (si ya hay un servidor para esta sesión, abre esa pestaña y sale);
@@ -56,8 +69,10 @@ import os from "node:os";
 import { existsSync, appendFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { adapterFor } from "./agents/index.mjs";
+import { claudeModelFlags } from "./agents/claude.mjs";
+import { killTree } from "./proc.mjs";
 
-const VERSION = "4.0.0";
+const VERSION = "5.0.0";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const UI_DIR = path.join(HERE, "zchat-ui");
 const LOG = path.join(HERE, "zchat-server.log");
@@ -91,7 +106,11 @@ const log = (m) => {
 };
 
 // ---- Argumentos ----
-const argv = process.argv.slice(2).map((a) => (a === "-" ? "" : a));
+// --deployment=<nombre> lo consume config.mjs (deployment de la app que abrió el chat).
+const argv = process.argv
+  .slice(2)
+  .filter((a) => !a.startsWith("--deployment="))
+  .map((a) => (a === "-" ? "" : a));
 let [sessionId, workspacePath, planB64 = "", statusArg = "", stateArg = "", taskIdArg = "", themeArg = "", agentArg = ""] = argv;
 // Sesión PENDIENTE: el botón del panel puede abrir el chat ANTES de que el
 // agente registre su sesión (ZCode la crea al arrancar el proceso). Con taskId
@@ -161,16 +180,19 @@ let sessionTitle =
  */
 function adoptSession(id) {
   if (!id || sessionId === id) return;
+  const previous = sessionId;
   sessionId = id;
   if (AGENT !== "claude") {
     sessionTitle =
       safeQuery((d) => d.prepare("SELECT title FROM session WHERE id = ?").get(sessionId)?.title, "") ?? "";
   }
-  log(`sesión adoptada (esperada por Convex): ${sessionId}`);
+  log(`sesión adoptada${previous ? ` (antes ${previous})` : " (esperada por Convex)"}: ${sessionId}`);
   emit("session", { session: sessionId, title: sessionTitle });
   emit("notice", {
     level: "info",
-    text: "La sesión del agente ya está disponible: historial cargado.",
+    text: previous
+      ? "El agente abrió una sesión nueva en este despacho: el chat la sigue desde ahora."
+      : "La sesión del agente ya está disponible: historial cargado.",
   });
   if (observer) seedHistoryIds();
 }
@@ -178,11 +200,13 @@ function adoptSession(id) {
 // Prefijos que este chat agrega a cada pregunta (se limpian al mostrar).
 const ASK_PREFIX = "Consulta de Cris sobre el trabajo ya entregado (solo responde; no ejecutes cambios): ";
 const ASK_PREFIX_RE = /^Consulta de Cris sobre el trabajo ya entregado \([^)]*\):\s*/;
-// Modo ejecución (riendas): Cris conduce — sus instrucciones prevalecen sobre
-// el contrato de la tarea y el agente PUEDE ejecutar (bypass/yolo).
-const EXEC_PREFIX = "CRIS TOMÓ LAS RIENDAS de esta conversación (sus instrucciones de este chat prevalecen sobre el contrato de la tarea): ";
-const EXEC_PREFIX_RE = /^CRIS TOMÓ LAS RIENDAS de esta conversación [^:]*:\s*/;
-const CTX_RE = /^\[CONTEXTO ACTUALIZADO DEL TRACKER HERMES[^\]]*\]\s*/;
+// Modo ejecución (riendas) RETIRADO: el prefijo se sigue limpiando para que
+// los historiales viejos se lean bien (incluida la frase de instrucciones que
+// venía detrás y antes quedaba visible en la burbuja).
+const EXEC_PREFIX_RE =
+  /^CRIS TOMÓ LAS RIENDAS de esta conversación [^:]*:\s*(?:ejecuta lo que Cris pida[\s\S]*?no reportes por report\.mjs\.\s*)?/;
+const CTX_RE =
+  /^\[CONTEXTO ACTUALIZADO DEL TRACKER HERMES(?:[\s\S]*? a las \d{1,2}:\d{2}\.\]|[^\]]*\])\s*/;
 function stripWrappers(text) {
   return String(text).replace(EXEC_PREFIX_RE, "").replace(ASK_PREFIX_RE, "").replace(CTX_RE, "").trim();
 }
@@ -487,8 +511,24 @@ let trackerClient = null;
 function computeTracker(task, runs) {
   const list = Array.isArray(runs) ? [...runs].sort((a, b) => b.startedAt - a.startedAt) : [];
   const latest = list[0] || null;
-  const planRun = list.find((r) => Array.isArray(r.plan) && r.plan.length) || null;
-  const plan = planRun?.plan ?? planFromLink;
+  const hasPlan = (r) => Array.isArray(r?.plan) && r.plan.length > 0;
+  // Roadmap de la corrida ACTUAL: la más nueva si tiene plan o está abierta
+  // (un seguimiento que aún no declaró su plan NO muestra el plan viejo al
+  // 100 %: queda "esperando el plan" y el anterior se ve atenuado aparte).
+  // Solo si la más nueva cerró sin plan se cae a la última que tuvo uno.
+  // Las consultas no tienen roadmap.
+  const latestOpen = !!latest && !latest.endedAt;
+  const isConsulta = latest?.followUpKind === "consulta";
+  const planRun = isConsulta
+    ? null
+    : hasPlan(latest)
+      ? latest
+      : latestOpen
+        ? null
+        : list.find(hasPlan) || null;
+  const awaitingPlan = latestOpen && !isConsulta && !hasPlan(latest) && list.length > 1;
+  const prevRun = awaitingPlan ? list.slice(1).find(hasPlan) || null : null;
+  const plan = planRun?.plan ?? (list.length ? [] : planFromLink);
   const steps = (planRun ?? latest)?.progressLog ?? [];
   // Tarea ya terminada (aprobada/cancelada): una corrida "abierta" es un
   // zombi — se muestra como cerrada (misma sanidad que el panel del tracker).
@@ -503,8 +543,9 @@ function computeTracker(task, runs) {
   // esto el sidebar del chat los dejaba "pendientes" para siempre aunque la
   // tarea estuviera aprobada (caso real: Hermes vs VoiceFlow, 3/6 mostrado).
   const finishedOk =
-    (!!latest?.endedAt && ["para-revision", "hecho"].includes(latest.state)) ||
-    (taskDone && !["error", "cancelada"].includes(latest?.state ?? ""));
+    planRun === latest &&
+    ((!!latest?.endedAt && ["para-revision", "hecho"].includes(latest.state)) ||
+      (taskDone && !["error", "cancelada"].includes(latest?.state ?? "")));
   const doneCount = finishedOk ? plan.length : steps.length;
   const current = finishedOk
     ? plan.length
@@ -554,6 +595,11 @@ function computeTracker(task, runs) {
           summary: latest.summary,
           error: latest.error,
           followUp: latest.followUp,
+          followUpKind: latest.followUpKind,
+          awaitingPlan,
+          previousPlan: prevRun
+            ? { plan: prevRun.plan, done: prevRun.progressLog?.length ?? 0 }
+            : null,
           startedAt: latest.startedAt,
           endedAt: latest.endedAt,
           model: latest.model,
@@ -568,7 +614,10 @@ function computeTracker(task, runs) {
 // El chat no puede lanzar turnos propios mientras el dispatcher corre (dos
 // procesos sobre la misma sesión se pisan); en su lugar, MUESTRA lo que pasa:
 // poll del historial y eventos history_append con los mensajes nuevos.
+// Variante: "queued" (en cola del puente), "planning" (fase de plan, solo
+// lectura) o "running" (corrida activa: escribir = redirección en vivo).
 let observer = false;
+let observerVariant = "";
 let observerPoller = null;
 let historyIds = new Set();
 
@@ -589,10 +638,13 @@ function seedHistoryIds() {
  * Al activar: divisor visual + poll cada 2 s. Al desactivar: notice de que
  * ya se puede preguntar.
  */
-function syncObserver(runOpen) {
-  if (runOpen === observer) return;
+function syncObserver(runOpen, variant = runOpen ? "running" : "") {
+  if (runOpen === observer && variant === observerVariant) return;
+  const was = observer;
   observer = runOpen;
-  emit("observer", { observer });
+  observerVariant = variant;
+  emit("observer", { observer, variant, capabilities: capabilities() });
+  if (was === observer) return; // solo cambió la variante (cola → corrida)
   if (observer) {
     seedHistoryIds();
     if (!observerPoller) {
@@ -618,24 +670,61 @@ function syncObserver(runOpen) {
     }
     emit("notice", {
       level: "info",
-      text: "La corrida terminó — ya puedes preguntarle al agente.",
+      text: "La corrida terminó — ya puedes preguntarle al agente o encargarle más trabajo.",
     });
+    // Consultas que esperaban a que terminara la corrida.
+    drainPendingAsks();
   }
 }
 
-// ---- Modo ejecución (riendas): Cris conduce, el contrato queda subordinado
-// a SUS instrucciones explícitas del chat. Default OFF (solo consulta). ----
-let execMode = false;
+/** Estados de la tarea (tracker) que significan "hay trabajo del puente en curso". */
+const RUNNING_STATES = ["despachada", "trabajando"];
+/** Estados sin corrida viva desde los que se puede encargar/preguntar al tracker. */
+const CONTINUABLE_STATES = ["para-revision", "hecho", "error", "cancelada", "pregunta"];
+
+/** Variante de observador según el estado REAL de la tarea (no solo run.open). */
+function observerFor(tr) {
+  const st = tr?.task?.agentState;
+  if (st === "encolada") return [true, "queued"];
+  if (st === "planificando") return [true, "planning"];
+  if (RUNNING_STATES.includes(st)) return [true, "running"];
+  if (st) return [false, ""];
+  // Sin estado conocido (snapshot sin tracker): la corrida abierta decide.
+  return tr?.run?.open === true ? [true, "running"] : [false, ""];
+}
+
+/** Qué puede hacer la UI ahora mismo (una sola fuente de reglas). */
+function capabilities() {
+  const st = tracker.task?.agentState || "";
+  const live = tracker.live && !!taskId && !!convexM;
+  return {
+    state: st,
+    canAsk: !!sessionId && !observer,
+    canContinue: live && CONTINUABLE_STATES.includes(st),
+    canRedirect: live && RUNNING_STATES.includes(st),
+    answersQuestion: live && st === "pregunta",
+    queuedState: observerVariant,
+  };
+}
+
+// ---- Mutaciones de Convex (credenciales del puente) ----
+/** m(name, args) de auth.mjs; null hasta que el tracker conecta. */
+let convexM = null;
+function convexError(e) {
+  const raw = String(e?.message ?? e);
+  return (raw.match(/Uncaught Error:\s*([^\n]+)/)?.[1] ?? raw.split("\n")[0]).slice(0, 300);
+}
 
 async function startTracker() {
   if (!taskId) return;
   try {
-    const [{ ConvexClient }, { getToken }, { CONVEX_URL }] = await Promise.all([
+    const [{ ConvexClient }, { getToken, m }, { CONVEX_URL }] = await Promise.all([
       import("convex/browser"),
       import("./auth.mjs"),
       import("./config.mjs"),
     ]);
     const token = await getToken();
+    convexM = m;
     const client = new ConvexClient(CONVEX_URL);
     trackerClient = client;
     let task;
@@ -652,12 +741,21 @@ async function startTracker() {
             .sort((a, b) => b.startedAt - a.startedAt)[0]?.sessionId;
           adoptSession(task?.agentSessionId || fromRun || "");
           if (!sessionId) return; // sigue sin sesión: nada que mostrar aún
+        } else if (
+          task?.agentSessionId &&
+          task.agentSessionId !== sessionId &&
+          !(turn && turn.status === "running")
+        ) {
+          // Un despacho posterior abrió sesión NUEVA (la anterior ya no era
+          // retomable): seguirla, o el observador miraría una sesión muerta.
+          adoptSession(task.agentSessionId);
         }
         tracker = computeTracker(task, runs);
-        emit("tracker", { tracker });
-        // ¿Hay una corrida del dispatcher ABIERTA sobre esta tarea? → el chat
+        emit("tracker", { tracker, capabilities: capabilities() });
+        // ¿Hay trabajo del puente en curso (cola, plan, corrida)? → el chat
         // pasa a modo observador (historial vivo, sin turnos propios).
-        syncObserver(tracker.run?.open === true);
+        const [obs, variant] = observerFor(tracker);
+        syncObserver(obs, variant);
       }, 120);
     };
     client.onUpdate(
@@ -708,6 +806,7 @@ function snapshotTurn(t) {
     model: t.model,
     exitCode: t.exitCode,
     cancelled: !!t.cancelled,
+    cancelReason: t.cancelReason || "",
     phase: t.phase,
     source: t.streamSeen ? "stream" : DEMO ? "demo" : "db",
   };
@@ -739,6 +838,7 @@ function newTurn(question) {
     stdout: "",
     stderrTail: "",
     cancelled: false,
+    cancelReason: "",
     timedOut: false,
     // Fuente primaria: eventos stream-json del CLI (token a token). La DB
     // queda como respaldo si el CLI no emite eventos (versión vieja, etc.).
@@ -1422,16 +1522,17 @@ function finishTurn(t, { code = null, error = null } = {}) {
       turnId: t.id,
       text: t.finalText,
       cancelled: true,
+      reason: t.cancelReason || "user",
       endedAt: t.endedAt,
       durationMs,
       tokens: t.tokens,
       model: t.model,
       exitCode: code,
     });
-    log(`turno ${t.id} cancelado (${Math.round(durationMs / 1000)}s)`);
+    log(`turno ${t.id} cancelado [${t.cancelReason || "user"}] (${Math.round(durationMs / 1000)}s)`);
   } else if (t.timedOut) {
     t.status = "error";
-    t.error = `La respuesta superó el tiempo máximo (${Math.round(TURN_TIMEOUT_MS / 60000)} min) y se detuvo.`;
+    t.error = `La consulta superó el tiempo máximo (${Math.round(TURN_TIMEOUT_MS / 60000)} min) y se detuvo. Si necesitas que el agente trabaje en algo largo, usa "Encargar trabajo": corre en el tracker con 60 min y reporte de pasos.`;
     emit("turn_error", { turnId: t.id, error: t.error, partialText: fromDb, endedAt: t.endedAt, durationMs });
     log(`turno ${t.id} timeout`);
   } else if (error || (code !== 0 && !fromDb && !fromStdout)) {
@@ -1459,6 +1560,21 @@ function finishTurn(t, { code = null, error = null } = {}) {
     );
   }
   t.child = null;
+  // Siguiente consulta en espera (si el chat sigue pudiendo preguntar).
+  setTimeout(drainPendingAsks, 50);
+}
+
+// ---- Cola de consultas: un mensaje enviado con un turno en curso espera ----
+const PENDING_MAX = 3;
+const pendingAsks = [];
+function drainPendingAsks() {
+  if (!pendingAsks.length) return;
+  if (turn && turn.status === "running") return;
+  if (observer || !sessionId) return; // espera a que el puente termine
+  const question = pendingAsks.shift();
+  emit("queue", { pending: pendingAsks.length });
+  log(`pregunta (desde la cola): ${question.slice(0, 140).replace(/\n/g, " ")}`);
+  runTurn(newTurn(question));
 }
 
 function contextoTracker() {
@@ -1478,23 +1594,32 @@ function contextoTracker() {
 
 function runTurn(t) {
   if (DEMO) return simulateTurn(t);
-  // Prefijo según modo: consulta (read-only) o riendas (ejecución real).
-  const prefix = execMode
-    ? `${EXEC_PREFIX}ejecuta lo que Cris pida y cuéntale qué hiciste (con evidencia: archivos, comandos, números). Esto NO es una corrida del dispatcher: no reportes por report.mjs. `
-    : ASK_PREFIX;
-  const prompt = `${prefix}${contextoTracker()}${t.question}`;
+  // Candado: releer el estado justo antes del spawn. Si el puente tomó la
+  // tarea entre el /ask y ahora, no lanzar un segundo --resume de la sesión.
+  if (observer) {
+    finishTurn(t, {
+      error: "El agente empezó una corrida del tracker sobre esta sesión: la consulta no se lanzó. Escribe de nuevo para redirigir la corrida.",
+    });
+    return;
+  }
+  // Turnos locales = SOLO CONSULTA (el trabajo va por el tracker: /continue).
+  const prompt = `${ASK_PREFIX}${contextoTracker()}${t.question}`;
   let child;
   if (AGENT === "claude") {
-    // Claude: read-only (plan) o riendas (bypassPermissions); cwd = carpeta de
-    // trabajo (no existe --cwd). stream-json + parciales = razonamiento token
-    // a token.
+    // Claude: read-only (plan); cwd = carpeta de trabajo (no existe --cwd).
+    // stream-json + parciales = razonamiento token a token. Modelo/esfuerzo
+    // de la TAREA (antes el chat corría con el default de la cuenta aunque la
+    // cabecera mostrara el modelo elegido).
+    const flags = claudeModelFlags(tracker.task?.model);
     const args = [
       "-p",
       prompt,
       "--resume",
       sessionId,
       "--permission-mode",
-      execMode ? "bypassPermissions" : "plan",
+      "plan",
+      ...(flags.model ? ["--model", flags.model] : []),
+      ...(flags.effort ? ["--effort", flags.effort] : []),
       "--output-format",
       "stream-json",
       "--verbose",
@@ -1524,7 +1649,7 @@ function runTurn(t) {
       "--cwd",
       workspacePath,
       "--mode",
-      execMode ? "yolo" : "plan",
+      "plan",
       "--output-format",
       "stream-json",
     ];
@@ -1553,9 +1678,9 @@ function runTurn(t) {
   t.poller = setInterval(() => pollTurn(t), POLL_MS);
   t.timeout = setTimeout(() => {
     t.timedOut = true;
-    try {
-      child.kill();
-    } catch {}
+    killTree(child);
+    // Respaldo: si un nieto retiene el stdout, "close" no llega nunca.
+    setTimeout(() => finishTurn(t, { code: null }), 5000).unref?.();
   }, TURN_TIMEOUT_MS);
   child.on("error", (e) => finishTurn(t, { error: `no pude lanzar ${adapter.label}: ${e?.message ?? e}` }));
   child.on("close", (code) => {
@@ -1564,15 +1689,18 @@ function runTurn(t) {
   });
 }
 
-function cancelTurn() {
+function cancelTurn(reason = "user") {
   if (!turn || turn.status !== "running") return false;
+  if (turn.cancelled) return true; // ya en camino (el watchdog no repite)
   turn.cancelled = true;
-  if (turn.child) {
-    try {
-      turn.child.kill();
-    } catch {}
+  turn.cancelReason = reason;
+  const t = turn;
+  if (t.child) {
+    killTree(t.child);
+    // Respaldo: árbol que no suelta el stdout → cerrar el turno igual.
+    setTimeout(() => finishTurn(t, { code: null }), 5000).unref?.();
   } else {
-    finishTurn(turn, { code: null });
+    finishTurn(t, { code: null });
   }
   return true;
 }
@@ -1653,7 +1781,7 @@ function simulateTurn(t) {
     addPart({ id: "demo-x1", kind: "text", order: 4, text: "", at: Date.now(), start: Date.now() });
     await stream(
       "demo-x1",
-      "El filtro que apliqué en **Transacciones** (y en sus 5 medidas hermanas) es `LEDGERACCOUNT <> 400004`: excluye la cuenta de **reparaciones**, que no es venta y estaba inflando el conteo.\n\n### Medidas tocadas\n1. Transacciones · Transacciones AA\n2. Ticket promedio · Ticket promedio AA\n3. Unidades por ticket · Unidades por ticket AA\n\n### Validación\n| Medida | Antes | Después |\n|---|---|---|\n| Transacciones | 1.284.311 | 1.279.902 |\n| Diferencia | | −4.409 (reparaciones) |\n\nLo verifiqué recién con una consulta DAX en vivo: `1.279.902`, igual que lo documentado en `CAMBIOS.md`.\n\n> Rollback disponible: `backups\\Resumen Kpis comerciales_2026-09-04.pbix`.\n\nSi querés, el siguiente paso natural sería sacar reparaciones también del numerador del ticket promedio — hoy sigue adentro ($5,4M histórico).",
+      "El filtro que apliqué en **Transacciones** (y en sus 5 medidas hermanas) es `LEDGERACCOUNT <> 400004`: excluye la cuenta de **reparaciones**, que no es venta y estaba inflando el conteo.\n\n### Medidas tocadas\n1. Transacciones · Transacciones AA\n2. Ticket promedio · Ticket promedio AA\n3. Unidades por ticket · Unidades por ticket AA\n\n### Validación\n| Medida | Antes | Después |\n|---|---|---|\n| Transacciones | 1.284.311 | 1.279.902 |\n| Diferencia | | −4.409 (reparaciones) |\n\nLo verifiqué recién con una consulta DAX en vivo: `1.279.902`, igual que lo documentado en `CAMBIOS.md`.\n\n> Rollback disponible: `backups\\Resumen Kpis comerciales_2026-09-04.pbix`.\n\nSi quieres, el siguiente paso natural sería sacar reparaciones también del numerador del ticket promedio — hoy sigue adentro ($5,4M histórico).",
       22,
     );
     if (t.status !== "running") return;
@@ -1718,7 +1846,8 @@ function info(port) {
     theme: themeHint || null,
     demo: DEMO,
     observer,
-    exec: execMode,
+    observerVariant,
+    exec: false,
     startedAt: SERVER_STARTED_AT,
   };
 }
@@ -1737,7 +1866,19 @@ async function handler(req, res) {
       if (p === "/info") return json(res, 200, info(listeningPort));
       if (p === "/history") return json(res, 200, readHistory());
       if (p === "/state") {
-        return json(res, 200, { info: info(listeningPort), tracker, turn: snapshotTurn(turn), seq, observer, exec: execMode, sessionReady: !!sessionId, now: Date.now() });
+        return json(res, 200, {
+          info: info(listeningPort),
+          tracker,
+          turn: snapshotTurn(turn),
+          seq,
+          observer,
+          observerVariant,
+          capabilities: capabilities(),
+          pending: pendingAsks.length,
+          exec: false,
+          sessionReady: !!sessionId,
+          now: Date.now(),
+        });
       }
       if (p === "/events") {
         res.writeHead(200, {
@@ -1767,10 +1908,14 @@ async function handler(req, res) {
       return res.end();
     }
     if (req.method === "POST") {
+      // Solo la propia página del chat puede mandar órdenes: una web externa
+      // no debe poder lanzar turnos ni encargar trabajo contra 127.0.0.1.
+      const why = rejectCrossOrigin(req);
+      if (why) {
+        log(`POST ${p} rechazado (${why})`);
+        return json(res, 403, { error: "Origen no permitido." });
+      }
       if (p === "/ask") {
-        if (turn && turn.status === "running") {
-          return json(res, 409, { error: "Ya hay una respuesta en curso. Esperá a que termine o detenela.", turnId: turn.id });
-        }
         // Sesión pendiente: todavía no hay sesión a la que preguntar.
         if (!sessionId) {
           return json(res, 409, {
@@ -1779,47 +1924,137 @@ async function handler(req, res) {
             pendingSession: true,
           });
         }
-        // Modo observador: la corrida del dispatcher está activa sobre esta
-        // sesión; dos procesos se pisarían. Se puede MIRAR, no preguntar.
-        if (observer) {
-          return json(res, 409, {
-            error:
-              "La corrida del agente está ACTIVA: el chat está en modo observador (ves el razonamiento en vivo). Cuando termine podrás preguntar.",
-            observer: true,
-          });
-        }
         let question = "";
         try {
           question = String(JSON.parse(await readBody(req)).q || "")
             .replace(/\r\n/g, "\n")
-            .trim()
-            .slice(0, 6000);
+            .trim();
         } catch {}
         if (!question) return json(res, 400, { error: "La pregunta está vacía." });
-        log(`pregunta${execMode ? " [EJECUCIÓN]" : ""}: ${question.slice(0, 140).replace(/\n/g, " ")}`);
+        if (question.length > 6000)
+          return json(res, 400, { error: `La pregunta es muy larga (${question.length} caracteres; máximo 6000).` });
+        // Trabajo del puente en curso sobre esta sesión: dos procesos se
+        // pisarían. Con corrida activa la UI ofrece redirigir en su lugar.
+        if (observer) {
+          const cap = capabilities();
+          return json(res, 409, {
+            error:
+              observerVariant === "running"
+                ? "Hay una corrida activa del agente: tu mensaje puede ir como redirección en vivo."
+                : observerVariant === "queued"
+                  ? "La tarea está en cola del puente: el agente arranca en cuanto haya un espacio libre."
+                  : "El agente está planificando (solo lectura): cuando entregue el plan podrás preguntarle.",
+            observer: true,
+            redirectable: cap.canRedirect,
+          });
+        }
+        // Consulta en curso: el mensaje ESPERA su turno (nunca se pierde).
+        if (turn && turn.status === "running") {
+          if (pendingAsks.length >= PENDING_MAX)
+            return json(res, 429, { error: `Ya hay ${PENDING_MAX} preguntas esperando turno.` });
+          pendingAsks.push(question);
+          emit("queue", { pending: pendingAsks.length });
+          return json(res, 202, { queued: true, position: pendingAsks.length, question });
+        }
+        log(`pregunta: ${question.slice(0, 140).replace(/\n/g, " ")}`);
         const t = newTurn(question);
         runTurn(t);
         return json(res, 202, { turnId: t.id, question: t.question, startedAt: t.startedAt });
       }
-      if (p === "/mode") {
-        // Modo ejecución (riendas): toggle explícito de Cris. La UI pide
-        // confirmación antes de activarlo; acá solo se refleja el estado.
-        // Es un modo peligroso: se exige un booleano estricto y ante cualquier
-        // duda (body roto, "false", ausente) NO se activa nada.
-        let exec = null;
+      if (p === "/continue") {
+        // Encargar trabajo / preguntar vía tracker: la tarea se re-encola y el
+        // despachador la retoma en la MISMA sesión con protocolo completo.
+        if (!taskId || !convexM || !tracker.live)
+          return json(res, 409, {
+            error: "El chat no está conectado al tracker: encarga desde el panel de la tarea en la app.",
+          });
+        let body = {};
         try {
-          const body = JSON.parse(await readBody(req));
-          if (typeof body?.exec === "boolean") exec = body.exec;
+          body = JSON.parse(await readBody(req)) || {};
         } catch {}
-        if (exec === null)
-          return json(res, 400, { error: "Falta 'exec' booleano.", exec: execMode });
-        execMode = exec;
-        emit("mode", { exec: execMode });
-        log(`modo ${execMode ? "EJECUCIÓN (riendas)" : "consulta (solo lectura)"}`);
-        return json(res, 200, { exec: execMode });
+        const text = String(body.q || "").replace(/\r\n/g, "\n").trim();
+        const mode = body.mode === "consulta" ? "consulta" : "trabajo";
+        if (!text) return json(res, 400, { error: "La instrucción está vacía." });
+        if (text.length > 3000)
+          return json(res, 400, { error: `La instrucción es muy larga (${text.length} caracteres; máximo 3000).` });
+        const st = tracker.task?.agentState || "";
+        if (!CONTINUABLE_STATES.includes(st))
+          return json(res, 409, {
+            error: RUNNING_STATES.includes(st)
+              ? "Hay una corrida activa: tu mensaje va como redirección en vivo."
+              : `La tarea no admite un encargo ahora (estado: ${st || "desconocido"}).`,
+            redirectable: RUNNING_STATES.includes(st),
+          });
+        // Candado anti-carrera: nunca encolar con una consulta local viva
+        // sobre la misma sesión (el --resume del despachador la pisaría).
+        if (turn && turn.status === "running") {
+          if (!body.cancelFirst)
+            return json(res, 409, { busy: true, error: "Hay una consulta en curso." });
+          cancelTurn("handoff");
+          const t0 = Date.now();
+          while (turn && turn.status === "running" && Date.now() - t0 < 8000) {
+            await new Promise((r) => setTimeout(r, 200));
+          }
+          if (turn && turn.status === "running")
+            return json(res, 409, { error: "No pude detener la consulta en curso; inténtalo de nuevo en unos segundos." });
+        }
+        // Las consultas en espera ya no aplican: el agente va a trabajar.
+        if (pendingAsks.length) {
+          pendingAsks.length = 0;
+          emit("queue", { pending: 0 });
+        }
+        const answering = st === "pregunta" && mode === "trabajo";
+        try {
+          if (answering) await convexM("agent:answerQuestion", { taskId, answer: text });
+          else await convexM("agent:continueTask", { taskId, instruction: text, mode });
+        } catch (e) {
+          return json(res, 409, { error: convexError(e) });
+        }
+        const kind = answering ? "respuesta" : mode === "consulta" ? "consulta" : "encargo";
+        log(`${kind} vía tracker: ${text.slice(0, 140).replace(/\n/g, " ")}`);
+        emit("user_message", { text, kind, at: Date.now() });
+        emit("notice", {
+          level: "info",
+          text: answering
+            ? "Respuesta enviada: el agente retoma su sesión con ella. Verás el razonamiento aquí."
+            : mode === "consulta"
+              ? "Pregunta enviada al tracker: el agente responde en una corrida nueva (solo lectura)."
+              : "Encargo enviado al tracker: el agente lo retoma en su sesión con plan y pasos. Verás el razonamiento aquí.",
+        });
+        return json(res, 202, { ok: true, kind });
+      }
+      if (p === "/redirect") {
+        if (!taskId || !convexM || !tracker.live)
+          return json(res, 409, { error: "El chat no está conectado al tracker: redirige desde el panel de la tarea." });
+        let text = "";
+        try {
+          text = String(JSON.parse(await readBody(req)).q || "").replace(/\r\n/g, "\n").trim();
+        } catch {}
+        if (!text) return json(res, 400, { error: "La instrucción está vacía." });
+        if (text.length > 1500)
+          return json(res, 400, { error: `La redirección es muy larga (${text.length} caracteres; máximo 1500).` });
+        try {
+          await convexM("agent:redirectAgent", { taskId, message: text });
+        } catch (e) {
+          return json(res, 409, { error: convexError(e) });
+        }
+        log(`redirección vía chat: ${text.slice(0, 140).replace(/\n/g, " ")}`);
+        emit("user_message", { text, kind: "redireccion", at: Date.now() });
+        emit("notice", {
+          level: "info",
+          text: "Redirección entregada: el puente interrumpe al agente y retoma la misma sesión con tu instrucción.",
+        });
+        return json(res, 202, { ok: true });
+      }
+      if (p === "/mode") {
+        // El modo ejecución se retiró: el trabajo va por "Encargar trabajo".
+        return json(res, 410, {
+          error: "El modo ejecución se retiró: usa \"Encargar trabajo\" (corre en el tracker con plan, pasos y 60 min).",
+          exec: false,
+        });
       }
       if (p === "/cancel") {
-        const ok = cancelTurn();
+        const ok = cancelTurn("user");
         return json(res, 200, { ok, turnId: turn?.id ?? null });
       }
       if (p === "/quit") {
@@ -1841,10 +2076,30 @@ async function handler(req, res) {
   }
 }
 
+/**
+ * Devuelve el motivo si el POST NO viene de la propia página del chat
+ * (Host local exacto + Origin coincidente, o fetch same-origin sin Origin).
+ */
+function rejectCrossOrigin(req) {
+  const host = String(req.headers.host || "").toLowerCase();
+  const okHosts = [`127.0.0.1:${listeningPort}`, `localhost:${listeningPort}`];
+  if (!okHosts.includes(host)) return `host ${host || "vacío"}`;
+  const origin = req.headers.origin;
+  if (origin) {
+    try {
+      if (!okHosts.includes(new URL(origin).host.toLowerCase())) return `origin ${origin}`;
+    } catch {
+      return `origin inválido ${origin}`;
+    }
+    return "";
+  }
+  const site = req.headers["sec-fetch-site"];
+  if (site && site !== "same-origin" && site !== "none") return `sec-fetch-site ${site}`;
+  return "";
+}
+
 function shutdown() {
-  try {
-    if (turn?.child) turn.child.kill();
-  } catch {}
+  killTree(turn?.child);
   if (observerPoller) clearInterval(observerPoller);
   try {
     trackerClient?.close();
@@ -1855,9 +2110,7 @@ function shutdown() {
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
 process.on("exit", () => {
-  try {
-    if (turn?.child) turn.child.kill();
-  } catch {}
+  killTree(turn?.child);
 });
 process.on("uncaughtException", (e) => log(`uncaught: ${e?.stack ?? e}`));
 process.on("unhandledRejection", (e) => log(`unhandled: ${e?.stack ?? e}`));
@@ -1939,17 +2192,18 @@ const listen = (port) =>
   // lo detiene solo (la herramienta quedó atrapada — ej. lanzó una app en
   // primer plano — y seguir esperando solo quema el timeout completo).
   setInterval(() => {
-    if (!turn || turn.status !== "running" || DEMO) return;
+    if (!turn || turn.status !== "running" || turn.cancelled || DEMO) return;
     const silence = Date.now() - (turn.lastEventAt ?? turn.startedAt);
     if (silence >= STUCK_CANCEL_MS) {
       log(`watchdog: ${Math.round(silence / 60000)} min sin eventos — detengo el turno`);
       emit("notice", {
+        turnId: turn.id,
         level: "warn",
-        text: `Turno detenido automáticamente: ${Math.round(
+        text: `Consulta detenida automáticamente: ${Math.round(
           silence / 60000,
-        )} min sin ninguna respuesta del agente (una herramienta quedó bloqueada, ej. lanzó una app en primer plano). Lo parcial queda en el historial; vuelve a pedirlo indicando que el comando anterior se colgó.`,
+        )} min sin ninguna señal del agente (una herramienta quedó bloqueada, ej. lanzó una app en primer plano). Lo parcial queda en el historial; vuelve a pedirlo indicando que el comando anterior se colgó.`,
       });
-      cancelTurn();
+      cancelTurn("stuck");
       return;
     }
     if (silence >= STUCK_WARN_MS && !turn.stuckWarned) {
@@ -1958,6 +2212,7 @@ const listen = (port) =>
         .reverse()
         .find((p) => p.kind === "tool" && (p.status === "running" || p.status === "pending"));
       emit("notice", {
+        turnId: turn.id,
         level: "warn",
         text: `⏱ ${Math.round(silence / 60000)} min sin respuesta del agente${
           lastTool ? ` (ejecutando: ${lastTool.label || lastTool.tool})` : ""
@@ -1977,6 +2232,12 @@ const listen = (port) =>
   }, 15_000).unref();
   setInterval(() => {
     const running = turn && turn.status === "running";
+    // Una pestaña conectada (SSE) o una corrida observada NO es inactividad:
+    // antes el server se apagaba con el chat abierto mirando un refresh largo.
+    if (sseClients.size > 0 || observer || pendingAsks.length) {
+      lastActivity = Date.now();
+      return;
+    }
     if (!running && Date.now() - lastActivity > IDLE_MS) {
       log("idle timeout — chau");
       shutdown();

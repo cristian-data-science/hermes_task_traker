@@ -26,7 +26,7 @@ sesión, actividad en vivo, historial y modelos.
 
 Lane de concurrencia por agente: zcode mantiene la regla del swap (default
 paraleliza ×2, modelo distinto exclusivo); claude corre hasta
-`MAX_PARALLEL_CLAUDE=1` sin exclusividad — tareas zcode y claude conviven.
+`MAX_PARALLEL_CLAUDE=2` sin exclusividad — tareas zcode y claude conviven.
 
 Hooks: `register-hooks.mjs` registra los mismos Stop/SessionStart en
 `~/.zcode/cli/config.json` Y `~/.claude/settings.json` (no-op salvo corridas
@@ -40,6 +40,7 @@ JSONL, streaming, tools, tracker — ver abajo).
 ## Arranque
 
 ```bash
+npm run agent-bridge:dev       # puente contra el deployment DEV (convive con el de producción)
 npm run agent-bridge:daemon    # daemon con auto-restart (recomendado)
 npm run agent-bridge           # dispatcher a pelo
 npm run agent-bridge:hooks     # una sola vez: registra hooks Stop/SessionStart
@@ -80,7 +81,8 @@ Variables opcionales (env; defaults ya apuntan a las rutas de esta máquina):
 | `HERMES_CLI` | `…/hermes/venv/Scripts/hermes.exe` | CLI de Hermes |
 | `HERMES_WHATSAPP_TARGET` | `whatsapp:Criss` | target de `hermes send` |
 | `AGENT_RUN_TIMEOUT_MS` | `3600000` | mata corridas colgadas |
-| `MAX_PARALLEL_CLAUDE` | `1` | corridas Claude simultáneas |
+| `MAX_PARALLEL_CLAUDE` | `2` | corridas Claude simultáneas (tope de cortesía con la cuenta; la cola de la app explica cuándo una tarea espera por esto) |
+| `MAX_PARALLEL_DEFAULT` | `2` | corridas ZCode simultáneas con el modelo default (un modelo distinto corre solo por el swap global) |
 
 ## Piezas
 
@@ -107,6 +109,26 @@ El botón **💬 Chatear con el agente** de la app abre `hermesagent://zcode?…
 navegador en `http://127.0.0.1:4311x/`. Es una conversación REAL con la sesión
 de ZCode de la tarea (`zcode -p --resume <sess>`, modo `plan`: responde, no
 ejecuta cambios).
+
+**Un solo motor de ejecución: el despachador (v5, 22-sep-2026).** El chat ya
+no ejecuta trabajo por su cuenta: el viejo "modo ejecución" corría fuera del
+tracker (sin corrida, sin pasos, con tope de 15 min) y dejaba el plan
+congelado. El composer ahora tiene dos acciones y cambia según el estado:
+
+| Estado de la tarea | Enter | Ctrl+Enter / botón |
+|---|---|---|
+| para-revisión, hecho, error, cancelada | **Preguntar** (turno local, solo lectura) | **Encargar trabajo** → `POST /continue` → `agent:continueTask`: la tarea vuelve a la cola y el despachador retoma la MISMA sesión con plan nuevo, pasos, 60 min y WhatsApp |
+| pregunta | Preguntar | **Responder al agente** → `agent:answerQuestion` |
+| despachada, trabajando | **Redirigir en vivo** → `POST /redirect` → `agent:redirectAgent` (el puente interrumpe y retoma) | — |
+| encolada, planificando | espera (observador) | — |
+
+- Candado anti-carrera: si hay una consulta local corriendo al encargar, se
+  detiene ANTES de encolar (dos `--resume` sobre la misma sesión se pisan).
+- Un mensaje enviado con una consulta en curso queda **en espera** (hasta 3)
+  y se pregunta al terminar: ningún texto se pierde en un 409.
+- Solo la propia página puede mandar órdenes: los POST exigen Host
+  `127.0.0.1|localhost:<puerto>` y Origin coincidente (403 si no).
+- Los turnos de consulta de Claude usan el modelo/esfuerzo de la tarea.
 
 **Cómo se ve la respuesta en vivo.** El CLI corre con
 `--output-format stream-json` y escribe en stdout un evento NDJSON por token:
@@ -136,9 +158,13 @@ TRACKER…]`). Sin credenciales cae al snapshot del enlace (`p64/st/ag`).
 - `/events` con `id:` por evento → el navegador reconecta solo y el servidor
   re-envía lo perdido (`Last-Event-ID`); `/state` devuelve el turno en curso
   completo, así recargar la página a mitad de una respuesta no pierde nada.
-- Un turno a la vez (409 si hay otro), timeout de 15 min, botón **Detener**
-  (`/cancel`), auto-apagado a los 30 min sin uso (nunca con un turno abierto),
-  el proceso hijo muere con el servidor.
+- Un turno a la vez (los siguientes esperan en cola), timeout de 15 min por
+  consulta, botón **Detener** (`/cancel`); el watchdog de silencio avisa a
+  los 5 min y detiene a los 12, y la UI dice que fue automático. Auto-apagado
+  a los 30 min sin uso, pero nunca con una pestaña conectada, una corrida
+  observada o un turno abierto. Cancelar mata el ÁRBOL de procesos
+  (`proc.mjs` → `taskkill /T /F`), con cierre de respaldo si un nieto retiene
+  el stdout.
 - El texto final autoritativo sale de la DB (fallback: stdout `--json`).
 
 **Temas.** Tres, conmutables en la cabecera y persistidos en el navegador

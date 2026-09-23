@@ -8,7 +8,7 @@ import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2, Shuffle, FolderOpen, FileText,
-  ExternalLink, MessageCircle,
+  ExternalLink, MessageCircle, RotateCcw, Pencil,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -28,7 +28,7 @@ import {
   type Autonomy,
   type TaskType,
 } from "../lib/constants";
-import { cn, formatRelative, formatAgo, agentModelLabel } from "../lib/utils";
+import { cn, formatRelative, formatAgo, agentModelLabel, deploymentParam } from "../lib/utils";
 import {
   ContextPicker,
   EMPTY_CONTEXT,
@@ -142,15 +142,15 @@ function ArtifactsBlock({
               // La sesión puede NO existir todavía (corrida recién arrancada):
               // el chat abre en modo "esperando sesión" y la adopta apenas
               // el agente la registre.
-              window.location.href = `hermesagent://${host}?path=${encodeURIComponent(task.workspacePath!)}${session ? `&session=${encodeURIComponent(session)}` : ""}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}`;
+              window.location.href = `hermesagent://${host}?path=${encodeURIComponent(task.workspacePath!)}${session ? `&session=${encodeURIComponent(session)}` : ""}&task=${encodeURIComponent(task._id)}&p64=${p64}&st=${encodeURIComponent(st)}&ag=${encodeURIComponent(ag)}${deploymentParam()}`;
             }}
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
             title={
               session
                 ? ["planificando", "despachada", "trabajando"].includes(task.agentState ?? "")
-                  ? "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, EN MODO OBSERVADOR mientras la corrida está activa: historial y razonamiento en vivo. Tildá 'Siempre permitir' la primera vez."
-                  : "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Tildá 'Siempre permitir' la primera vez."
-                : "Abre el chat de la tarea: si el agente todavía no registró su sesión, queda esperando y el razonamiento aparece solo en cuanto arranque. Tildá 'Siempre permitir' la primera vez."
+                  ? "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, EN MODO OBSERVADOR mientras la corrida está activa: historial y razonamiento en vivo. Marca 'Permitir siempre' la primera vez."
+                  : "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Marca 'Permitir siempre' la primera vez."
+                : "Abre el chat de la tarea: si el agente todavía no registró su sesión, queda esperando y el razonamiento aparece solo en cuanto arranque. Marca 'Permitir siempre' la primera vez."
             }
           >
             <MessageCircle className="h-3.5 w-3.5" />
@@ -466,8 +466,8 @@ function StepList({ run, taskDone }: { run: RunView; taskDone?: boolean }) {
       )}
       {run.stalled && !live && (
         <p className="mt-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-          ⚠ Posible atasco: sin actividad registrada por un rato. Podés cancelar
-          la delegación o esperar.
+          ⚠ Posible atasco: sin actividad registrada por un rato. Puedes
+          redirigir al agente, cancelar la delegación o esperar.
         </p>
       )}
       {open && run.startedAt && (
@@ -483,10 +483,13 @@ export function AgentRunsPanel({
   task,
   open,
   onClose,
+  onEditTask,
 }: {
   task: Doc<"tasks"> | null;
   open: boolean;
   onClose: () => void;
+  /** Abre la edición de la tarea (p. ej. para elegir la carpeta que falta). */
+  onEditTask?: () => void;
 }) {
   const { token } = useAuth();
   // Tarea EN VIVO: el prop llega de un snapshot de la vista; sin esto, los
@@ -502,15 +505,18 @@ export function AgentRunsPanel({
       token && task ? { sessionToken: token, taskId: task._id } : "skip",
     ) ?? [];
   const answerQuestion = useMutation(api.agent.answerQuestion);
-  const askHistory = useMutation(api.agent.askHistory);
   const reviewResult = useMutation(api.agent.reviewResult);
   const approvePlan = useMutation(api.agent.approvePlan);
   const requestPlanChanges = useMutation(api.agent.requestPlanChanges);
   const cancelAgent = useMutation(api.agent.cancelAgent);
   const removeTask = useMutation(api.tasks.remove);
   const redirectAgent = useMutation(api.agent.redirectAgent);
+  const continueTask = useMutation(api.agent.continueTask);
 
   const [answer, setAnswer] = useState("");
+  // Instrucción para seguir (para-revisión / hecho): separada de "feedback"
+  // (replanificar) y de "answer" (responder), antes compartían estado.
+  const [instruction, setInstruction] = useState("");
   const [feedback, setFeedback] = useState("");
   const [redirect, setRedirect] = useState("");
   const [acting, setActing] = useState(false);
@@ -540,6 +546,7 @@ export function AgentRunsPanel({
       toast.success(okMsg);
       setAnswer("");
       setFeedback("");
+      setInstruction("");
       setExtraCtx(EMPTY_CONTEXT);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Falló la acción");
@@ -548,9 +555,15 @@ export function AgentRunsPanel({
     }
   }
 
+  // Pregunta del puente por carpeta faltante: escribir la ruta en la
+  // respuesta no sirve (hay que editar la tarea) — se ofrece eso + Reintentar.
+  const missingFolder =
+    state === "pregunta" && (t.agentQuestion ?? "").startsWith("[sin-carpeta]");
   const canAnswer =
-    state === "pregunta" || state === "error" || state === "cancelada";
+    (state === "pregunta" && !missingFolder) || state === "error" || state === "cancelada";
   const canReview = state === "para-revision";
+  // Seguir sobre lo entregado (con sesión): continuar trabajo o solo preguntar.
+  const canFollowUp = state === "para-revision" || state === "hecho";
   // Tarea ya terminada (cualquier camino): las corridas zombis se muestran
   // cerradas y su roadmap completo (ver StepList).
   const taskDone =
@@ -563,7 +576,8 @@ export function AgentRunsPanel({
   const canCancel =
     state && !["hecho", "cancelada"].includes(state);
   // Redirección en vivo: la corrida está activa y Cris quiere cambiar el rumbo
-  // sin matarla. Se entrega en el próximo reporte del agente (--step/--plan).
+  // sin matarla. El puente interrumpe el proceso y lo retoma en la misma
+  // sesión con la instrucción (al instante).
   const canRedirect =
     state === "despachada" || state === "trabajando" || state === "pregunta";
 
@@ -577,7 +591,7 @@ export function AgentRunsPanel({
         taskId: task._id,
         message: redirect.trim(),
       });
-      toast.success("Redirección en cola — se entrega en su próximo reporte");
+      toast.success("Redirección enviada: el puente interrumpe al agente y retoma con tu instrucción");
       setRedirect("");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "No se pudo redirigir");
@@ -685,8 +699,47 @@ export function AgentRunsPanel({
                 <div className="mb-4 rounded-el border-el p-3" style={{ borderColor: "color-mix(in srgb, var(--status-urgente) 45%, transparent)", background: "color-mix(in srgb, var(--status-urgente) 8%, transparent)" }}>
                   <p className="text-xs font-semibold text-ink">El agente pregunta:</p>
                   <div className="mt-1 text-xs text-mute">
-                    <SummaryText text={t.agentQuestion ?? ""} />
+                    <SummaryText text={(t.agentQuestion ?? "").replace(/^\[sin-carpeta\]\s*/, "")} />
                   </div>
+                  {missingFolder && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {onEditTask ? (
+                        <button
+                          onClick={onEditTask}
+                          className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                          Editar tarea y elegir carpeta
+                        </button>
+                      ) : (
+                        <p className="w-full text-[11px] text-mute">
+                          Abre la tarea desde el tablero (lápiz) y elige la carpeta de trabajo.
+                        </p>
+                      )}
+                      <button
+                        disabled={acting}
+                        onClick={() =>
+                          act(
+                            () =>
+                              answerQuestion({
+                                sessionToken: token!,
+                                taskId: task._id,
+                                answer: "Carpeta de trabajo configurada en la tarea: reintenta.",
+                              }),
+                            "Reintentando con la carpeta de la tarea",
+                          )
+                        }
+                        className="btn-primary inline-flex items-center gap-1.5 text-xs"
+                      >
+                        {acting ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <RotateCcw className="h-3.5 w-3.5" />
+                        )}
+                        Reintentar
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -800,48 +853,87 @@ export function AgentRunsPanel({
                 </div>
               )}
 
-              {/* Preguntarle al agente sobre lo ya entregado (hecho): re-despacha
-                  con --resume, así que responde con el contexto de su sesión si
-                  sigue viva. La respuesta llega como corrida nueva. */}
-              {state === "hecho" && task.agentSessionId && (
+              {/* Seguir sobre lo entregado (para-revisión o hecho): continuar con
+                  una instrucción nueva (corrida nueva con plan propio, retoma la
+                  sesión) o solo preguntar (sin tocar nada). Mismo camino que el
+                  chat del agente ("Encargar trabajo" / "Preguntar"). */}
+              {canFollowUp && (
                 <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
                   <label className="label flex items-center gap-1.5">
-                    <MessageCircle className="h-3.5 w-3.5" />
-                    Preguntarle al agente
+                    <CornerDownRight className="h-3.5 w-3.5" />
+                    {state === "hecho" ? "Seguir con el agente" : "Continuar o preguntar"}
                   </label>
                   <textarea
-                    value={answer}
-                    onChange={(e) => setAnswer(e.target.value)}
+                    value={instruction}
+                    onChange={(e) => setInstruction(e.target.value)}
                     rows={3}
-                    placeholder="Sobre las decisiones que tomó, el reporte, o pedile un ajuste — responde con el contexto de lo que hizo…"
+                    placeholder={
+                      state === "hecho"
+                        ? "Un ajuste o trabajo nuevo sobre lo entregado, o una pregunta sobre lo que hizo…"
+                        : "Qué cambiar o qué hacer ahora (el agente retoma su sesión), o una pregunta sobre lo entregado…"
+                    }
                     className="input resize-y font-normal"
                   />
-                  <button
-                    disabled={acting || !answer.trim()}
-                    onClick={() =>
-                      act(
-                        () =>
-                          askHistory({
-                            sessionToken: token!,
-                            taskId: task._id,
-                            question: answer.trim(),
-                          }),
-                        "Pregunta enviada: el agente la responde con el contexto de su sesión",
-                      )
-                    }
-                    className="btn-primary mt-2 inline-flex items-center gap-1.5 text-xs"
-                  >
-                    {acting ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <Send className="h-3.5 w-3.5" />
+                  <div className="mt-2">
+                    <p className="mb-1 text-[10px] text-faint">
+                      Material de contexto opcional (solo lectura; se suma al de la tarea):
+                    </p>
+                    <ContextPicker value={extraCtx} onChange={setExtraCtx} />
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    <button
+                      disabled={acting || !instruction.trim()}
+                      onClick={() =>
+                        act(
+                          () =>
+                            continueTask({
+                              sessionToken: token!,
+                              taskId: task._id,
+                              instruction: instruction.trim(),
+                              mode: "trabajo",
+                              ...(extraCtx.carpetas.length || extraCtx.archivos.length
+                                ? { carpetas: extraCtx.carpetas, archivos: extraCtx.archivos }
+                                : {}),
+                            }),
+                          "Enviado: el agente retoma su sesión con plan y pasos nuevos",
+                        )
+                      }
+                      className="btn-primary inline-flex items-center gap-1.5 text-xs"
+                    >
+                      {acting ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Send className="h-3.5 w-3.5" />
+                      )}
+                      Continuar con esta instrucción
+                    </button>
+                    {task.agentSessionId && (
+                      <button
+                        disabled={acting || !instruction.trim()}
+                        onClick={() =>
+                          act(
+                            () =>
+                              continueTask({
+                                sessionToken: token!,
+                                taskId: task._id,
+                                instruction: instruction.trim(),
+                                mode: "consulta",
+                              }),
+                            "Pregunta enviada: responde con el contexto de su sesión",
+                          )
+                        }
+                        className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+                      >
+                        <MessageCircle className="h-3.5 w-3.5" />
+                        Solo preguntar
+                      </button>
                     )}
-                    Enviar pregunta
-                  </button>
+                  </div>
                   <p className="mt-1.5 text-[10px] text-faint">
-                    Si la sesión aún vive en ZCode responde con todo el contexto;
-                    si fue rotada, responde desde el reporte y los artefactos. Al
-                    terminar queda en para-revisión para tu OK.
+                    Continuar = el agente ejecuta con protocolo completo (plan, pasos,
+                    hasta 60 min, WhatsApp) y vuelve a quedar para tu revisión.
+                    Preguntar = solo responde, sin tocar archivos.
+                    {state === "hecho" ? " La tarea se reabre mientras trabaja." : ""}
                   </p>
                 </div>
               )}
@@ -995,13 +1087,14 @@ export function AgentRunsPanel({
                   );
                 })()}
 
-              {/* Aprobar / rechazar lo que quedó para revisión */}
+              {/* Aprobar lo que quedó para revisión (ajustes: "Continuar con esta
+                  instrucción", arriba) */}
               {canReview && (
                 <div className="mb-4 rounded-el border-el border-line bg-panel2/50 p-3">
                   <p className="text-xs font-semibold text-ink">
                     Resultado esperando tu OK
                   </p>
-                  <div className="mt-2 flex flex-wrap gap-2">
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <button
                       disabled={acting}
                       onClick={() =>
@@ -1020,32 +1113,10 @@ export function AgentRunsPanel({
                       <Check className="h-3.5 w-3.5" />
                       Aprobar
                     </button>
-                    <button
-                      disabled={acting || !feedback.trim()}
-                      onClick={() =>
-                        act(
-                          () =>
-                            reviewResult({
-                              sessionToken: token!,
-                              taskId: task._id,
-                              approve: false,
-                              feedback: feedback.trim(),
-                            }),
-                          "Rechazado: el agente reintentará con tu feedback",
-                        )
-                      }
-                      className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
-                    >
-                      <CornerDownRight className="h-3.5 w-3.5" />
-                      Rechazar y corregir
-                    </button>
+                    <span className="text-[10px] text-faint">
+                      ¿Falta algo? Escríbelo en «Continuar o preguntar».
+                    </span>
                   </div>
-                  <input
-                    value={feedback}
-                    onChange={(e) => setFeedback(e.target.value)}
-                    placeholder="Qué corregir (obligatorio para rechazar)…"
-                    className="input mt-2 text-xs"
-                  />
                 </div>
               )}
 

@@ -114,7 +114,7 @@ export function CatchupNoteField({ task }: { task: Doc<"tasks"> }) {
   return (
     <div
       className={cn(
-        "mb-4 rounded-el border-el p-3 transition-colors",
+        "rounded-el border-el p-3 transition-colors",
         flagged ? "border-accent/50 bg-accent/5" : "border-line bg-panel2/40",
       )}
     >

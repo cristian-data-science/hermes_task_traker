@@ -9,8 +9,17 @@
  *   GET  /state    foto del servidor (turno en curso con sus bloques, tracker, seq)
  *   GET  /history  conversación completa de la sesión
  *   GET  /events   SSE: turn_start · part · delta · part_end · turn_done ·
- *                  turn_error · notice · tracker · resync
- *   POST /ask · /cancel · /quit
+ *                  turn_error · notice · tracker · observer · user_message ·
+ *                  queue · resync
+ *   POST /ask (consulta local, solo lectura; con un turno en curso queda en
+ *        cola) · /continue (encargar trabajo / responder vía tracker) ·
+ *        /redirect (corrida activa: redirección en vivo) · /cancel · /quit
+ *
+ * Composer según el estado de la tarea (capabilities del servidor):
+ *   sin corrida  → Enter = Preguntar · Ctrl+Enter / botón = Encargar trabajo
+ *                  (o "Responder al agente" si dejó una pregunta)
+ *   corrida viva → Enter = Redirigir la corrida en vivo
+ *   en cola / planificando → espera (deshabilitado)
  *
  * Robustez: el SSE reconecta solo (Last-Event-ID → replay en el servidor);
  * tras cada reconexión y cada 8 s sin eventos con un turno abierto se pide
@@ -384,14 +393,18 @@
     ticker: null,
     sideOpen: true, // se decide en init() (ancho real de la ventana o preferencia guardada)
     welcome: null,
-    observer: false, // corrida del dispatcher activa: solo se mira
-    exec: false, // modo ejecución (riendas): el agente puede ejecutar de verdad
+    observer: false, // trabajo del puente en curso sobre esta sesión
+    obsVariant: "", // queued | planning | running
+    caps: null, // capabilities del servidor (qué se puede hacer ahora)
+    queued: [], // burbujas de preguntas en espera de turno
+    confirmedCommission: false, // confirmación de "Encargar" ya dada en esta pestaña
+    exec: false, // modo ejecución retirado (se conserva el campo por compatibilidad)
     sessionPending: false, // abierto antes de que el agente registre su sesión
     pendingBanner: null,
     lastHistAgentBody: null, // body del último turno agent del historial (para agrupar append)
   };
   const SIDE_KEY = "zchat-side";
-  let thread, scroll, statusEl, q, sendBtn, cancelBtn, modeBtn;
+  let thread, scroll, statusEl, q, sendBtn, cancelBtn, commissionBtn;
 
   // ---------- scroll ----------
   function nearBottom() {
@@ -483,12 +496,57 @@
   }
 
   // ---------- render de historial ----------
-  function renderUser(text, at) {
-    const m = el("div", { class: "msg user" });
-    m.append(el("div", { class: "who" }, [el("span", { text: "vos" }), el("span", { text: fmtTime(at) })]));
+  const USER_TAGS = {
+    encargo: "encargo al tracker",
+    consulta: "pregunta vía tracker",
+    respuesta: "respuesta al agente",
+    redireccion: "redirección en vivo",
+    espera: "en espera de turno",
+  };
+  function renderUser(text, at, tag) {
+    const m = el("div", { class: `msg user${tag ? ` tagged tag-${tag}` : ""}` });
+    const who = [el("span", { text: "tú" })];
+    if (tag && USER_TAGS[tag]) who.push(el("span", { class: "tag", text: USER_TAGS[tag] }));
+    who.push(el("span", { text: fmtTime(at) }));
+    m.append(el("div", { class: "who" }, who));
     m.append(el("div", { class: "bubble", text }));
     thread.append(m);
     return m;
+  }
+  /**
+   * Prompt del puente (despacho, seguimiento o redirección) visto en el
+   * historial: se colapsa. Antes aparecía como una burbuja gigante con el
+   * contrato completo; lo que importa es la instrucción de Cris (líneas >>>).
+   */
+  const BRIDGE_PROMPT_RE = /^(agente- |=== HERMES TASK TRACKER|=== REDIRECCIÓN EN VIVO DE CRIS)/;
+  function renderBridgePrompt(text, at) {
+    const m = el("div", { class: "msg user bridge" });
+    const redirect = text.startsWith("=== REDIRECCIÓN EN VIVO");
+    const instr = [...text.matchAll(/^>>> (.+)$/gm)].map((x) => x[1]).join("\n");
+    m.append(
+      el("div", { class: "who" }, [
+        el("span", { text: redirect ? "puente · redirección en vivo" : "puente · instrucciones de la corrida" }),
+        el("span", { text: fmtTime(at) }),
+      ]),
+    );
+    const det = el("details", { class: "bubble bridge-prompt" });
+    det.append(
+      el("summary", { text: instr ? `Instrucción de Cris: ${instr.slice(0, 220)}${instr.length > 220 ? "…" : ""}` : "Prompt de la corrida (contrato + tarea)" }),
+      el("pre", { text }),
+    );
+    m.append(det);
+    thread.append(m);
+    return m;
+  }
+  /** Aviso en el hilo (no un toast efímero): errores de envío, estado, etc. */
+  function threadNotice(text, level = "info") {
+    if (!text) return;
+    if (S.welcome) {
+      S.welcome.remove();
+      S.welcome = null;
+    }
+    thread.append(el("div", { class: `notice ${level}`, text }));
+    stick(nearBottom());
   }
   function renderAgentShell() {
     const root = el("div", { class: "msg agent turn" });
@@ -528,7 +586,9 @@
   }
   function renderHistoryMessage(m) {
     if (m.role === "user") {
-      renderUser(m.blocks.map((b) => b.text).join("\n\n"), m.at);
+      const text = m.blocks.map((b) => b.text).join("\n\n");
+      if (BRIDGE_PROMPT_RE.test(text)) renderBridgePrompt(text, m.at);
+      else renderUser(text, m.at);
       return;
     }
     const { root, body } = renderAgentShell();
@@ -595,7 +655,7 @@
       el("p", { text: "El agente tiene todo el contexto de lo que hizo en la tarea. Pregúntale lo que quieras." }),
     );
     const sugg = el("div", { class: "sugg" });
-    for (const s of ["¿Qué cambiaste exactamente y dónde?", "¿Cómo verificaste el resultado?", "Resumime en 3 líneas qué quedó hecho", "¿Qué quedó pendiente o con riesgo?"]) {
+    for (const s of ["¿Qué cambiaste exactamente y dónde?", "¿Cómo verificaste el resultado?", "Resúmeme en 3 líneas qué quedó hecho", "¿Qué quedó pendiente o con riesgo?"]) {
       const b = el("button", { type: "button", text: s });
       b.addEventListener("click", () => {
         q.value = s;
@@ -733,7 +793,15 @@
       if (!finalText && !joined && !d.cancelled) {
         this.body.append(el("div", { class: "notice warn", text: "El agente terminó sin texto de respuesta." }));
       }
-      if (d.cancelled) this.body.append(el("div", { class: "notice info", text: "Respuesta detenida por vos." }));
+      if (d.cancelled) {
+        const why =
+          d.reason === "stuck"
+            ? "Consulta detenida automáticamente: el agente pasó demasiado tiempo sin dar señales."
+            : d.reason === "handoff"
+              ? "Consulta detenida para encargar el trabajo al tracker."
+              : "Respuesta detenida por ti.";
+        this.body.append(el("div", { class: `notice ${d.reason === "stuck" ? "warn" : "info"}`, text: why }));
+      }
       const bits = [];
       if (d.model) bits.push(`<b>${esc(shortModel(d.model))}</b>`);
       const dur = d.durationMs ?? (d.endedAt ? d.endedAt - this.startedAt : null);
@@ -792,6 +860,7 @@
         durationMs: (snap.endedAt || Date.now()) - snap.startedAt,
         endedAt: snap.endedAt,
         cancelled: snap.cancelled,
+        reason: snap.cancelReason,
       });
     } else if (snap.status === "error") {
       v.fail(snap.error);
@@ -842,31 +911,58 @@
       if (!v) resync();
       return v;
     };
-    on("turn_start", (d) => ensureTurn({ id: d.turnId, question: d.question, startedAt: d.startedAt, parts: [] }));
+    on("turn_start", (d) => {
+      // Una pregunta en espera arrancó: su burbuja provisoria se reemplaza.
+      const i = S.queued.findIndex((x) => x.text === d.question);
+      if (i >= 0) {
+        S.queued[i].el.remove();
+        S.queued.splice(i, 1);
+      }
+      ensureTurn({ id: d.turnId, question: d.question, startedAt: d.startedAt, parts: [] });
+    });
     on("part", (d) => view(d.turnId)?.applyPart(d.part));
     on("delta", (d) => view(d.turnId)?.applyDelta(d.id, d.delta, d.end));
     on("part_end", (d) => view(d.turnId)?.endPart(d.id, d.end));
     on("turn_done", (d) => view(d.turnId)?.finish(d));
     on("turn_error", (d) => view(d.turnId)?.fail(d.error, d.partialText));
     on("notice", (d) => {
-      // Notices globales (sin turno): p. ej. el fin de la corrida observada.
-      if (!d.turnId) {
-        toast(d.text || "");
-        return;
-      }
-      view(d.turnId)?.notice(d);
+      // Notices globales (sin turno): al hilo, visibles (antes un toast de
+      // 2,6 s que se perdía, p. ej. el aviso de herramienta bloqueada).
+      const v = d.turnId ? S.turns.get(d.turnId) : null;
+      if (v && v.status === "running") v.notice(d);
+      else threadNotice(d.text, d.level);
     });
     on("phase", (d) => {
       if (d.turnId) view(d.turnId)?.setPhase(d.text);
     });
-    on("tracker", (d) => renderTracker(d.tracker));
-    on("observer", (d) => setObserver(!!d.observer));
+    on("tracker", (d) => {
+      renderTracker(d.tracker);
+      if (d.capabilities) applyCaps(d.capabilities);
+    });
+    on("observer", (d) => {
+      if (d.capabilities) applyCaps(d.capabilities);
+      setObserver(!!d.observer, d.variant || (d.observer ? "running" : ""));
+    });
+    on("user_message", (d) => {
+      if (S.welcome) {
+        S.welcome.remove();
+        S.welcome = null;
+      }
+      renderUser(d.text, d.at || Date.now(), d.kind);
+      stick(true);
+    });
+    on("queue", (d) => {
+      // La cola se vació desde el servidor (p. ej. se encargó trabajo).
+      if (!d.pending && S.queued.length) {
+        for (const x of S.queued) x.el.remove();
+        S.queued = [];
+      }
+    });
     on("session", () => {
       // La sesión pendiente llegó: fuera el banner y a cargar el historial.
       setSessionPending(false);
       loadHistory();
     });
-    on("mode", (d) => setExec(!!d.exec, { silent: true }));
     on("history_append", (d) => appendHistoryMessages(d.messages));
     es.addEventListener("resync", () => resync());
   }
@@ -889,9 +985,9 @@
         S.info = st.info;
         connectSSE(st.seq || 0);
       }
-      setObserver(!!st.observer);
+      if (st.capabilities) applyCaps(st.capabilities);
+      setObserver(!!st.observer, st.observerVariant || (st.observer ? "running" : ""));
       setSessionPending(st.sessionReady === false);
-      setExec(!!st.exec, { silent: true });
     } catch (e) {
       setConn(false);
     } finally {
@@ -900,11 +996,15 @@
   }
 
   // ---------- estado / composer ----------
+  /**
+   * Turno local en curso: el textarea SIGUE habilitado — lo que escribas
+   * queda en cola y se pregunta al terminar (nunca se pierde un mensaje).
+   */
   function setBusy(b) {
-    q.disabled = b;
-    sendBtn.disabled = b || !q.value.trim();
+    S.busy = b;
     cancelBtn.classList.toggle("hidden", !b);
-    if (!b) q.focus();
+    refreshComposer();
+    if (!b && !q.disabled) q.focus();
   }
 
   // ---------- identidad (agente · modelo · esfuerzo) ----------
@@ -967,72 +1067,91 @@
         text: "⏳ esperando a que el agente arranque su sesión — el razonamiento aparece acá solo (suele tardar segundos)",
       });
       thread.append(S.pendingBanner);
-      q.disabled = true;
-      sendBtn.disabled = true;
-      q.placeholder = "El agente está arrancando…";
       stick(true);
-    } else {
-      if (S.pendingBanner) {
-        S.pendingBanner.remove();
-        S.pendingBanner = null;
-      }
-      // El composer vuelve a habilitarlo setObserver/off (según la corrida).
-      if (!S.observer) {
-        q.disabled = false;
-        sendBtn.disabled = !q.value.trim();
-        q.placeholder = S.exec
-          ? "Pide lo que quieras — se ejecuta de verdad (modo ejecución)…"
-          : "Pregúntale al agente… (Enter envía · Shift+Enter salto de línea)";
-      }
+    } else if (S.pendingBanner) {
+      S.pendingBanner.remove();
+      S.pendingBanner = null;
     }
+    refreshComposer();
   }
-  function setObserver(on) {
-    if (S.observer === on) return;
+  const OBSERVER_DIVIDER = {
+    queued: "⏳ en cola del puente — el agente arranca en cuanto haya un espacio libre",
+    planning: "📋 el agente está planificando (solo lectura) — el razonamiento aparece solo",
+    running: "👁 corrida del agente en curso — el razonamiento aparece solo · escribe para redirigirla",
+  };
+  function setObserver(on, variant = on ? "running" : "") {
+    if (S.observer === on && S.obsVariant === variant) return;
+    const was = S.observer;
     S.observer = on;
+    S.obsVariant = variant;
     if (on) {
       if (S.welcome) {
         S.welcome.remove();
         S.welcome = null;
       }
-      thread.append(
-        el("div", {
-          class: "divider",
-          text: "👁 corrida del dispatcher en curso — modo observador (el razonamiento aparece solo)",
-        }),
-      );
-      q.disabled = true;
-      sendBtn.disabled = true;
-      q.placeholder = "Corrida activa — mirando el razonamiento en vivo (puedes preguntar cuando termine)…";
+      thread.append(el("div", { class: "divider", text: OBSERVER_DIVIDER[variant] || OBSERVER_DIVIDER.running }));
       stick(true);
-    } else {
-      q.disabled = false;
-      sendBtn.disabled = !q.value.trim();
-      q.placeholder = S.exec
-        ? "Pide lo que quieras — se ejecuta de verdad (modo ejecución)…"
-        : "Pregúntale al agente… (Enter envía · Shift+Enter salto de línea)";
+    } else if (was) {
       q.focus();
     }
+    refreshComposer();
   }
-  function setExec(on, { silent } = {}) {
-    if (S.exec === on) return;
-    S.exec = on;
-    modeBtn.textContent = on ? "⚡ modo ejecución" : "👁 solo consulta";
-    modeBtn.classList.toggle("mode-exec", on);
-    modeBtn.classList.toggle("mode-readonly", !on);
-    modeBtn.title = on
-      ? "MODO EJECUCIÓN ACTIVO: lo que pidas se ejecuta de verdad (edita archivos, corre comandos). Toca para volver a solo consulta."
-      : "Solo consulta: el agente responde pero no ejecuta cambios (respeta el contrato de la tarea). Toca para tomar las riendas.";
+  function applyCaps(caps) {
+    S.caps = caps || null;
+    refreshComposer();
+  }
+  /**
+   * Única fuente del aspecto del composer: placeholder, hint, botones y si
+   * se puede escribir, según sesión / observador / capabilities.
+   */
+  function refreshComposer() {
+    if (!q || !commissionBtn) return;
+    const caps = S.caps || {};
+    const box = document.querySelector(".composer .box");
     const hint = $("hint");
-    hint.textContent = on
-      ? "Tus instrucciones prevalecen sobre el contrato — el agente ejecuta de verdad"
-      : "Responde con todo el contexto de su sesión";
-    hint.classList.toggle("hint-exec", on);
-    q.placeholder = on
-      ? "Pide lo que quieras — se ejecuta de verdad (Enter envía)…"
-      : "Pregúntale al agente… (Enter envía · Shift+Enter salto de línea)";
-    document.querySelector(".composer .box")?.classList.toggle("box-exec", on);
-    renderIdentity();
-    if (!silent) toast(on ? "⚡ Modo ejecución activo: lo que pidas se ejecuta." : "Modo solo consulta restaurado.");
+    const redirecting = S.observer && S.obsVariant === "running";
+    const waiting = S.sessionPending || (S.observer && !redirecting);
+    q.disabled = waiting;
+    box?.classList.toggle("box-exec", redirecting);
+    hint.classList.toggle("hint-exec", redirecting);
+    // Botón secundario: Encargar trabajo / Responder al agente.
+    const canCommission = !S.observer && (caps.canContinue || caps.answersQuestion);
+    commissionBtn.classList.toggle("hidden", !canCommission);
+    commissionBtn.textContent = caps.answersQuestion ? "↩ Responder al agente" : "⚙ Encargar trabajo";
+    commissionBtn.title = caps.answersQuestion
+      ? "El agente te hizo una pregunta: tu mensaje va como respuesta y retoma su sesión con protocolo completo (Ctrl+Enter)"
+      : "El agente ejecuta esto en el tracker: retoma su sesión con plan, pasos, 60 min y aviso por WhatsApp (Ctrl+Enter)";
+    commissionBtn.disabled = !q.value.trim();
+    if (S.sessionPending) {
+      q.placeholder = "El agente está arrancando…";
+      hint.textContent = "El historial aparece solo en cuanto el agente registre su sesión";
+    } else if (redirecting) {
+      q.placeholder = caps.canRedirect
+        ? "Redirigir la corrida en vivo… (Enter envía: el agente se interrumpe y retoma con tu instrucción)"
+        : "Corrida activa — mirando el razonamiento en vivo…";
+      hint.textContent = "Corrida activa: lo que escribas llega al agente como redirección en vivo";
+      q.disabled = !caps.canRedirect;
+    } else if (S.observer) {
+      q.placeholder =
+        S.obsVariant === "queued"
+          ? "En cola del puente — espera a que el agente arranque…"
+          : "El agente está planificando — espera su plan…";
+      hint.textContent = "Mientras el puente trabaja, el chat observa";
+    } else if (caps.answersQuestion) {
+      q.placeholder = "Responde la pregunta del agente… (Ctrl+Enter responde · Enter solo pregunta)";
+      hint.textContent = "El agente te hizo una pregunta (panel de misión): respóndela con «Responder al agente»";
+    } else {
+      q.placeholder = caps.canContinue
+        ? "Pregunta (Enter) o encarga trabajo (Ctrl+Enter)…"
+        : "Pregúntale al agente… (Enter envía · Shift+Enter salto de línea)";
+      hint.textContent = S.busy
+        ? "Respondiendo… lo que envíes ahora espera su turno"
+        : caps.canContinue
+          ? "Preguntar = solo lectura, al instante · Encargar = el agente ejecuta en el tracker"
+          : "Responde con todo el contexto de su sesión";
+    }
+    sendBtn.disabled = q.disabled || !q.value.trim();
+    sendBtn.title = redirecting ? "Redirigir la corrida (Enter)" : "Preguntar (Enter)";
   }
   /** Mensajes nuevos de la corrida observada: se agregan al hilo. */
   function appendHistoryMessages(messages) {
@@ -1090,36 +1209,83 @@
     q.style.height = "auto";
     q.style.height = Math.min(q.scrollHeight, 220) + "px";
     sendBtn.disabled = q.disabled || !q.value.trim();
+    commissionBtn.disabled = !q.value.trim();
   }
-  async function send() {
+  /** Devuelve el texto al composer (un envío fallido nunca pierde lo escrito). */
+  function restore(text) {
+    if (!q.value.trim()) q.value = text;
+    autosize();
+    q.focus();
+  }
+  /**
+   * Enviar. kind: "ask" (Enter) o "continue" (Ctrl+Enter / botón). Con una
+   * corrida activa, cualquier envío es una redirección en vivo.
+   */
+  async function send(kind = "ask") {
     const text = q.value.trim();
-    if (!text || (S.current && S.current.status === "running")) return;
+    if (!text || q.disabled) return;
+    const redirecting = S.observer && S.obsVariant === "running";
+    let url = "/ask";
+    let body = { q: text };
+    if (redirecting) {
+      url = "/redirect";
+    } else if (kind === "continue") {
+      const caps = S.caps || {};
+      if (!caps.canContinue && !caps.answersQuestion) return;
+      if (!caps.answersQuestion && !S.confirmedCommission) {
+        const ok = confirm(
+          "Encargar trabajo al agente\n\n" +
+            "La tarea vuelve a la cola del tracker y el agente retoma su sesión para EJECUTAR esto " +
+            "con el protocolo completo: plan, pasos visibles, estado final, aviso por WhatsApp y hasta 60 min.\n\n¿Encargar?",
+        );
+        if (!ok) return;
+        S.confirmedCommission = true;
+      }
+      url = "/continue";
+      body = { q: text, mode: "trabajo" };
+    }
     q.value = "";
     autosize();
-    setBusy(true);
-    setStatus(`<span class="dot"></span><span class="phase">Enviando</span><span class="detail">…</span>`);
     let r;
     try {
-      r = await postJson("/ask", { q: text });
+      r = await postJson(url, body);
     } catch {
-      toast("Sin conexión con el servidor local del chat.");
-      q.value = text;
-      autosize();
-      setBusy(false);
-      setStatus(null);
+      threadNotice("Sin conexión con el servidor local del chat: tu mensaje sigue en el cuadro de texto.", "warn");
+      restore(text);
       return;
+    }
+    // Encargar con una consulta en curso: detenerla primero (candado).
+    if (!r.ok && r.busy && url === "/continue") {
+      if (!confirm("Hay una consulta respondiéndose. ¿Detenerla y encargar el trabajo?")) {
+        restore(text);
+        return;
+      }
+      try {
+        r = await postJson("/continue", { ...body, cancelFirst: true });
+      } catch {
+        r = { ok: false, error: "Sin conexión con el servidor local del chat." };
+      }
     }
     if (!r.ok) {
-      toast(r.error || `No se pudo enviar (HTTP ${r.status}).`);
-      if (r.status !== 409) {
-        q.value = text;
-        autosize();
-      }
-      setBusy(r.status === 409);
-      if (r.status !== 409) setStatus(null);
+      threadNotice(
+        (r.error || `No se pudo enviar (HTTP ${r.status}).`) +
+          (r.redirectable && url !== "/redirect" ? " Pulsa Enter de nuevo para enviarlo como redirección." : ""),
+        "warn",
+      );
+      restore(text);
       return;
     }
-    ensureTurn({ id: r.turnId, question: r.question || text, startedAt: r.startedAt || Date.now(), parts: [] });
+    if (url === "/ask") {
+      if (r.queued) {
+        const bubble = renderUser(text, Date.now(), "espera");
+        S.queued.push({ text: r.question || text, el: bubble });
+        stick(true);
+        return;
+      }
+      setStatus(`<span class="dot"></span><span class="phase">Enviando</span><span class="detail">…</span>`);
+      ensureTurn({ id: r.turnId, question: r.question || text, startedAt: r.startedAt || Date.now(), parts: [] });
+    }
+    // /continue y /redirect: la burbuja llega por SSE (user_message).
   }
   async function cancel() {
     cancelBtn.disabled = true;
@@ -1195,6 +1361,22 @@
     // Plan
     const plan = run?.plan || [];
     const steps = run?.steps || [];
+    if (run?.awaitingPlan) {
+      // Seguimiento recién arrancado: aún no declara su plan. El anterior se
+      // muestra atenuado (no al 100 % como si fuera el trabajo actual).
+      const prev = run.previousPlan;
+      parts.push(
+        `<div class="sec"><div class="sec-head"><h2>Plan del seguimiento</h2><span class="count">esperando</span></div><p class="summary-text dim">El agente está por declarar el plan de este seguimiento…</p>${
+          prev?.plan?.length
+            ? `<details class="prev-plan"><summary>Plan de la corrida anterior (${prev.plan.length} pasos)</summary><ol class="steps dim">${prev.plan
+                .map((p, i) => `<li class="step"><span class="mark">${i + 1}</span><span class="text">${esc(p)}</span></li>`)
+                .join("")}</ol></details>`
+            : ""
+        }</div>`,
+      );
+    } else if (run?.followUpKind === "consulta" && run?.open) {
+      parts.push(`<div class="sec"><h2>Consulta en curso</h2><p class="summary-text dim">El agente responde tu pregunta en solo lectura; la respuesta aparece como resumen.</p></div>`);
+    }
     if (plan.length) {
       const done = run.doneCount ?? steps.length;
       const current = run.current ?? 0;
@@ -1314,39 +1496,18 @@
     scroll.addEventListener("scroll", () => {
       if (nearBottom()) $("jump").classList.add("hidden");
     });
-    sendBtn.addEventListener("click", send);
+    commissionBtn = $("commission");
+    sendBtn.addEventListener("click", () => send("ask"));
+    commissionBtn.addEventListener("click", () => send("continue"));
     cancelBtn.addEventListener("click", cancel);
-    modeBtn = $("mode");
-    modeBtn.addEventListener("click", async () => {
-      if (S.exec) {
-        // Volver a solo consulta: sin ceremonia.
-        try {
-          await postJson("/mode", { exec: false });
-        } catch {}
-        setExec(false);
-        return;
-      }
-      // Activar ejecución: confirmación explícita — el contrato queda en las
-      // manos de Cris y lo que pida se ejecuta de verdad.
-      const ok = confirm(
-        "⚡ Modo ejecución (tomar las riendas)\n\n" +
-          "El contrato de la tarea queda subordinado a TUS instrucciones de este chat: " +
-          "el agente va a editar archivos, correr comandos y hacer git si se lo pedís.\n\n" +
-          "Solo tú puedes revertirlo (mismo botón). ¿Activar?",
-      );
-      if (!ok) return;
-      try {
-        await postJson("/mode", { exec: true });
-        setExec(true);
-      } catch {
-        toast("No pude cambiar el modo (¿server vivo?).");
-      }
-    });
     q.addEventListener("input", autosize);
     q.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        send();
+        send("continue");
+      } else if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        send("ask");
       }
     });
     document.addEventListener("click", async (e) => {
@@ -1399,9 +1560,9 @@
     S.info = st.info;
     S.seq = st.seq || 0;
     renderTracker(st.tracker);
+    applyCaps(st.capabilities);
     setSessionPending(st.sessionReady === false);
-    setExec(!!(st.exec ?? st.info?.exec), { silent: true });
-    setObserver(!!st.observer);
+    setObserver(!!st.observer, st.observerVariant || (st.observer ? "running" : ""));
     await loadHistory();
     if (st.turn && st.turn.status === "running") hydrateTurn(st.turn);
     connectSSE(S.seq);

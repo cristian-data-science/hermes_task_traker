@@ -76,7 +76,7 @@ rl.on("close", () => {
 while (stdinAbierto) {
   let question;
   try {
-    question = (await rl.question("\n🧑 vos > ")).trim();
+    question = (await rl.question("\n🧑 tú > ")).trim();
   } catch {
     break; // stdin cerrado (EOF / terminal cerrada)
   }

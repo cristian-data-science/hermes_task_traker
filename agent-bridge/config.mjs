@@ -37,8 +37,24 @@ const repoEnv = parseEnvFile(path.join(REPO_DIR, ".env.local"));
  * Para pruebas contra dev: CONVEX_URL=https://adept-lyrebird-492.convex.cloud
  */
 const PROD_CONVEX_URL = "https://effervescent-crab-895.convex.cloud";
+/**
+ * Deployments conocidos. Los procesos que lanza el protocolo hermesagent://
+ * (selector de carpetas, chat) reciben `--deployment=<nombre>` con el
+ * deployment de la app que los pidió: antes siempre publicaban en producción
+ * y, probando en dev, la carpeta elegida nunca llegaba (quedaba "esperando").
+ * Lista CERRADA a propósito: la URL la dispara cualquier página web y las
+ * credenciales del puente no deben viajar a un host arbitrario.
+ */
+const KNOWN_DEPLOYMENTS = {
+  "effervescent-crab-895": PROD_CONVEX_URL,
+  "adept-lyrebird-492": "https://adept-lyrebird-492.convex.cloud",
+};
+const argDeployment = process.argv
+  .find((a) => a.startsWith("--deployment="))
+  ?.slice("--deployment=".length);
 export const CONVEX_URL =
   process.env.CONVEX_URL ||
+  (argDeployment && KNOWN_DEPLOYMENTS[argDeployment]) ||
   repoEnv.CONVEX_URL ||
   PROD_CONVEX_URL;
 
@@ -126,8 +142,20 @@ export const HERMES_CLI = resolveHermesCli();
 /** Target de WhatsApp según `hermes send --list`. */
 export const WHATSAPP_TARGET = process.env.HERMES_WHATSAPP_TARGET || "whatsapp:Criss";
 
+/**
+ * Sufijo por deployment para archivos locales del puente: dev y producción
+ * pueden correr A LA VEZ desde la misma carpeta (antes compartían candado y
+ * un puente dev no podía arrancar con el de producción vivo: las tareas de
+ * dev quedaban encoladas para siempre). Producción conserva los nombres de
+ * siempre (sin sufijo) para no romper instalaciones existentes.
+ */
+export const DEPLOYMENT_TAG =
+  CONVEX_URL === PROD_CONVEX_URL
+    ? ""
+    : `.${(CONVEX_URL.match(/https?:\/\/([^.]+)/)?.[1] ?? "custom").replace(/[^a-z0-9-]/gi, "")}`;
+
 /** Cache del token de sesión (30 días; gitignored). */
-export const TOKEN_CACHE = path.join(BRIDGE_DIR, ".token-cache.json");
+export const TOKEN_CACHE = path.join(BRIDGE_DIR, `.token-cache${DEPLOYMENT_TAG}.json`);
 
 /** Backup del config de ZCode durante el swap de modelo (gitignored). */
 export const MODEL_BACKUP = path.join(BRIDGE_DIR, ".model-backup.json");
@@ -155,18 +183,13 @@ export const AUTONOMY_MODE = {
   autonomo: "yolo",
 };
 
-/** Nudge de WhatsApp (modo periodica) si la corrida pasa esto sin novedades. */
-export const NUDGE_MS = 10 * 60 * 1000;
-
-/** Concurrencia: una tarea a la vez (el swap de modelo lo exige). */
-export const MAX_CONCURRENT = 1;
-
 /**
  * Corridas Claude en paralelo: el modelo va por flag (--model/--effort), no
  * hay swap global, así que el límite es solo cortesía con la cuenta
- * Enterprise (y con la máquina).
+ * Enterprise (y con la máquina). Default 2: delegar varias tareas a la vez
+ * sin que la segunda espere en cola (decisión de Cris, 22-sep).
  */
-export const MAX_PARALLEL_CLAUDE = Number(process.env.MAX_PARALLEL_CLAUDE || 1);
+export const MAX_PARALLEL_CLAUDE = Number(process.env.MAX_PARALLEL_CLAUDE || 2);
 
 export function assertConfig() {
   const problems = [];
@@ -197,6 +220,6 @@ export function claudeWarnings() {
   // Nombre pelado ("claude"): se resuelve por PATH, así que se busca ahí.
   const found = CLAUDE_CLI === "claude" ? existsInPath("claude") : existsSync(CLAUDE_CLI);
   if (!found)
-    warns.push(`CLI de Claude Code no encontrado (se usa "${CLAUDE_CLI}"): instalalo con npm i -g @anthropic-ai/claude-code o seteá CLAUDE_CLI`);
+    warns.push(`CLI de Claude Code no encontrado (se usa "${CLAUDE_CLI}"): instálalo con npm i -g @anthropic-ai/claude-code o define CLAUDE_CLI`);
   return warns;
 }

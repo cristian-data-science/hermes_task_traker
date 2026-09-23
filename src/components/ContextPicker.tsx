@@ -41,7 +41,10 @@ export function ContextPicker({
           : `${paths.length} archivo(s) agregado(s)`,
       );
     },
-    () => toast("Selección cancelada"),
+    (reason) =>
+      reason === "timeout"
+        ? toast.error("El selector de Windows no respondió. Revisa que el protocolo hermesagent esté instalado, o escribe la ruta a mano.")
+        : toast("Selección cancelada"),
   );
 
   const quitar = (kind: "carpetas" | "archivos", p: string) =>
@@ -64,7 +67,7 @@ export function ContextPicker({
           ) : (
             <FolderOpen className="h-3.5 w-3.5" />
           )}
-          Elegir carpeta…
+          Agregar carpeta…
         </button>
         <button
           type="button"
@@ -78,7 +81,7 @@ export function ContextPicker({
           ) : (
             <FileText className="h-3.5 w-3.5" />
           )}
-          Elegir archivos…
+          Agregar archivos…
         </button>
       </div>
       {hay && (

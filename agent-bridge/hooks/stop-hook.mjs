@@ -22,6 +22,10 @@ async function main() {
   const taskId = process.env.ZCODE_TASK_ID;
   const runId = process.env.ZCODE_RUN_ID;
   if (!taskId || !runId) return; // sesión normal del usuario: no-op
+  // Corrida del despachador actual: él reporta el fin de proceso con la
+  // respuesta real del agente y el código de salida (el hook solo tenía un
+  // texto genérico y ganaba la carrera). El hook queda para puentes viejos.
+  if (process.env.HERMES_BRIDGE_POSTEXIT === "1") return;
 
   // stdin: payload del hook (leemos por si trae session_id del transcript).
   let sessionId = process.env.ZCODE_SESSION_ID_FOR_HOOK || "";
@@ -51,7 +55,7 @@ async function main() {
     "--state",
     "para-revision",
     "--summary",
-    "(watchdog) La sesión terminó sin reporte explícito del agente. Revisá la corrida en la app o re-despachá si quedó incompleto.",
+    "(watchdog) La sesión terminó sin reporte explícito del agente. Revisa la corrida en la app o vuelve a despacharla si quedó incompleta.",
     "--watchdog",
   ];
   if (sessionId) args.push("--session-id", sessionId);

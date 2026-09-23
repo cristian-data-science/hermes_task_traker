@@ -1532,3 +1532,70 @@ textarea:disabled {
   color: var(--ink-3);
   font-weight: 400;
 }
+
+/* ---- v5: composer de dos acciones, burbujas etiquetadas, prompts del puente ---- */
+#commission {
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--info) 55%, transparent);
+  color: var(--info);
+}
+#commission.hidden {
+  display: none;
+}
+#commission:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.msg .who .tag {
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--ink-2);
+  letter-spacing: 0.02em;
+}
+.msg.tag-encargo .who .tag,
+.msg.tag-respuesta .who .tag {
+  color: var(--info);
+  border-color: color-mix(in srgb, var(--info) 50%, transparent);
+}
+.msg.tag-redireccion .who .tag {
+  color: #fbbf24;
+  border-color: color-mix(in srgb, #f59e0b 55%, transparent);
+}
+.msg.tag-espera .bubble {
+  opacity: 0.65;
+  border: 1px dashed var(--line);
+}
+.msg.user.bridge {
+  align-items: stretch;
+}
+.bubble.bridge-prompt {
+  max-width: 100%;
+  background: transparent;
+  border: 1px dashed var(--line);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  padding: 8px 12px;
+  white-space: normal;
+}
+.bubble.bridge-prompt summary {
+  cursor: pointer;
+  color: var(--ink-1, inherit);
+}
+.bubble.bridge-prompt pre {
+  white-space: pre-wrap;
+  max-height: 320px;
+  overflow: auto;
+  font-size: 11.5px;
+  margin: 8px 0 0;
+}
+.prev-plan summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--ink-3);
+  margin-top: 6px;
+}
+.steps.dim {
+  opacity: 0.6;
+}

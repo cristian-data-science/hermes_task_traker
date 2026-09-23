@@ -108,7 +108,7 @@ If mode = "pick" Then
   pkKey = qsValue(qs, "key")
   If (pkKind = "folder" Or pkKind = "files") And Len(pkKey) > 7 And IsSafeToken(pkKey) Then
     CreateObject("WScript.Shell").Run _
-      "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\picker.mjs"" " & pkKey & " " & pkKind, _
+      "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\picker.mjs"" " & pkKey & " " & pkKind & DeploymentFlag(qs), _
       0, False
   End If
   WScript.Quit
@@ -186,7 +186,7 @@ If Len(path) > 4 And (Mid(path, 2, 2) = ":\" Or Left(path, 2) = "\\") Then
     ' 8º argumento = agente (zcode | claude): el servidor elige adaptador.
     If sessArg <> "" And tk <> "" And IsSafeToken(tk) Then
       CreateObject("WScript.Shell").Run _
-        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & sessArg & " """ & path & """ " & p64 & " " & st & " " & ag & " " & tk & " " & th & " " & agentKind, _
+        "node --no-warnings ""C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\zchat-server.mjs"" " & sessArg & " """ & path & """ " & p64 & " " & st & " " & ag & " " & tk & " " & th & " " & agentKind & DeploymentFlag(qs), _
         0, False
     End If
   Else
@@ -257,6 +257,15 @@ Function URLEnc(s)
 End Function
 
 ' true si todos los caracteres son [A-Za-z0-9_-] (ids de sesión: sess_<hex>).
+' Deployment de la app que abrio el enlace (cx=<nombre>): el selector y el
+' chat publican/leen en ESE deployment (config.mjs solo acepta los conocidos).
+Function DeploymentFlag(q)
+  Dim cx
+  cx = qsValue(q, "cx")
+  DeploymentFlag = ""
+  If cx <> "" And Len(cx) < 64 And IsSafeToken(cx) Then DeploymentFlag = " --deployment=" & cx
+End Function
+
 Function IsSafeToken(s)
   Dim i, code
   IsSafeToken = True
