@@ -339,6 +339,12 @@ export const create = mutation({
       ),
     );
 
+    // Ruta de trabajo: solo absoluta de este PC (misma regla que update).
+    if (args.workspacePath && !/^([a-zA-Z]:\\|\\\\)/.test(args.workspacePath.trim())) {
+      throw new Error(
+        `La carpeta debe ser una ruta absoluta de este PC (C:\\… o \\\\servidor\\…): "${args.workspacePath.slice(0, 120)}"`,
+      );
+    }
     const taskId = await ctx.db.insert("tasks", {
       title: sanitized.title ?? args.title,
       area: args.area,
@@ -502,6 +508,17 @@ export const update = mutation({
     // El executor final decide si la tarea queda delegada; el vaciado de
     // carpeta (workspacePath="") se normaliza ANTES como el resto de strings.
     if (patch.workspacePath === "") patch.workspacePath = undefined;
+    // Ruta de trabajo: solo absoluta de este PC (C:\… o \\servidor\…). Una
+    // ruta rota (p. ej. barras invertidas perdidas) dejaba la tarea
+    // rebotando en "carpeta inexistente" sin que se viera por qué.
+    if (
+      patch.workspacePath !== undefined &&
+      !/^([a-zA-Z]:\\|\\\\)/.test(patch.workspacePath.trim())
+    ) {
+      throw new Error(
+        `La carpeta debe ser una ruta absoluta de este PC (C:\\… o \\\\servidor\\…): "${patch.workspacePath.slice(0, 120)}"`,
+      );
+    }
     const asPatch = patch as Record<string, unknown>;
     const nextExecutor = patch.executor ?? task.executor;
     const delegating = isDelegatedExecutor(nextExecutor);
