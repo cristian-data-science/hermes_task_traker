@@ -250,7 +250,7 @@ export function TaskCard({
         {AGENT_UI_ENABLED &&
           isDelegatedExecutor(task.executor) &&
           task.agentLastStep &&
-          ["despachada", "trabajando", "pregunta"].includes(
+          ["despachada", "trabajando", "iterando", "pregunta"].includes(
             task.agentState ?? "",
           ) && (
             <span

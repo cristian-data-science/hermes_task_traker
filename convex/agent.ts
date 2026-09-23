@@ -32,6 +32,7 @@ const sessionArg = { sessionToken: v.string() };
 /** Estados que puede reportar el agente (el ciclo arranca en encolada). */
 const reportableStateUnion = v.union(
   v.literal("trabajando"),
+  v.literal("iterando"),
   v.literal("pregunta"),
   v.literal("para-revision"),
   v.literal("hecho"),
@@ -60,15 +61,17 @@ const areaUnion = v.union(
   v.literal("personal"),
 );
 
-/** Mapeo agentState → estado del tablero (CONTRATO_AGENTE.md §2). */
+/** Mapeo agentState → estado del tablero (CONTRATO_AGENTE.md §2).
+ *  para-revision/plan-para-aprobar NO mueven la columna: la tarea se queda
+ *  donde estaba (en curso, urgente…) y solo el badge del agente informa.
+ *  iterando = follow-up de trabajo sobre lo entregado: corre como en curso. */
 export const AGENT_STATE_TO_STATUS: Record<string, Doc<"tasks">["status"]> = {
   encolada: "pendiente",
   planificando: "en-curso",
-  "plan-para-aprobar": "standby",
   despachada: "en-curso",
   trabajando: "en-curso",
+  iterando: "en-curso",
   pregunta: "urgente",
-  "para-revision": "standby",
   hecho: "completado",
   error: "urgente",
   cancelada: "pendiente",
@@ -258,6 +261,20 @@ export async function applyAgentState(
       updatedAt: now,
       ...extraTask,
     });
+    // para-revision ya no cambia la columna (se queda donde estaba), pero el
+    // resultado SÍ debe reflejarse en ClickUp: la descripción pasa a llevar
+    // el resumen de la corrida (Hecho/Avance) en vez del prompt inicial.
+    if (
+      newState === "para-revision" &&
+      task.area === "patagonia" &&
+      task.clickupId
+    ) {
+      await ctx.scheduler.runAfter(0, internal.clickup.syncTask, {
+        sessionToken,
+        taskId: task._id,
+        op: "status",
+      });
+    }
   }
 
   // Defensa estructural: llegar a un estado terminal CIERRA la corrida abierta
@@ -317,6 +334,7 @@ export async function closeOpenRun(
         (r.state === "planificando" ||
           r.state === "despachada" ||
           r.state === "trabajando" ||
+          r.state === "iterando" ||
           r.state === "pregunta"),
     )
     .sort((a, b) => b.startedAt - a.startedAt)[0];
@@ -345,7 +363,7 @@ export const _closeOrphanRuns = internalMutation({
   handler: async (ctx) => {
     const now = Date.now();
     const runs = await ctx.db.query("agentRuns").collect();
-    const openStates = ["planificando", "despachada", "trabajando", "pregunta"];
+    const openStates = ["planificando", "despachada", "trabajando", "iterando", "pregunta"];
     const orphans = runs.filter(
       (r) => !r.endedAt && openStates.includes(r.state),
     );
@@ -450,6 +468,7 @@ export const redirectQueue = query({
           !!t.agentRedirect &&
           (t.agentState === "despachada" ||
             t.agentState === "trabajando" ||
+            t.agentState === "iterando" ||
             t.agentState === "pregunta"),
       )
       .map((t) => ({
@@ -499,7 +518,7 @@ export const agentOverview = query({
       .slice(0, 50);
     return {
       queue: pick(["encolada"]),
-      working: pick(["planificando", "despachada", "trabajando"]),
+      working: pick(["planificando", "despachada", "trabajando", "iterando"]),
       review: pick(["plan-para-aprobar", "pregunta", "para-revision", "error"]),
       done: pick(["hecho"]).filter(
         (t) => (t.completedAt ?? t.updatedAt) >= cut,
@@ -963,6 +982,12 @@ export const claimTask = mutation({
     // cosecha el plan con submitPlan). Tras aprobar (planApproved), el claim
     // siguiente abre la corrida de ejecución con el flujo clásico.
     const planningPhase = task.planMode === true && task.planApproved !== true;
+    // Follow-up de TRABAJO sobre lo ya entregado (continuación o feedback del
+    // chat): la corrida se marca "iterando" desde el arranque — mismo flujo
+    // que trabajando, pero visible como iteración con Cris en la vista agente.
+    const iterando =
+      !planningPhase &&
+      (followUpKind === "continuacion" || followUpKind === "feedback");
     // Corridas previas que quedaron "abiertas" (típico: la corrida que dejó
     // una PREGUNTA — sigue sin endedAt hasta que Cris responde): se cierran
     // aquí, conservando su estado. Si no, un reporte tardío de ese proceso
@@ -978,7 +1003,7 @@ export const claimTask = mutation({
     const runId = await ctx.db.insert("agentRuns", {
       taskId,
       agent: isDelegatedExecutor(task.executor) ? task.executor : "zcode",
-      state: planningPhase ? "planificando" : "despachada",
+      state: planningPhase ? "planificando" : iterando ? "iterando" : "despachada",
       resumed: resumed ?? false,
       autonomy: task.autonomy,
       workspacePath: workspacePath ?? task.workspacePath,
@@ -993,7 +1018,7 @@ export const claimTask = mutation({
     await applyAgentState(
       ctx,
       task,
-      planningPhase ? "planificando" : "despachada",
+      planningPhase ? "planificando" : iterando ? "iterando" : "despachada",
       sessionToken,
       {
         agentFollowUp: undefined,
@@ -1038,7 +1063,7 @@ export const redirectAgent = mutation({
     if (
       !isDelegatedExecutor(task.executor) ||
       !task.agentState ||
-      !["despachada", "trabajando", "pregunta"].includes(task.agentState)
+      !["despachada", "trabajando", "iterando", "pregunta"].includes(task.agentState)
     )
       throw new Error(
         `La tarea no tiene una corrida activa (estado: ${task.agentState ?? "sin delegar"})`,
@@ -1082,7 +1107,7 @@ function reportAllowed(
   if (args.force) return { accept: true };
   const st = task.agentState;
   const terminal = ["para-revision", "hecho", "error", "cancelada"].includes(args.state);
-  if (st === "despachada" || st === "trabajando") return { accept: true };
+  if (st === "despachada" || st === "trabajando" || st === "iterando") return { accept: true };
   if (st === "planificando") {
     // Solo el despachador reporta aquí (el modo plan bloquea report.mjs).
     if (args.watchdog && (args.state === "para-revision" || args.state === "hecho"))
@@ -1091,7 +1116,7 @@ function reportAllowed(
   }
   if (st === "pregunta") {
     // Pasos/plan se registran sin sacar a la tarea de la pregunta abierta.
-    if (args.state === "trabajando") return { accept: true, appendOnly: true };
+    if (args.state === "trabajando" || args.state === "iterando") return { accept: true, appendOnly: true };
     if (args.state === "pregunta") return { accept: true };
     if (terminal && !args.watchdog) return { accept: true };
     return { accept: false, reason: "la tarea espera la respuesta de Cris a una pregunta" };
@@ -1169,13 +1194,21 @@ export const agentReport = mutation({
           .filter(
             (r) =>
               !r.endedAt &&
-              (r.state === "despachada" || r.state === "trabajando" || r.state === "pregunta"),
+              (r.state === "despachada" || r.state === "trabajando" || r.state === "iterando" || r.state === "pregunta"),
           )
           .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
     }
     // El plan PREVIO viaja al return: report.mjs lo usa para distinguir el
     // plan inicial de un RE-plan (el WhatsApp de re-plan es compacto).
     const previousPlan = run?.plan ?? null;
+    // Corrida de iteración (follow-up de trabajo sobre lo entregado): el
+    // "trabajando" del protocolo se muestra como "iterando" — en el tablero
+    // es lo mismo (en curso); en la vista del agente se lee como iteración.
+    const effectiveState =
+      args.state === "trabajando" &&
+      (run?.followUpKind === "continuacion" || run?.followUpKind === "feedback")
+        ? "iterando"
+        : args.state;
     // Protocolo --plan: el roadmap que el agente INTENTA seguir (≤10 × 120).
     const planList = args.plan
       ?.map((p) => p.trim().slice(0, 120))
@@ -1191,7 +1224,7 @@ export const agentReport = mutation({
           ...(progressLog ?? []),
           { at: now, text: stepText },
         ].slice(-20);
-      } else if (args.state === "trabajando" && summary) {
+      } else if ((effectiveState === "trabajando" || effectiveState === "iterando") && summary) {
         // Reporte intermedio sin paso explícito: su primera línea entra igual
         // a la lista, para que la evolución se vea (protocolo viejo/hibrido).
         const firstLine = summary.split("\n")[0].slice(0, 120);
@@ -1210,12 +1243,15 @@ export const agentReport = mutation({
         });
       } else {
         await ctx.db.patch(run._id, {
-          state: args.state as Doc<"agentRuns">["state"],
+          state: effectiveState as Doc<"agentRuns">["state"],
           // Un paso sin resumen no borra el resumen/error previos de la corrida.
           ...(summary !== undefined ? { summary } : {}),
           progressLog,
           plan: planList?.length ? planList : run.plan,
-          stalled: args.state === "trabajando" ? run.stalled : undefined,
+          stalled:
+            effectiveState === "trabajando" || effectiveState === "iterando"
+              ? run.stalled
+              : undefined,
           endedAt: terminal ? now : undefined,
           ...(args.exitCode !== undefined ? { exitCode: args.exitCode } : {}),
           ...(args.error !== undefined ? { error: args.error.slice(0, 1000) } : {}),
@@ -1242,22 +1278,22 @@ export const agentReport = mutation({
       await ctx.db.patch(task._id, { ...mirror, updatedAt: now });
     } else {
       // Tarea: estado + snapshot de sesión + pregunta/progreso + pasos espejo.
-      await applyAgentState(ctx, task, args.state, args.sessionToken, {
+      await applyAgentState(ctx, task, effectiveState, args.sessionToken, {
         agentSessionId: args.sessionId ?? task.agentSessionId,
         agentQuestion:
-          args.state === "pregunta"
+          effectiveState === "pregunta"
             ? args.question!.slice(0, QUESTION_MAX)
             : undefined,
         ...mirror,
       });
       await logEvent(ctx, {
         taskId: args.taskId,
-        kind: args.state === "pregunta" ? "agent_question" : "agent_update",
+        kind: effectiveState === "pregunta" ? "agent_question" : "agent_update",
         task,
         at: now,
         detail: [
-          args.state,
-          args.state === "pregunta" ? args.question : summary?.split("\n")[0],
+          effectiveState,
+          effectiveState === "pregunta" ? args.question : summary?.split("\n")[0],
           args.watchdog ? "(watchdog)" : undefined,
         ]
           .filter(Boolean)
@@ -1270,7 +1306,7 @@ export const agentReport = mutation({
     // reporte final, se convierte en una CONTINUACIÓN — la tarea vuelve a la
     // cola y el agente retoma su sesión con esa instrucción.
     let carriedOver = false;
-    if (args.state === "para-revision" && !gate.appendOnly && task.agentRedirect) {
+    if (effectiveState === "para-revision" && !gate.appendOnly && task.agentRedirect) {
       const fresh = await ctx.db.get(task._id);
       if (fresh && fresh.agentState === "para-revision") {
         carriedOver = true;

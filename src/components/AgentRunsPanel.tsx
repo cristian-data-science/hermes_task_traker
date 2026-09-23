@@ -8,7 +8,7 @@ import { useMutation, useQuery } from "convex/react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   X, CornerDownRight, Check, Ban, Send, Loader2, Copy, Trash2, Shuffle, FolderOpen, FileText,
-  ExternalLink, MessageCircle, RotateCcw, Pencil,
+  ExternalLink, MessageCircle, RotateCcw, Pencil, Repeat,
 } from "lucide-react";
 import toast from "react-hot-toast";
 import type { Doc } from "~/convex/_generated/dataModel";
@@ -147,7 +147,7 @@ function ArtifactsBlock({
             className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
             title={
               session
-                ? ["planificando", "despachada", "trabajando"].includes(task.agentState ?? "")
+                ? ["planificando", "despachada", "trabajando", "iterando"].includes(task.agentState ?? "")
                   ? "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, EN MODO OBSERVADOR mientras la corrida está activa: historial y razonamiento en vivo. Marca 'Permitir siempre' la primera vez."
                   : "Abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea: historial completo, razonamiento y respuesta en vivo, y el plan de la tarea actualizado en tiempo real. Marca 'Permitir siempre' la primera vez."
                 : "Abre el chat de la tarea: si el agente todavía no registró su sesión, queda esperando y el razonamiento aparece solo en cuanto arranque. Marca 'Permitir siempre' la primera vez."
@@ -155,7 +155,7 @@ function ArtifactsBlock({
           >
             <MessageCircle className="h-3.5 w-3.5" />
             {session
-              ? ["planificando", "despachada", "trabajando"].includes(task.agentState ?? "")
+              ? ["planificando", "despachada", "trabajando", "iterando"].includes(task.agentState ?? "")
                 ? "Ver razonamiento en vivo"
                 : "Chatear con el agente"
               : "Chat del agente (espera sesión)"}
@@ -579,7 +579,7 @@ export function AgentRunsPanel({
   // sin matarla. El puente interrumpe el proceso y lo retoma en la misma
   // sesión con la instrucción (al instante).
   const canRedirect =
-    state === "despachada" || state === "trabajando" || state === "pregunta";
+    state === "despachada" || state === "trabajando" || state === "iterando" || state === "pregunta";
 
   /** Redirección en vivo: cambia el rumbo de la corrida activa. */
   async function handleRedirect() {
@@ -864,6 +864,7 @@ export function AgentRunsPanel({
                     {state === "hecho" ? "Seguir con el agente" : "Continuar o preguntar"}
                   </label>
                   <textarea
+                    id={`continuar-${task._id}`}
                     value={instruction}
                     onChange={(e) => setInstruction(e.target.value)}
                     rows={3}
@@ -1113,8 +1114,24 @@ export function AgentRunsPanel({
                       <Check className="h-3.5 w-3.5" />
                       Aprobar
                     </button>
+                    <button
+                      onClick={() => {
+                        // Sin fricción: salta al bloque de iteración (mismo
+                        // camino que el chat): el agente retoma su sesión.
+                        const ta = document.getElementById(
+                          `continuar-${task._id}`,
+                        ) as HTMLTextAreaElement | null;
+                        ta?.scrollIntoView({ block: "center", behavior: "smooth" });
+                        ta?.focus();
+                      }}
+                      className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
+                    >
+                      <Repeat className="h-3.5 w-3.5" />
+                      Seguir iterando
+                    </button>
                     <span className="text-[10px] text-faint">
-                      ¿Falta algo? Escríbelo en «Continuar o preguntar».
+                      Iterar no cierra la tarea: el agente retoma su sesión con
+                      tus ajustes y vuelve a quedar para revisión.
                     </span>
                   </div>
                 </div>

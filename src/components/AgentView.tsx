@@ -153,7 +153,7 @@ function AgentCard({
   const state = (task.agentState ?? "encolada") as AgentState;
   const meta = AGENT_STATE_META[state];
   const typeMeta = task.taskType ? TASK_TYPE_META[task.taskType as TaskType] : null;
-  const working = ["despachada", "trabajando"].includes(state);
+  const working = ["despachada", "trabajando", "iterando"].includes(state);
   // Link a ClickUp: desvinculada = ya no le pertenece a ClickUp.
   const clickupHref =
     task.clickupUrl ??
@@ -534,7 +534,7 @@ function HistoryRow({
           href={`hermesagent://${task.executor === "claude" ? "claude" : "zcode"}?path=${encodeURIComponent(task.workspacePath)}&session=${encodeURIComponent(task.agentSessionId)}&task=${encodeURIComponent(task._id)}&st=${encodeURIComponent(task.status ?? "")}&ag=${encodeURIComponent(task.agentState ?? "")}${deploymentParam()}`}
           onClick={(e) => e.stopPropagation()}
           title={
-            ["despachada", "trabajando"].includes(task.agentState ?? "")
+            ["despachada", "trabajando", "iterando"].includes(task.agentState ?? "")
               ? "Ver razonamiento en vivo: el chat abre en modo observador contra la sesión EXACTA de esta tarea mientras corre."
               : "Chatear con el agente: abre una página de chat en tu navegador contra la sesión EXACTA de esta tarea, con todo su contexto, razonamiento en vivo y el plan actualizado en tiempo real. Marca 'Permitir siempre' en el diálogo del navegador la primera vez."
           }

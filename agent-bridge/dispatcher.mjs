@@ -583,7 +583,9 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     const open =
       !!fresh &&
       fresh.deletedAt === undefined &&
-      (fresh.agentState === "despachada" || fresh.agentState === "trabajando");
+      (fresh.agentState === "despachada" ||
+        fresh.agentState === "trabajando" ||
+        fresh.agentState === "iterando");
     if (fresh?.agentState === "pregunta") {
       log(`❓ "${task.title}": el agente dejó una pregunta abierta — sin watchdog`);
     }
@@ -606,7 +608,9 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
           runId,
           state: "error",
           error: `${adapter.id} terminó con código ${res.code}${res.err ? `: ${res.err}` : ""}`,
-          summary: response,
+          // null NO pasa el validador (v.optional exige undefined): sin
+          // respuesta del stdout no se manda summary.
+          ...(response ? { summary: response } : {}),
           exitCode: res.code,
           watchdog: true,
         }).catch((e) => log("watchdog report falló:", e.message));

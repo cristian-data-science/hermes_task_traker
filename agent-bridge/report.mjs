@@ -91,6 +91,7 @@ async function main() {
         !r.endedAt &&
         (r.state === "despachada" ||
           r.state === "trabajando" ||
+          r.state === "iterando" ||
           (r.state === "pregunta" && !args.watchdog)),
     );
     if (!open) {

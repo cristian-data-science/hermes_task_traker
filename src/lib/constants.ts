@@ -34,6 +34,7 @@ import {
   Eye,
   AlertTriangle,
   XCircle,
+  Repeat,
   type LucideIcon,
   type LucideProps,
 } from "lucide-react";
@@ -184,6 +185,7 @@ export const AGENT_STATES = [
   "plan-para-aprobar",
   "despachada",
   "trabajando",
+  "iterando",
   "pregunta",
   "para-revision",
   "hecho",
@@ -202,6 +204,7 @@ export const AGENT_STATE_META: Record<
   "plan-para-aprobar": { label: "Plan por aprobar", Icon: ListChecks, tone: "var(--status-standby)", pulse: true },
   despachada: { label: "Despachada", Icon: Send, tone: "var(--status-en-curso)" },
   trabajando: { label: "Trabajando", Icon: Loader2, tone: "var(--status-en-curso)", pulse: true },
+  iterando: { label: "Iterando contigo", Icon: Repeat, tone: "var(--status-en-curso)", pulse: true },
   pregunta: { label: "Pregunta", Icon: HelpCircle, tone: "var(--status-urgente)", pulse: true },
   "para-revision": { label: "Para revisión", Icon: Eye, tone: "var(--status-standby)" },
   hecho: { label: "Hecho", Icon: CheckCircle2, tone: "var(--status-completado)" },

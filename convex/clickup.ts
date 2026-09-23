@@ -4,6 +4,7 @@ import { internalAction, action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
+import { isDelegatedExecutor } from "./schema";
 import {
   CLICKUP_USER_ID,
   CLICKUP_SPACE_ID,
@@ -271,11 +272,27 @@ async function mcpAddComment(
  * Replica las reglas del ex buildTaskBody (REST) en el formato de las tools
  * MCP: claves indefinidas se OMITEN (update nunca limpia fecha/estimación:
  * limpiarlas es una limitación menor por ahora).
+ *
+ * Tareas de AGENTE: la descripción NUNCA lleva task.notes (ahí vive el
+ * prompt que Cris le da al agente — es interno, no contenido para ClickUp).
+ * En su lugar va el resumen de la última corrida (Hecho/Avance: qué se hizo
+ * y qué falta, según reportó el agente). Tareas personales: notes → desc,
+ * como siempre.
  */
-
-function mcpTaskArgs(task: Doc<"tasks">): Record<string, unknown> {
+function mcpTaskArgs(
+  task: Doc<"tasks">,
+  agentSummary?: string | null,
+): Record<string, unknown> {
   const metaLines: string[] = [];
-  if (task.notes) metaLines.push(task.notes);
+  const delegated = isDelegatedExecutor(task.executor);
+  if (!delegated && task.notes) metaLines.push(task.notes);
+  if (delegated && agentSummary?.trim()) {
+    metaLines.push(
+      task.agentState === "hecho" || task.status === "completado"
+        ? `Hecho:\n${agentSummary.trim()}`
+        : `Avance del agente:\n${agentSummary.trim()}`,
+    );
+  }
   if (task.requestedBy) metaLines.push(`Solicitado por: ${task.requestedBy}`);
   if (typeof task.progress === "number")
     metaLines.push(`Progreso: ${task.progress}%`);
@@ -690,6 +707,14 @@ export const syncTask = internalAction({
 
     // Id en ClickUp tras este sync (cambia si la tarea se crea acá abajo).
     let finalClickupId: string | undefined = task.clickupId;
+    // Resumen de la última corrida (tareas de agente): viaja a la DESCRIPCIÓN
+    // de ClickUp (Hecho/Avance) — el prompt de Cris (task.notes) nunca va.
+    const agentSummary = isDelegatedExecutor(task.executor)
+      ? (
+          (await ctx.runQuery(internal.agent._latestRunWithSummary, { taskId }))
+            ?.summary ?? null
+        )
+      : null;
     /**
      * Nota al completar: si la tarea quedó COMPLETADA y la hizo el agente,
      * se agrega a la tarea de ClickUp un comentario con el resumen de lo que
@@ -769,7 +794,7 @@ export const syncTask = internalAction({
         // a diferencia de la API REST donde el POST lo ignoraba. Con parent,
         // ClickUp coloca la tarea en la list donde vive el padre; igual
         // persistimos dest.listId como respaldo hasta resolver la ruta real.
-        const args = mcpTaskArgs(task);
+        const args = mcpTaskArgs(task, agentSummary);
         args.list_id = dest.listId;
         if (dest.parentId) args.parent = dest.parentId;
         const created = await mcpCall("clickup_create_task", args, token);
@@ -794,7 +819,7 @@ export const syncTask = internalAction({
         try {
           await mcpCall(
             "clickup_update_task",
-            { task_id: task.clickupId, ...mcpTaskArgs(task) },
+            { task_id: task.clickupId, ...mcpTaskArgs(task, agentSummary) },
             token,
           );
         } catch (updateErr) {
@@ -809,7 +834,7 @@ export const syncTask = internalAction({
             // Se recrea con destino por defecto (Mesa Técnica si no eligió
             // otro): el opt-out es el check "solo local" en Hermes, no el
             // borrado manual de la tarea allá.
-            const args = mcpTaskArgs(task);
+            const args = mcpTaskArgs(task, agentSummary);
             args.list_id = dest.listId;
             if (dest.parentId) args.parent = dest.parentId;
             const created = await mcpCall("clickup_create_task", args, token);

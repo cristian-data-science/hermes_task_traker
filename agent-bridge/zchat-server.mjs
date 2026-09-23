@@ -678,7 +678,7 @@ function syncObserver(runOpen, variant = runOpen ? "running" : "") {
 }
 
 /** Estados de la tarea (tracker) que significan "hay trabajo del puente en curso". */
-const RUNNING_STATES = ["despachada", "trabajando"];
+const RUNNING_STATES = ["despachada", "trabajando", "iterando"];
 /** Estados sin corrida viva desde los que se puede encargar/preguntar al tracker. */
 const CONTINUABLE_STATES = ["para-revision", "hecho", "error", "cancelada", "pregunta"];
 
