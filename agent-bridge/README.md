@@ -39,6 +39,19 @@ JSONL, streaming, tools, tracker — ver abajo).
 
 ## Arranque
 
+**Puente DEV** (tareas creadas en la app local, deployment `adept-lyrebird-492`):
+convive con el de producción — candado y sesión propios por deployment. Sin
+él, las tareas de dev quedan "encoladas" para siempre. Se lanza oculto con
+`agent-bridge\run-hidden-dev.vbs` (log en `agent-bridge/bridge-dev.log`).
+Para que arranque solo al iniciar sesión (opcional):
+
+```powershell
+Register-ScheduledTask -TaskName "Agent Bridge (dev)" -Trigger (New-ScheduledTaskTrigger -AtLogOn) -Action (New-ScheduledTaskAction -Execute "wscript.exe" -Argument '"C:\Users\patag\git_provisorio\hermes_task_traker\agent-bridge\run-hidden-dev.vbs"')
+```
+
+Ojo: ambos puentes comparten la config global de ZCode; evita correr a la vez
+tareas ZCode con modelo no-default en dev y en producción (swap de modelo).
+
 ```bash
 npm run agent-bridge:dev       # puente contra el deployment DEV (convive con el de producción)
 npm run agent-bridge:daemon    # daemon con auto-restart (recomendado)
