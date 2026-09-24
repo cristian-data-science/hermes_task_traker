@@ -581,6 +581,66 @@ export function TaskModal({
             <div className="flex-1 space-y-6 overflow-y-auto px-4 py-4 sm:px-5">
               {/* ===== Tarea: qué hay que hacer ===== */}
               <ModalSection title="Tarea">
+                {/* Área y Estado primero (pedido de Cris): clasificar antes
+                    de escribir; luego título y notas, y el agente después. */}
+                <div>
+                  <p className="label">Área</p>
+                  <div
+                    role="radiogroup"
+                    aria-label="Área"
+                    className="grid gap-1"
+                    style={{ gridTemplateColumns: `repeat(${visibleAreas.length}, minmax(0, 1fr))` }}
+                  >
+                    {visibleAreas.map((a) => {
+                      const meta = AREA_META[a];
+                      const active = area === a;
+                      return (
+                        <button
+                          key={a}
+                          type="button"
+                          role="radio"
+                          aria-checked={active}
+                          onClick={() => setArea(a)}
+                          style={
+                            {
+                              "--tone": meta.tone,
+                              ...(active
+                                ? {
+                                    borderColor: "var(--tone)",
+                                    background: "color-mix(in srgb, var(--tone) 12%, transparent)",
+                                  }
+                                : {}),
+                            } as CSSProperties
+                          }
+                          className={cn(
+                            "flex items-center justify-center gap-1.5 rounded-el border-el px-2 py-2 text-xs font-medium transition-colors",
+                            active ? "text-ink" : "border-line text-mute hover:bg-panel2",
+                          )}
+                        >
+                          <meta.Icon className="h-4 w-4" style={active ? { color: "var(--tone)" } : undefined} />
+                          {meta.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="label" htmlFor="task-status">Estado</label>
+                  <select
+                    id="task-status"
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value as Status)}
+                    className="input"
+                  >
+                    {STATUSES.map((s) => (
+                      <option key={s} value={s}>
+                        {STATUS_META[s].label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
                 <div>
                   <label className="label" htmlFor="task-title">Título *</label>
                   {/* En teléfono el teclado NO se abre solo: solo al tocar una
@@ -687,75 +747,16 @@ export function TaskModal({
                 )}
               </ModalSection>
 
-              {/* ===== Planificación: dónde vive, en qué estado, cuándo ===== */}
+              {/* ===== Planificación: cuándo y con qué contexto ===== */}
               <ModalSection title="Planificación">
                 <div>
-                  <p className="label">Área</p>
-                  <div
-                    role="radiogroup"
-                    aria-label="Área"
-                    className="grid gap-1"
-                    style={{ gridTemplateColumns: `repeat(${visibleAreas.length}, minmax(0, 1fr))` }}
-                  >
-                    {visibleAreas.map((a) => {
-                      const meta = AREA_META[a];
-                      const active = area === a;
-                      return (
-                        <button
-                          key={a}
-                          type="button"
-                          role="radio"
-                          aria-checked={active}
-                          onClick={() => setArea(a)}
-                          style={
-                            {
-                              "--tone": meta.tone,
-                              ...(active
-                                ? {
-                                    borderColor: "var(--tone)",
-                                    background: "color-mix(in srgb, var(--tone) 12%, transparent)",
-                                  }
-                                : {}),
-                            } as CSSProperties
-                          }
-                          className={cn(
-                            "flex items-center justify-center gap-1.5 rounded-el border-el px-2 py-2 text-xs font-medium transition-colors",
-                            active ? "text-ink" : "border-line text-mute hover:bg-panel2",
-                          )}
-                        >
-                          <meta.Icon className="h-4 w-4" style={active ? { color: "var(--tone)" } : undefined} />
-                          {meta.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <label className="label" htmlFor="task-status">Estado</label>
-                    <select
-                      id="task-status"
-                      value={status}
-                      onChange={(e) => setStatus(e.target.value as Status)}
-                      className="input"
-                    >
-                      {STATUSES.map((s) => (
-                        <option key={s} value={s}>
-                          {STATUS_META[s].label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label">Fecha de entrega</label>
-                    <DatePicker
-                      value={dueDate}
-                      onChange={setDueDate}
-                      placeholder="2026-07-29, mañana…"
-                      label="Calendario de fecha de entrega"
-                    />
-                  </div>
+                  <label className="label">Fecha de entrega</label>
+                  <DatePicker
+                    value={dueDate}
+                    onChange={setDueDate}
+                    placeholder="2026-07-29, mañana…"
+                    label="Calendario de fecha de entrega"
+                  />
                 </div>
 
                 {/* Standby (condicional al estado) */}
