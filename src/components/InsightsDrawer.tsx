@@ -257,7 +257,12 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
       abiertos: buckets.reduce((s, b) => s + b.abiertos, 0),
       promovidos: buckets.reduce((s, b) => s + b.promovidos, 0),
       convertidos: buckets.reduce((s, b) => s + b.convertidos, 0),
-      promedioDia: surgidos / rangeDays,
+      // Promedio por DÍA LABORAL: la ventana es de calendario (7/14/30) pero
+      // sábado y domingo no son días de trabajo — se dividen solo los lunes a
+      // viernes presentes en el rango (buckets ya los contiene, ceros incl.).
+      // Los imprevistos surgidos en fin de semana ruedan al lunes: cuentan en
+      // el numerador y pesan sobre ese día hábil.
+      promedioDia: surgidos / Math.max(1, buckets.length),
       demoraPromedio: demoras.length > 0 ? demoras.reduce((s, d) => s + d, 0) / demoras.length : null,
       planeadas: buckets.reduce((s, b) => s + b.planeadas, 0),
       planeadasHechas: buckets.reduce((s, b) => s + b.planeadasHechas, 0),
@@ -365,7 +370,11 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
 
               {/* ===== Totales ===== */}
               <div className="grid grid-cols-2 gap-2">
-                <Stat label="Imprevistos/día (prom.)" value={totals.promedioDia.toFixed(1)} />
+                <Stat
+                  label="Imprevistos/día laboral (prom.)"
+                  value={totals.promedioDia.toFixed(1)}
+                  hint={`${totals.surgidos} imprevistos ÷ ${buckets.length} días hábiles (lun–vie) del rango`}
+                />
                 <Stat
                   label="Resueltos el mismo día"
                   value={totals.mismoDiaPct === null ? "—" : `${totals.mismoDiaPct}%`}
