@@ -209,6 +209,36 @@ function sanitizeLocalRefs(text: string): string {
   );
 }
 
+/**
+ * ClickUp cuenta PROYECTO, no proceso: nada de agentes, IA, modelos ni
+ * automatización en lo que se publica — la nota debe leer como escrita por
+ * Cris en primera persona (por si alguien la lee en el futuro). Neutraliza
+ * las referencias al andamiaje; la voz en primera persona queda como está.
+ * Orden de mayor a menor especificidad para no partir palabras.
+ */
+function sanitizeAgentRefs(text: string): string {
+  const before = text;
+  let out = text
+    // Andamiaje interno del tracker (frases primero, palabras después).
+    .replace(/\b(?:el |la |del |de la |al |por el )?(?:puente|tracker|agent-bridge|report\.mjs)\b/gi, "")
+    .replace(/\bcorridas del agente\b/gi, "avances")
+    .replace(/\bcorrida del agente\b/gi, "avance")
+    .replace(/\b(?:zcode|claude code|claude|glm(?:[-\s]?[\d.]+)?|opus|sonnet|haiku)\b/gi, "")
+    .replace(/\b(?:el |la )?(?:bot|asistente virtual|copilot)\b/gi, "")
+    .replace(/\binteligencia artificial\b/gi, "")
+    .replace(/\bIA\b/g, "")
+    .replace(/\bagente\b/gi, "equipo")
+    .replace(/\bde manera autom[aá]tica\b|\bautom[aá]tic[oa]s?\b|\bautomatiza[dos]?\b|\bautomatizaci[oó]n\b/gi, "")
+    // Limpieza de huecos que dejan los reemplazos.
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\s+([,.;:])/g, "$1")
+    .replace(/\(\s*\)|\[\s*\]/g, "")
+    .replace(/\n{3,}/g, "\n\n");
+  // Si algo salió mal y el texto quedó vacío, preferimos el original.
+  if (!out.trim()) out = before;
+  return out;
+}
+
 /** ¿El mensaje dice que esa tool no existe en el servidor MCP? */
 function mcpIsUnknownTool(msg: string): boolean {
   const m = msg.toLowerCase();
@@ -287,11 +317,15 @@ function mcpTaskArgs(
   const delegated = isDelegatedExecutor(task.executor);
   if (!delegated && task.notes) metaLines.push(task.notes);
   if (delegated && agentSummary?.trim()) {
-    metaLines.push(
-      task.agentState === "hecho" || task.status === "completado"
-        ? `Hecho:\n${agentSummary.trim()}`
-        : `Avance del agente:\n${agentSummary.trim()}`,
-    );
+    // Nota en primera persona del dueño, sin rastro de agentes/IA: ClickUp
+    // cuenta el proyecto, no el proceso.
+    const limpio = sanitizeAgentRefs(agentSummary.trim());
+    if (limpio.trim())
+      metaLines.push(
+        task.agentState === "hecho" || task.status === "completado"
+          ? `Hecho:\n${limpio}`
+          : `Avance:\n${limpio}`,
+      );
   }
   if (task.requestedBy) metaLines.push(`Solicitado por: ${task.requestedBy}`);
   if (typeof task.progress === "number")
@@ -747,9 +781,11 @@ export const syncTask = internalAction({
       const token = await requireMcpToken(ctx);
       await mcpAddComment(
         finalClickupId,
-        // Sin referencias locales: allá lo lee un cliente, las rutas de tu PC
-        // y los ".md" no le dicen nada. El detalle completo vive en Hermes.
-        sanitizeLocalRefs(runInfo.summary).slice(0, COMMENT_MAX_CHARS),
+        // Sin referencias locales ni a agentes/IA: la nota lee como del
+        // dueño; el detalle completo vive en Hermes.
+        sanitizeAgentRefs(
+          sanitizeLocalRefs(runInfo.summary).slice(0, COMMENT_MAX_CHARS),
+        ),
         token,
       );
       await ctx.runMutation(internal.clickupMutations._markCommented, {
