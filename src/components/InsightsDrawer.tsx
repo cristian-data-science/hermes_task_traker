@@ -35,6 +35,8 @@ type DayBucket = {
   resueltosTarde: number;
   abiertos: number;
   promovidos: number;
+  /** Se transformaron en tarea (promovidos, estén o no completados). */
+  convertidos: number;
   planeadas: number;
   planeadasHechas: number;
 };
@@ -78,6 +80,44 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
   // Drawer agrandable (para leer imprevistos largos) + día desplegado.
   const [wide, setWide] = useState(false);
   const [expandedDay, setExpandedDay] = useState<number | null>(null);
+  // Ancho a mano: agarrar el borde IZQUIERDO y arrastrar a la izquierda
+  // agranda el drawer (persistido; un drag pisa el toggle "wide").
+  const [widthPx, setWidthPx] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem("hermes-insights-width"));
+      return Number.isFinite(v) && v > 0 ? v : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW =
+      (e.currentTarget.parentElement as HTMLElement | null)?.getBoundingClientRect().width ?? 480;
+    const min = Math.min(384, window.innerWidth * 0.9);
+    const max = window.innerWidth * 0.92;
+    let last = startW;
+    // Listeners en WINDOW: el arrastre termina lejos del tirador y la
+    // captura de puntero sintética/no soportada no enruta el up al elemento.
+    const move = (ev: PointerEvent) => {
+      // Derecha-anclado: arrastrar a la IZQUIERDA (clientX baja) agranda.
+      last = Math.max(min, Math.min(max, startW + (startX - ev.clientX)));
+      setWidthPx(last);
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      try {
+        localStorage.setItem("hermes-insights-width", String(Math.round(last)));
+      } catch {
+        // localStorage bloqueado: el ancho vive solo en esta sesión.
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
 
   const today = startOfDay(new Date()).getTime();
   const from = startOfDay(addDays(new Date(), -(rangeDays - 1))).getTime();
@@ -122,6 +162,7 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
           resueltosTarde: 0,
           abiertos: 0,
           promovidos: 0,
+          convertidos: 0,
           planeadas: 0,
           planeadasHechas: 0,
         };
@@ -132,6 +173,8 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
     for (const imp of imprevistos) {
       const b = bucketOf(diaHabil(imp.day));
       b.surgidos++;
+      // Conversión a tarea: promovido ES convertido (luego viva o completada).
+      if (imp.promotedAt !== null) b.convertidos++;
 
       // Un promovido cuya tarea ya se completó ES trabajo terminado: cuenta
       // como resuelto (mismo día o tardío según CUÁNDO se completó la tarea,
@@ -213,6 +256,7 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
       mismoDiaPct: surgidos > 0 ? Math.round((resueltosMismoDia / surgidos) * 100) : null,
       abiertos: buckets.reduce((s, b) => s + b.abiertos, 0),
       promovidos: buckets.reduce((s, b) => s + b.promovidos, 0),
+      convertidos: buckets.reduce((s, b) => s + b.convertidos, 0),
       promedioDia: surgidos / rangeDays,
       demoraPromedio: demoras.length > 0 ? demoras.reduce((s, d) => s + d, 0) / demoras.length : null,
       planeadas: buckets.reduce((s, b) => s + b.planeadas, 0),
@@ -252,9 +296,22 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
             transition={{ type: "spring", stiffness: 340, damping: 30 }}
             className={cn(
               "fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-line bg-panel shadow-el-lg transition-[max-width]",
-              wide ? "max-w-3xl" : "max-w-md",
+              widthPx == null && (wide ? "max-w-3xl" : "max-w-md"),
             )}
+            style={widthPx != null ? { width: widthPx, maxWidth: "92vw" } : undefined}
           >
+            {/* Tirador de redimensionado: borde izquierdo, arrastre a la
+                izquierda agranda. Persiste el ancho elegido. */}
+            <div
+              onPointerDown={startDrag}
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Agrandar el panel (arrastrar a la izquierda)"
+              title="Arrastra hacia la izquierda para agrandar"
+              className="group absolute inset-y-0 left-0 z-10 w-2 cursor-ew-resize touch-none"
+            >
+              <span className="absolute inset-y-0 left-0 w-0.5 bg-line transition-colors group-hover:bg-accent" />
+            </div>
             {/* ===== Header ===== */}
             <div className="flex items-center gap-2 border-b border-line px-4 py-3">
               <BarChart3 className="h-4 w-4 text-accent" />
@@ -322,7 +379,93 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
                   value={`${totals.planeadasHechas}/${totals.planeadas}`}
                   hint="planeadas que quedaron completadas"
                 />
+                <Stat
+                  label="Se transformaron en tarea"
+                  value={
+                    totals.surgidos > 0
+                      ? `${totals.convertidos} de ${totals.surgidos} (${Math.round((totals.convertidos / totals.surgidos) * 100)}%)`
+                      : "—"
+                  }
+                  hint="imprevistos promovidos a tarea, vivas o completadas"
+                />
               </div>
+
+              {/* ===== Imprevistos vs tareas ===== */}
+              <section>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-mute">
+                  Imprevistos vs tareas
+                </h3>
+                <div className="grid grid-cols-2 gap-2">
+                  <Stat
+                    label="Imprevistos por tarea planeada"
+                    value={
+                      totals.planeadas > 0
+                        ? `${(totals.surgidos / totals.planeadas).toFixed(1)} : 1`
+                        : "—"
+                    }
+                    hint={`${totals.surgidos} imprevistos / ${totals.planeadas} planeadas`}
+                  />
+                  <Stat
+                    label="Trabajo que fue imprevisto"
+                    value={
+                      totals.surgidos + totals.planeadas > 0
+                        ? `${Math.round((totals.surgidos / (totals.surgidos + totals.planeadas)) * 100)}%`
+                        : "—"
+                    }
+                    hint="imprevistos sobre el trabajo total del rango"
+                  />
+                  <Stat
+                    label="Resueltos: imprevisto vs plan"
+                    value={`${totals.mismoDia + buckets.reduce((s, b) => s + b.resueltosTarde, 0)} vs ${totals.planeadasHechas}`}
+                    hint="imprevistos resueltos (directo o vía tarea) vs planeadas completadas"
+                  />
+                  <Stat
+                    label="Conversión con tarea completa"
+                    value={
+                      totals.convertidos > 0
+                        ? `${buckets.reduce((s, b) => s + b.convertidos, 0) - buckets.reduce((s, b) => s + b.promovidos, 0)}/${totals.convertidos}`
+                        : "—"
+                    }
+                    hint="promovidos cuya tarea ya se completó"
+                  />
+                </div>
+                {/* Comparación por día: barra ámbar (imprevistos) vs barra de
+                    acento (planeadas), escala común al peor de los dos. */}
+                <ul className="mt-2 flex flex-col gap-1">
+                  {[...buckets].reverse().map((b) => {
+                    const maxEsc = Math.max(
+                      1,
+                      ...buckets.map((x) => Math.max(x.surgidos, x.planeadas)),
+                    );
+                    if (b.surgidos === 0 && b.planeadas === 0) return null;
+                    return (
+                      <li key={b.day} className="flex items-center gap-2 text-[10px]">
+                        <span className="w-20 shrink-0 capitalize text-mute">
+                          {format(new Date(b.day), "EEE d MMM", { locale: es })}
+                        </span>
+                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                          <span
+                            className="h-1.5 rounded-full bg-[#d97706]"
+                            style={{ width: `${Math.max(3, (b.surgidos / maxEsc) * 100)}%` }}
+                            title={`${b.surgidos} imprevistos`}
+                          />
+                          <span
+                            className="h-1.5 rounded-full bg-accent"
+                            style={{ width: `${Math.max(3, (b.planeadas / maxEsc) * 100)}%` }}
+                            title={`${b.planeadas} tareas planeadas`}
+                          />
+                        </span>
+                        <span className="w-16 shrink-0 text-right text-mute">
+                          <b className="text-[#d97706]">{b.surgidos}</b> / <b className="text-accent">{b.planeadas}</b>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                <p className="mt-1 text-[10px] text-faint">
+                  Ámbar: imprevistos surgidos · Acento: tareas planeadas del día.
+                </p>
+              </section>
 
               {/* ===== Por día (clickeable: despliega los imprevistos del día) ===== */}
               <section>
@@ -385,9 +528,12 @@ export function InsightsDrawer({ open, onClose, tasks }: InsightsDrawerProps) {
                               {b.abiertos} abiertos
                             </span>
                           )}
-                          {b.promovidos > 0 && (
-                            <span className="shrink-0 text-xs text-accent" title="promovidos a tarea">
-                              {b.promovidos} prom
+                          {b.convertidos > 0 && (
+                            <span
+                              className="shrink-0 text-xs text-accent"
+                              title={`se transformaron en tarea: ${b.convertidos}${b.promovidos > 0 ? ` (en curso: ${b.promovidos})` : ""}`}
+                            >
+                              {b.convertidos} → tarea
                             </span>
                           )}
                           {b.planeadas > 0 && (
