@@ -664,6 +664,17 @@ function syncObserver(runOpen, variant = runOpen ? "running" : "") {
       }, 2000);
     }
   } else {
+    // Barrido final ANTES de apagar el poller: la RESPUESTA FINAL del agente
+    // se escribe al archivo entre el último tick y el cierre de la corrida
+    // (segundos antes de que el proceso salga) — sin este swipe queda escrita
+    // en el JSONL pero jamás renderizada en el chat.
+    try {
+      const { messages } = readHistory(OBSERVER_WINDOW);
+      const fresh = messages.filter((m) => !historyIds.has(m.id));
+      if (fresh.length) emit("history_append", { messages: fresh });
+    } catch {
+      // lectura transitoria: lo perdido se ve al recargar el historial
+    }
     if (observerPoller) {
       clearInterval(observerPoller);
       observerPoller = null;
