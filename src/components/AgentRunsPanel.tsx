@@ -28,7 +28,14 @@ import {
   type Autonomy,
   type TaskType,
 } from "../lib/constants";
-import { cn, formatRelative, formatAgo, agentModelLabel, deploymentParam } from "../lib/utils";
+import {
+  cn,
+  formatRelative,
+  formatAgo,
+  agentModelLabel,
+  claudeAccountLabel,
+  deploymentParam,
+} from "../lib/utils";
 import {
   ContextPicker,
   EMPTY_CONTEXT,
@@ -555,12 +562,16 @@ export function AgentRunsPanel({
     }
   }
 
-  // Pregunta del puente por carpeta faltante: escribir la ruta en la
-  // respuesta no sirve (hay que editar la tarea) — se ofrece eso + Reintentar.
+  // Pregunta del puente por carpeta faltante o cuenta de Claude sin sesión:
+  // escribir en la respuesta no sirve (hay que editar la tarea / iniciar
+  // sesión) — se ofrece eso + Reintentar.
   const missingFolder =
     state === "pregunta" && (t.agentQuestion ?? "").startsWith("[sin-carpeta]");
+  const missingSession =
+    state === "pregunta" && (t.agentQuestion ?? "").startsWith("[sin-sesion]");
+  const blockedByBridge = missingFolder || missingSession;
   const canAnswer =
-    (state === "pregunta" && !missingFolder) || state === "error" || state === "cancelada";
+    (state === "pregunta" && !blockedByBridge) || state === "error" || state === "cancelada";
   const canReview = state === "para-revision";
   // Seguir sobre lo entregado (con sesión): continuar trabajo o solo preguntar.
   const canFollowUp = state === "para-revision" || state === "hecho";
@@ -699,9 +710,9 @@ export function AgentRunsPanel({
                 <div className="mb-4 rounded-el border-el p-3" style={{ borderColor: "color-mix(in srgb, var(--status-urgente) 45%, transparent)", background: "color-mix(in srgb, var(--status-urgente) 8%, transparent)" }}>
                   <p className="text-xs font-semibold text-ink">El agente pregunta:</p>
                   <div className="mt-1 text-xs text-mute">
-                    <SummaryText text={(t.agentQuestion ?? "").replace(/^\[sin-carpeta\]\s*/, "")} />
+                    <SummaryText text={(t.agentQuestion ?? "").replace(/^\[(sin-carpeta|sin-sesion)\]\s*/, "")} />
                   </div>
-                  {missingFolder && (
+                  {blockedByBridge && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {onEditTask ? (
                         <button
@@ -709,11 +720,13 @@ export function AgentRunsPanel({
                           className="btn-ghost inline-flex items-center gap-1.5 border-el text-xs hover:text-ink"
                         >
                           <Pencil className="h-3.5 w-3.5" />
-                          Editar tarea y elegir carpeta
+                          {missingSession ? "Editar tarea: cuenta / iniciar sesión" : "Editar tarea y elegir carpeta"}
                         </button>
                       ) : (
                         <p className="w-full text-[11px] text-mute">
-                          Abre la tarea desde el tablero (lápiz) y elige la carpeta de trabajo.
+                          {missingSession
+                            ? "Abre la tarea desde el tablero (lápiz) e inicia sesión en la cuenta o elige otra."
+                            : "Abre la tarea desde el tablero (lápiz) y elige la carpeta de trabajo."}
                         </p>
                       )}
                       <button
@@ -724,9 +737,13 @@ export function AgentRunsPanel({
                               answerQuestion({
                                 sessionToken: token!,
                                 taskId: task._id,
-                                answer: "Carpeta de trabajo configurada en la tarea: reintenta.",
+                                answer: missingSession
+                                  ? "Sesión de la cuenta de Claude Code iniciada: reintenta."
+                                  : "Carpeta de trabajo configurada en la tarea: reintenta.",
                               }),
-                            "Reintentando con la carpeta de la tarea",
+                            missingSession
+                              ? "Reintentando con la cuenta de la tarea"
+                              : "Reintentando con la carpeta de la tarea",
                           )
                         }
                         className="btn-primary inline-flex items-center gap-1.5 text-xs"
@@ -1219,6 +1236,15 @@ export function AgentRunsPanel({
                         const label = run.model ? agentModelLabel(run.model) : "";
                         return label ? <span>{label}</span> : null;
                       })()}
+                      {run.account && (
+                        <span
+                          className="rounded-full border border-line px-1.5 py-px text-[10px]"
+                          title={`Cuenta de Claude Code verificada al lanzar${run.accountEmail ? `: ${run.accountEmail}` : ""}`}
+                        >
+                          Cuenta: {claudeAccountLabel(run.account)}
+                          {run.accountEmail ? ` · ${run.accountEmail}` : ""}
+                        </span>
+                      )}
                       {run.resumed && <span>· seguimiento</span>}
                       <RunTiming run={run} queuedAt={t.agentQueuedAt} />
                       {run.sessionId && (

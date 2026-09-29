@@ -9,9 +9,9 @@
  * mismo borrador que el resto del formulario.
  */
 import { useState, type ReactNode } from "react";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import toast from "react-hot-toast";
-import { Circle, CircleDot, Rocket, Compass } from "lucide-react";
+import { Circle, CircleDot, Rocket, Compass, RefreshCw, LogIn, Loader2 } from "lucide-react";
 import { api } from "~/convex/_generated/api";
 import { useAuth } from "../hooks/useAuth";
 import { useNativePicker } from "../hooks/useNativePicker";
@@ -33,7 +33,15 @@ import {
   type Area,
   type DelegatedExecutor,
 } from "../lib/constants";
-import { AGENT_UI_ENABLED, cn } from "../lib/utils";
+import {
+  AGENT_UI_ENABLED,
+  CLAUDE_EFFORTS,
+  CLAUDE_EFFORT_LABEL,
+  cn,
+  composeClaudeModel,
+  formatAgo,
+  splitClaudeModel,
+} from "../lib/utils";
 
 export interface AgentConfig {
   taskType: TaskType | "";
@@ -46,6 +54,8 @@ export interface AgentConfig {
   customArchivos: string[];
   autonomy: Autonomy;
   model: string;
+  /** Cuenta de Claude Code ("" = la default global). Solo executor claude. */
+  claudeAccount: string;
   /** Estrategia Git (solo desarrollo): rama-pr default | main-directo; "solo-local" la fija el modo custom. */
   gitStrategy: GitStrategy;
   notifyWhatsapp: NotifyMode;
@@ -61,6 +71,7 @@ export const EMPTY_AGENT_CONFIG: AgentConfig = {
   customArchivos: [],
   autonomy: "supervisado",
   model: "",
+  claudeAccount: "",
   gitStrategy: "rama-pr",
   notifyWhatsapp: "off",
   planMode: false,
@@ -72,6 +83,7 @@ export function agentConfigFromTask(t: {
   workspacePath?: string;
   autonomy?: string;
   model?: string;
+  claudeAccount?: string;
   gitStrategy?: string;
   notifyWhatsapp?: string;
   planMode?: boolean;
@@ -92,6 +104,7 @@ export function agentConfigFromTask(t: {
       ? (t.autonomy as Autonomy)
       : "supervisado",
     model: t.model ?? "",
+    claudeAccount: t.claudeAccount ?? "",
     gitStrategy:
       t.gitStrategy === "main-directo" || t.gitStrategy === "solo-local"
         ? t.gitStrategy
@@ -247,6 +260,18 @@ export function AgentDelegationSection({
 
   return (
     <div className="divide-y divide-line border-t border-line">
+      {/* Cuenta: con qué login de Claude Code corre (se verifica antes de lanzar). */}
+      {executor === "claude" && (
+        <Dim label="Cuenta" hint="de Claude Code">
+          <ClaudeAccountPicker
+            value={value.claudeAccount}
+            onChange={(claudeAccount) => onChange({ ...value, claudeAccount })}
+            bridgeActive={!!bridge?.active}
+            accent={accent}
+          />
+        </Dim>
+      )}
+
       {/* Modelo: pegado al agente elegido arriba (el catálogo depende de él). */}
       <Dim label="Modelo" hint={`de ${EXECUTOR_META[executor].label}`}>
         <AgentModelSelect
@@ -674,21 +699,226 @@ export function AgentModelSelect({
   );
   const modelList = models?.models ?? [];
   const defaultModel = models?.default ?? "";
-  return (
+  // Claude: el esfuerzo es un control aparte que viaja como sufijo del id
+  // (claude/opus-5.5-medium). Ids viejos con esfuerzo (…-high) se separan.
+  const isClaude = executor === "claude";
+  const { base, effort } = isClaude ? splitClaudeModel(value) : { base: value, effort: "" };
+  // Un id guardado que ya no está en el catálogo se sigue mostrando.
+  const options =
+    base && !modelList.some((m) => m.id === base)
+      ? [...modelList, { id: base, label: base.replace(/^claude\//, "") }]
+      : modelList;
+  const canEffort = isClaude && /^claude\/(sonnet|opus|haiku)/i.test(base);
+  const select = (
     <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
+      value={base}
+      onChange={(e) => {
+        const next = e.target.value;
+        onChange(isClaude ? composeClaudeModel(next, effort || "high") : next);
+      }}
       className="input"
       aria-label={`Modelo de ${EXECUTOR_META[executor].label}`}
     >
       <option value="">
         {defaultModel ? `Default (${defaultModel.split("/").pop()})` : "Default de su config"}
       </option>
-      {modelList.map((m) => (
+      {options.map((m) => (
         <option key={m.id} value={m.id}>
           {m.label}
         </option>
       ))}
     </select>
+  );
+  if (!isClaude) return select;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <div className="min-w-[10rem] flex-1">{select}</div>
+      {canEffort && (
+        <div
+          role="radiogroup"
+          aria-label="Esfuerzo"
+          className="inline-flex rounded-el border-el border-line p-0.5"
+        >
+          {CLAUDE_EFFORTS.map((e) => {
+            // Id sin sufijo (viejo/custom): ninguno activo — no viaja --effort.
+            const active = effort === e;
+            return (
+              <button
+                key={e}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => onChange(composeClaudeModel(base, e))}
+                className={cn(
+                  "rounded-[calc(var(--radius)-2px)] px-2.5 py-1 text-xs font-medium transition-colors",
+                  active ? "bg-orange-500/10 text-ink" : "text-mute hover:text-ink",
+                )}
+              >
+                Esfuerzo {CLAUDE_EFFORT_LABEL[e].toLowerCase()}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {effort && !(CLAUDE_EFFORTS as readonly string[]).includes(effort) && (
+        <span className="text-[10px] text-faint">esfuerzo {CLAUDE_EFFORT_LABEL[effort] ?? effort}</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Cuenta de Claude Code de la tarea: estado REAL del login de cada cuenta
+ * (el puente corre `claude auth status` y lo publica), la default global y
+ * los atajos para verificar ahora o iniciar sesión (el puente abre una
+ * consola con `claude auth login` en el PC; la otra cuenta no se toca).
+ */
+function ClaudeAccountPicker({
+  value,
+  onChange,
+  bridgeActive,
+  accent,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+  bridgeActive: boolean;
+  accent: { text: string; border: string; bg: string };
+}) {
+  const { token } = useAuth();
+  const data = useQuery(api.agent.listClaudeAccounts, token ? { sessionToken: token } : "skip");
+  const setDefault = useMutation(api.agent.setDefaultClaudeAccount);
+  const request = useMutation(api.agent.requestClaudeAccountAction);
+  const [busy, setBusy] = useState<"" | "refresh" | "login">("");
+
+  const accounts = data?.accounts ?? [];
+  const defaultId = data?.defaultAccount ?? "";
+  const effective = value || defaultId;
+  const current = accounts.find((a) => a.id === effective);
+  const lastCheck = accounts.reduce((mx, a) => Math.max(mx, a.checkedAt ?? 0), 0);
+  const stale = !lastCheck || Date.now() - lastCheck > 10 * 60 * 1000;
+  // Solicitud en curso: el puente la consume y la limpia (pending = null).
+  const pending = !!data?.pending?.action;
+
+  const ask = async (action: "refresh" | "login", accountId: string) => {
+    if (!token) return;
+    setBusy(action);
+    try {
+      await request({ sessionToken: token, action, accountId });
+      if (action === "login")
+        toast.success("Se abre una consola en tu PC para iniciar sesión (revisa el navegador).");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "No se pudo enviar la solicitud");
+    } finally {
+      setTimeout(() => setBusy(""), 1500);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div role="radiogroup" aria-label="Cuenta de Claude Code" className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        {accounts.map((a) => {
+          const active = effective === a.id;
+          const known = a.loggedIn !== undefined;
+          return (
+            <button
+              key={a.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(a.id)}
+              className={cn(
+                "flex flex-col gap-0.5 rounded-el border-el p-2 text-left transition-colors",
+                active ? cn(accent.border, accent.bg) : "border-line hover:bg-panel2",
+              )}
+            >
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-ink">
+                <span
+                  aria-hidden
+                  className={cn(
+                    "h-2 w-2 shrink-0 rounded-full",
+                    !known ? "bg-line" : a.loggedIn ? "bg-emerald-500" : "bg-red-500",
+                  )}
+                />
+                {a.label}
+                {a.id === defaultId && (
+                  <span className="rounded-full border border-line px-1.5 text-[9px] font-medium text-faint">
+                    default
+                  </span>
+                )}
+              </span>
+              <span className="truncate text-[10px] leading-snug text-mute">
+                {!known
+                  ? "sin verificar"
+                  : a.loggedIn
+                    ? [a.email, a.orgName && `${a.orgName}${a.subscriptionType ? ` (${a.subscriptionType})` : ""}`]
+                        .filter(Boolean)
+                        .join(" · ") || "sesión iniciada"
+                    : "sin sesión iniciada"}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-faint">
+        <span>
+          {value ? "Cuenta fija para esta tarea." : `Usa la default (${current?.label ?? "—"}).`}
+          {lastCheck ? ` Verificado ${formatAgo(lastCheck)}.` : ""}
+        </span>
+        {value && (
+          <button type="button" className="underline hover:text-ink" onClick={() => onChange("")}>
+            Usar la default
+          </button>
+        )}
+        {effective && effective !== defaultId && token && (
+          <button
+            type="button"
+            className="underline hover:text-ink"
+            onClick={() =>
+              void setDefault({ sessionToken: token, accountId: effective }).then(() =>
+                toast.success(`${current?.label ?? effective} es ahora la cuenta default`),
+              )
+            }
+          >
+            Hacer default
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={!bridgeActive || busy !== "" || pending}
+          onClick={() => void ask("refresh", effective)}
+          className="inline-flex items-center gap-1 underline hover:text-ink disabled:no-underline disabled:opacity-50"
+          title={bridgeActive ? "Correr claude auth status en el PC ahora" : "El puente está apagado"}
+        >
+          <RefreshCw className={cn("h-3 w-3", (busy === "refresh" || pending) && "animate-spin")} />
+          Verificar
+        </button>
+      </div>
+
+      {current && current.loggedIn === false && (
+        <div className="flex flex-wrap items-center gap-2 rounded-el border-el border-red-500/40 bg-red-500/5 p-2 text-[11px] text-ink">
+          <span className="flex-1">
+            La cuenta {current.label} no tiene sesión iniciada: la tarea no se lanzará hasta que inicies sesión.
+          </span>
+          <button
+            type="button"
+            disabled={!bridgeActive || busy !== ""}
+            onClick={() => void ask("login", current.id)}
+            className="btn-primary inline-flex items-center gap-1.5 text-xs disabled:opacity-50"
+          >
+            {busy === "login" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
+            Iniciar sesión
+          </button>
+        </div>
+      )}
+
+      {(!bridgeActive || stale) && (
+        <p className="text-[10px] leading-snug text-amber-600 dark:text-amber-400">
+          {!bridgeActive
+            ? "Puente apagado: no se puede confirmar la sesión. Se verifica de nuevo al lanzar."
+            : "Estado sin verificar hace rato: pulsa Verificar. Igual se verifica al lanzar."}
+        </p>
+      )}
+    </div>
   );
 }

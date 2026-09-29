@@ -19,8 +19,9 @@ sesión, actividad en vivo, historial y modelos.
 | | ZCode | Claude Code |
 |---|---|---|
 | Spawn | `node zcode.cjs -p … --cwd <carpeta> --mode yolo --json` | `claude.exe -p … --permission-mode bypassPermissions --output-format stream-json --verbose` (cwd = carpeta) |
-| Sesión / resume | `sess_…` en `~/.zcode/cli/db/db.sqlite` | uuid; `<uuid>.jsonl` en `~/.claude/projects/<cwd>/` |
-| Modelo | swap global del config (exclusivo) | **por flag**: `claude/sonnet-5-high` → `--model sonnet --effort high` (sin swap, paralelizan) |
+| Sesión / resume | `sess_…` en `~/.zcode/cli/db/db.sqlite` | uuid; `<uuid>.jsonl` en `<config de la cuenta>/projects/<cwd>/` |
+| Modelo | swap global del config (exclusivo) | **por flag**: `claude/opus-5.5-medium` → `--model claude-opus-5-5 --effort medium` (sin swap, paralelizan). Opus 5.5 exige CLI ≥ 2.1.280 |
+| Cuenta | — | **por tarea**: Enterprise (`~/.claude`) o Personal (`~/.claude-personal`, vía `CLAUDE_CONFIG_DIR`); ambas logueadas a la vez, se verifica con `claude auth status` antes de lanzar |
 | Actividad en vivo | tailer del rollout JSONL | eventos stream-json del propio stdout |
 | Auth | la que ya tiene el CLI | cuenta Enterprise del CLI (nada que configurar) |
 
@@ -103,6 +104,7 @@ Variables opcionales (env; defaults ya apuntan a las rutas de esta máquina):
 |---|---|
 | `agents/index.mjs` | registro de adaptadores: el dispatcher/chat eligen por executor |
 | `agents/zcode.mjs` | adaptador ZCode: spawn `--mode yolo --json`, tailer del rollout, swap de modelo |
+| `claude-accounts.mjs` | registro de cuentas de Claude Code (override `CLAUDE_ACCOUNTS`), `claude auth status` por cuenta, env `CLAUDE_CONFIG_DIR`, login rápido (`claude auth login` en consola visible), sesiones entre cuentas |
 | `agents/claude.mjs` | adaptador Claude: spawn stream-json, sesión desde `system/init`, historial JSONL, `--model`/`--effort` por corrida |
 | `dispatcher.mjs` | daemon: suscripción reactiva a la cola (`agent:agentQueue`), spawn vía adaptador, **lanes de paralelismo por agente** (zcode: corridas al modelo default hasta `MAX_PARALLEL_DEFAULT=2`, modelo distinto exclusivo por swap · claude: hasta `MAX_PARALLEL_CLAUDE`), **actividad en vivo** (tailer zcode / stream claude), watchdog de atascos (`AGENT_STALL_MS`, default 10 min) y post-exit, heartbeat con estado (qué corre + cola), lockfile de instancia única |
 | `daemon.mjs` | wrapper con auto-restart (backoff 2s→30s) |

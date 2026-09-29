@@ -70,6 +70,7 @@ import { existsSync, appendFileSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { adapterFor } from "./agents/index.mjs";
 import { claudeModelFlags } from "./agents/claude.mjs";
+import { envForAccount, locateSession } from "./claude-accounts.mjs";
 import { killTree } from "./proc.mjs";
 
 const VERSION = "5.0.0";
@@ -1647,8 +1648,12 @@ function runTurn(t) {
       "--include-partial-messages",
     ];
     try {
+      // Cuenta: la del JSONL de la sesión (--resume solo la encuentra en la
+      // carpeta de config donde vive); sin rastro, la cuenta de la tarea.
+      const acct = locateSession(sessionId, workspacePath)?.accountId || tracker.task?.claudeAccount;
       child = spawn(adapter.exe, args, {
         cwd: workspacePath,
+        env: acct ? envForAccount(process.env, acct) : process.env,
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });

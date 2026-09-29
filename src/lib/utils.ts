@@ -119,6 +119,38 @@ export function agentModelLabel(model: string | undefined): string {
   return model.split("/").pop() ?? "";
 }
 
+/** Esfuerzos que ofrece el picker de Claude (el CLI acepta más: low/xhigh/max). */
+export const CLAUDE_EFFORTS = ["medium", "high"] as const;
+export const CLAUDE_EFFORT_LABEL: Record<string, string> = {
+  low: "Bajo",
+  medium: "Medio",
+  high: "Alto",
+  xhigh: "Muy alto",
+  max: "Máximo",
+};
+
+/**
+ * Id Claude → { base, effort }: "claude/opus-5.5-medium" →
+ * { base: "claude/opus-5.5", effort: "medium" }. Ids viejos o custom quedan
+ * enteros en base (effort "").
+ */
+export function splitClaudeModel(model: string): { base: string; effort: string } {
+  const m = model.match(/^(claude\/(?:sonnet|opus|haiku)(?:-[\d.]+)?)-(low|medium|high|xhigh|max)$/i);
+  return m ? { base: m[1], effort: m[2].toLowerCase() } : { base: model, effort: "" };
+}
+
+/** Inverso de splitClaudeModel (sin base = default de la cuenta, sin sufijo). */
+export function composeClaudeModel(base: string, effort: string): string {
+  if (!base) return "";
+  return /^claude\/(sonnet|opus|haiku)(-[\d.]+)?$/i.test(base) && effort ? `${base}-${effort}` : base;
+}
+
+/** "enterprise" → "Enterprise" (ids del registro de cuentas del puente). */
+export function claudeAccountLabel(id: string | undefined): string {
+  if (!id) return "";
+  return `${id[0].toUpperCase()}${id.slice(1)}`;
+}
+
 /** Esfuerzo elegido para una corrida Claude ("high", "max", …) o "" si no aplica. */
 export function agentModelEffort(model: string | undefined): string {
   if (!model) return "";

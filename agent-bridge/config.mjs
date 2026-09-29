@@ -114,8 +114,6 @@ export const CLAUDE_CLI = resolveClaudeCli();
 
 /** Home de Claude Code (sesiones, settings, hooks). */
 export const CLAUDE_HOME = path.join(os.homedir(), ".claude");
-/** Proyectos = una carpeta por cwd con los <session-uuid>.jsonl de historial. */
-export const CLAUDE_PROJECTS_DIR = path.join(CLAUDE_HOME, "projects");
 /** Settings de usuario (acá se registran los hooks del puente). */
 export const CLAUDE_SETTINGS = path.join(CLAUDE_HOME, "settings.json");
 

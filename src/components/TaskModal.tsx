@@ -387,6 +387,11 @@ export function TaskModal({
                   : undefined,
               autonomy: agentCfg.autonomy,
               model: agentCfg.model || undefined,
+              // Cuenta de Claude Code: "" en edición = volver a la default global.
+              claudeAccount:
+                executor === "claude"
+                  ? agentCfg.claudeAccount || (isEdit ? "" : undefined)
+                  : undefined,
               // Estrategia Git: solo-local la fija el modo customizada;
               // rama-pr/main-directo viajan con desarrollo y ops.
               gitStrategy: agentCfg.customMode

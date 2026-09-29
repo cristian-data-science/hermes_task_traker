@@ -49,6 +49,19 @@ import { notifyAgent } from "./notify.mjs";
 import { copiarMaterial } from "./material.mjs";
 import { adapterFor } from "./agents/index.mjs";
 import { killTree } from "./proc.mjs";
+import {
+  CLAUDE_ACCOUNTS,
+  FALLBACK_ACCOUNT_ID,
+  accountById,
+  allAuthStatus,
+  authStatus,
+  cliVersion,
+  describeAccount,
+  ensureAccountDir,
+  ensureSessionInAccount,
+  envForAccount,
+  openLogin,
+} from "./claude-accounts.mjs";
 import { mkdirSync } from "node:fs";
 
 const RUN_TIMEOUT_MS = Number(process.env.AGENT_RUN_TIMEOUT_MS || 60 * 60 * 1000);
@@ -154,6 +167,71 @@ async function recoverStuck() {
   } catch (e) {
     log("recoverStuck:", e.message);
   }
+}
+
+/**
+ * Estado de login de las cuentas de Claude Code → selector "Cuenta" del
+ * modal. Corre al arrancar, en cada heartbeat y cuando la app lo pide.
+ */
+let accountsSyncing = null;
+let lastAccountsSyncAt = 0;
+async function syncAccounts() {
+  if (accountsSyncing) return accountsSyncing;
+  accountsSyncing = (async () => {
+    try {
+      const accounts = await allAuthStatus();
+      await m("agent:syncClaudeAccounts", { accounts });
+      return accounts;
+    } catch (e) {
+      log("syncAccounts:", e?.message ?? e);
+      return [];
+    } finally {
+      accountsSyncing = null;
+    }
+  })();
+  return accountsSyncing;
+}
+
+/**
+ * Solicitud de la app (verificar / iniciar sesión). Login: abre la consola
+ * con `claude auth login` de esa cuenta y re-verifica cada 10 s (3 min)
+ * hasta ver la sesión iniciada.
+ */
+let loginPoll = null;
+async function handleAccountRequest(raw) {
+  if (!raw) return;
+  let req;
+  try {
+    req = JSON.parse(raw);
+  } catch {
+    req = null;
+  }
+  await m("agent:clearClaudeAccountRequest").catch(() => {});
+  if (!req) return;
+  if (req.action === "login") {
+    const acct = accountById(req.accountId);
+    if (!acct) return log(`login: cuenta desconocida ${req.accountId}`);
+    try {
+      openLogin(acct.id);
+      log(`🔑 consola de login abierta para Claude ${acct.label} (${acct.dir})`);
+    } catch (e) {
+      log(`login ${acct.id} falló:`, e?.message ?? e);
+    }
+    if (loginPoll) clearInterval(loginPoll);
+    const until = Date.now() + 3 * 60 * 1000;
+    loginPoll = setInterval(async () => {
+      const st = await authStatus(acct.id);
+      if (st.loggedIn || Date.now() > until) {
+        clearInterval(loginPoll);
+        loginPoll = null;
+        await syncAccounts();
+        if (st.loggedIn) log(`🔑 sesión iniciada: ${describeAccount(st)}`);
+      }
+    }, 10_000);
+  }
+  const accounts = await syncAccounts();
+  if (req.action === "refresh")
+    log(`cuentas claude verificadas: ${accounts.map((a) => `${a.id} ${a.loggedIn ? "✓" : "✗"}${a.email ? ` (${a.email})` : ""}`).join(", ")}`);
 }
 
 /** Sincroniza el catálogo de modelos de cada agente → picker de la app. */
@@ -296,13 +374,45 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   // la usa para identificar la sesión nueva en db.sqlite por directory.
   run.folder = folder;
 
+  // 1b) Cuenta de Claude Code: se VERIFICA antes de reclamar. Sin sesión
+  //     iniciada no se lanza nada (jamás corre en silencio con otra cuenta):
+  //     queda como pregunta [sin-sesion] y Cris inicia sesión desde el modal.
+  let account = null;
+  if (adapter.id === "claude") {
+    const settingsDefault = await q("agent:listClaudeAccounts")
+      .then((r) => r?.defaultAccount)
+      .catch(() => null);
+    const acctId = accountById(task.claudeAccount)
+      ? task.claudeAccount
+      : accountById(settingsDefault)
+        ? settingsDefault
+        : FALLBACK_ACCOUNT_ID;
+    account = await authStatus(acctId);
+    if (!account.loggedIn) {
+      log(`🔒 "${task.title}": la cuenta Claude ${account.label} no tiene sesión iniciada — se le pide a Cris`);
+      await m("agent:agentReport", {
+        taskId,
+        state: "pregunta",
+        question: `[sin-sesion] La cuenta ${account.label} de Claude Code no tiene sesión iniciada en este PC. Abre la tarea, pulsa "Iniciar sesión" en Cuenta (o elige otra cuenta) y luego Reintentar.`,
+        error: `cuenta ${account.id} sin sesión${account.error ? `: ${account.error}` : ""}`,
+        force: true,
+      }).catch((e) => log("report sin-sesion falló:", e.message));
+      void syncAccounts();
+      return;
+    }
+    run.account = account;
+  }
+
   // 2) Resume REAL de la sesión del agente: si la tarea tiene agentSessionId
   //    y la sesión sigue viva en el motor (db.sqlite para zcode, JSONL para
   //    claude), el agente retoma TODO su contexto. Va ANTES del claim: el
   //    claim también lo usa, y declararlo después era un TDZ que dejaba la
-  //    tarea pegada en encolada para siempre.
+  //    tarea pegada en encolada para siempre. Claude: la sesión debe estar
+  //    en la carpeta de la cuenta elegida (si Cris cambió de cuenta, se copia).
   const sessAlive = task.agentSessionId
-    ? adapter.sessionAlive(task.agentSessionId)
+    ? account
+      ? ensureSessionInAccount(task.agentSessionId, account.id, folder)
+      : adapter.sessionAlive(task.agentSessionId)
     : false;
 
   // 3) Reclamar (abre la corrida y entrega el followUp pendiente de Cris).
@@ -314,6 +424,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
       // no solo "la tarea tenía un sessionId guardado".
       resumed: sessAlive,
       workspacePath: folder,
+      ...(account ? { account: account.id, accountEmail: account.email } : {}),
     });
     runId = claimed.runId;
     followUp = claimed.followUp;
@@ -331,6 +442,15 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
     return;
   }
   run.runId = runId;
+
+  // Primera línea de la corrida: desde qué cuenta corre (visible en la app).
+  if (account) {
+    m("agent:runActivity", {
+      taskId,
+      runId,
+      activity: `Ejecutando con Claude ${describeAccount(account)}`,
+    }).catch(() => {});
+  }
 
   // Corrida REANUDADA (interrumpión/reinicio/redirección previa): avisar una
   // sola vez para que la renumeración de pasos del WhatsApp no confunda.
@@ -379,7 +499,7 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   const needsSwap = adapter.needsSwap(run.effectiveModel, defaultModel);
 
   log(
-    `▶ despachando "${task.title}" [${adapter.label} · ${task.taskType}/${task.autonomy}/${run.effectiveModel.split("/").pop() || "default"}${planning ? " · MODO PLAN" : ""}] → ${folder}` +
+    `▶ despachando "${task.title}" [${adapter.label}${account ? ` · cuenta ${describeAccount(account)}` : ""} · ${task.taskType}/${task.autonomy}/${run.effectiveModel.split("/").pop() || "default"}${planning ? " · MODO PLAN" : ""}] → ${folder}` +
       (activeRuns.size > 1 ? ` (paralela, ${activeRuns.size} activas)` : ""),
   );
 
@@ -387,7 +507,8 @@ async function dispatchTaskInner({ task, workspace }, run, adapter) {
   //    zcode Y claude) se activan solo con ZCODE_TASK_ID presente.
   const restore = needsSwap ? adapter.swap(run.effectiveModel) : null;
   const childEnv = {
-    ...process.env,
+    // Claude: CLAUDE_CONFIG_DIR de la cuenta verificada (Enterprise = ~/.claude, sin env).
+    ...(account ? envForAccount(process.env, account.id) : process.env),
     // El despachador cubre el fin de proceso con la respuesta REAL del agente
     // (post-exit, abajo): el hook Stop queda como no-op en sus corridas (antes
     // ganaba siempre con un resumen genérico y sin código de salida).
@@ -789,6 +910,11 @@ async function beat() {
     }
   }
   await recoverStuck();
+  // Cuentas: cada 5 min basta (la app pide verificar al instante si hace falta).
+  if (Date.now() - lastAccountsSyncAt > 5 * 60 * 1000) {
+    lastAccountsSyncAt = Date.now();
+    await syncAccounts();
+  }
 }
 
 async function main() {
@@ -808,6 +934,20 @@ async function main() {
   // Sembrar carpetas por defecto (idempotente) y sincronizar modelos.
   await m("agent:seedWorkspaces").catch((e) => log("seedWorkspaces:", e.message));
   await syncModels().catch((e) => log("syncModels:", e.message));
+  for (const a of CLAUDE_ACCOUNTS) {
+    try {
+      ensureAccountDir(a.id);
+    } catch (e) {
+      log(`carpeta de la cuenta ${a.id}:`, e.message);
+    }
+  }
+  cliVersion()
+    .then((ver) => {
+      const [maj, min, pat] = (ver ?? "0.0.0").split(".").map(Number);
+      const old = maj < 2 || (maj === 2 && (min < 1 || (min === 1 && pat < 280)));
+      log(`CLI de Claude Code ${ver ?? "?"}${old ? " — ⚠ Opus 5.5 exige ≥ 2.1.280: corre 'claude update'" : ""}`);
+    })
+    .catch(() => {});
 
   const beatTimer = setInterval(() => void beat(), 60_000);
   await beat();
@@ -838,6 +978,15 @@ async function main() {
     { sessionToken: _tokenForChild },
     () => {
       handleRedirects().catch((e) => log("redirects:", e.message));
+    },
+  );
+
+  // Cuentas de Claude: la app pide verificar / iniciar sesión.
+  client.onUpdate(
+    "agent:claudeAccountRequest",
+    { sessionToken: _tokenForChild },
+    (raw) => {
+      handleAccountRequest(raw).catch((e) => log("cuentas:", e.message));
     },
   );
 

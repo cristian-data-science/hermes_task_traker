@@ -367,10 +367,17 @@ export default defineSchema({
     /**
      * Modelo elegido para la corrida, según el agente:
      * ZCode → id del catálogo (p.ej. builtin:zai-coding-plan/GLM-5.3);
-     * Claude → id interno (claude/sonnet-5-high, claude/opus-5-high).
+     * Claude → id interno claude/<modelo>-<versión>-<esfuerzo>
+     * (claude/opus-5.5-medium, claude/sonnet-5-high).
      * Vacío → default de la instalación/cuenta.
      */
     model: v.optional(v.string()),
+    /**
+     * Cuenta de Claude Code con la que corre (solo executor claude): id del
+     * registro del puente ("enterprise" | "personal"). Vacío → la cuenta
+     * default global (setting agent.claudeAccount.default).
+     */
+    claudeAccount: v.optional(v.string()),
     /**
      * Estrategia de Git para tareas de desarrollo (elección explícita de Cris):
      *  - "rama-pr" (default): rama agent/<slug> + pull request, jamás master.
@@ -696,6 +703,9 @@ export default defineSchema({
     autonomy: v.optional(v.string()),
     workspacePath: v.optional(v.string()),
     model: v.optional(v.string()),
+    /** Cuenta de Claude Code verificada al lanzar (id + email de `claude auth status`). */
+    account: v.optional(v.string()),
+    accountEmail: v.optional(v.string()),
     /** Resumen de lo hecho que el agente reporta (o el watchdog extrae). */
     summary: v.optional(v.string()),
     /**

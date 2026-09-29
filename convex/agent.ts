@@ -98,12 +98,23 @@ export const FALLBACK_MODELS = [
   { id: "builtin:zai-coding-plan/glm-4.7-flash", label: "GLM-4.7 Flash (económico)" },
 ];
 
-/** Respaldo Claude Code: ids internos que el adaptador mapea a --model/--effort. */
+/**
+ * Respaldo Claude Code: modelos BASE (sin esfuerzo). El picker compone el
+ * esfuerzo como sufijo (claude/opus-5.5-medium) y el adaptador lo mapea a
+ * --model claude-opus-5-5 --effort medium.
+ */
 export const FALLBACK_MODELS_CLAUDE = [
-  { id: "claude/sonnet-5-high", label: "Sonnet 5 High" },
-  { id: "claude/opus-5-high", label: "Opus 5 High" },
-  { id: "claude/opus-5.5-high", label: "Opus 5.5 High" },
+  { id: "claude/sonnet-5", label: "Sonnet 5" },
+  { id: "claude/opus-5", label: "Opus 5" },
+  { id: "claude/opus-5.5", label: "Opus 5.5" },
 ];
+
+/** Cuentas de Claude Code conocidas antes de que el puente publique su registro. */
+const FALLBACK_CLAUDE_ACCOUNTS = [
+  { id: "enterprise", label: "Enterprise" },
+  { id: "personal", label: "Personal" },
+];
+const DEFAULT_CLAUDE_ACCOUNT = "enterprise";
 
 /**
  * Ejecutores que el puente despacha (todo lo que no sea cris/claw).
@@ -555,6 +566,8 @@ export const runsByTask = query({
         agent: r.agent,
         state: r.state,
         model: r.model,
+        account: r.account,
+        accountEmail: r.accountEmail,
         sessionId: r.sessionId,
         workspacePath: r.workspacePath,
         resumed: r.resumed,
@@ -948,6 +961,128 @@ export const syncModels = mutation({
 });
 
 /**
+ * =====================
+ *  CUENTAS DE CLAUDE CODE (Enterprise / Personal)
+ * =====================
+ *
+ * Cada cuenta es una carpeta de config propia (CLAUDE_CONFIG_DIR) con su
+ * propio login: las dos quedan logueadas a la vez. El puente publica el
+ * estado real (`claude auth status`) y la app elige con cuál corre cada
+ * tarea. La app no puede ejecutar nada en el PC: pide acciones (verificar /
+ * iniciar sesión) vía el setting `agent.claudeAccounts.request`, que el
+ * puente consume por suscripción.
+ */
+const claudeAccountValidator = v.object({
+  id: v.string(),
+  label: v.string(),
+  loggedIn: v.boolean(),
+  email: v.optional(v.string()),
+  orgName: v.optional(v.string()),
+  subscriptionType: v.optional(v.string()),
+  error: v.optional(v.string()),
+  checkedAt: v.number(),
+});
+
+/** Puente → estado de login de cada cuenta. */
+export const syncClaudeAccounts = mutation({
+  args: { ...sessionArg, accounts: v.array(claudeAccountValidator) },
+  handler: async (ctx, { sessionToken, accounts }) => {
+    await requireAuth(ctx, sessionToken);
+    await setSetting(
+      ctx,
+      "agent.claudeAccounts",
+      JSON.stringify({ accounts, syncedAt: Date.now() }),
+    );
+  },
+});
+
+/** App → estado de las cuentas + default global + solicitud en curso. */
+export const listClaudeAccounts = query({
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    const defaultAccount =
+      (await getSetting(ctx, "agent.claudeAccount.default")) || DEFAULT_CLAUDE_ACCOUNT;
+    let accounts: Array<{
+      id: string;
+      label: string;
+      loggedIn?: boolean;
+      email?: string;
+      orgName?: string;
+      subscriptionType?: string;
+      error?: string;
+      checkedAt?: number;
+    }> = FALLBACK_CLAUDE_ACCOUNTS;
+    let syncedAt: number | undefined;
+    const raw = await getSetting(ctx, "agent.claudeAccounts");
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.accounts) && parsed.accounts.length > 0) {
+          accounts = parsed.accounts;
+          syncedAt = parsed.syncedAt;
+        }
+      } catch {
+        // JSON corrupto → sin estado conocido
+      }
+    }
+    let pending: { action: string; accountId: string; at: number } | null = null;
+    const rawReq = await getSetting(ctx, "agent.claudeAccounts.request");
+    if (rawReq) {
+      try {
+        pending = JSON.parse(rawReq);
+      } catch {
+        pending = null;
+      }
+    }
+    return { accounts, defaultAccount, syncedAt, pending };
+  },
+});
+
+/** App → cambia la cuenta default global (la que usan las tareas sin cuenta fija). */
+export const setDefaultClaudeAccount = mutation({
+  args: { ...sessionArg, accountId: v.string() },
+  handler: async (ctx, { sessionToken, accountId }) => {
+    await requireAuth(ctx, sessionToken);
+    await setSetting(ctx, "agent.claudeAccount.default", accountId);
+  },
+});
+
+/** App → pide al puente verificar las sesiones o abrir el login de una cuenta. */
+export const requestClaudeAccountAction = mutation({
+  args: {
+    ...sessionArg,
+    action: v.union(v.literal("refresh"), v.literal("login")),
+    accountId: v.string(),
+  },
+  handler: async (ctx, { sessionToken, action, accountId }) => {
+    await requireAuth(ctx, sessionToken);
+    await setSetting(
+      ctx,
+      "agent.claudeAccounts.request",
+      JSON.stringify({ action, accountId, at: Date.now() }),
+    );
+  },
+});
+
+/** Puente → solicitud pendiente (suscripción) y su limpieza al atenderla. */
+export const claudeAccountRequest = query({
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    return await getSetting(ctx, "agent.claudeAccounts.request");
+  },
+});
+
+export const clearClaudeAccountRequest = mutation({
+  args: sessionArg,
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    await setSetting(ctx, "agent.claudeAccounts.request", "");
+  },
+});
+
+/**
  * El puente reclama una tarea encolada: la marca despachada y abre la corrida.
  * Devuelve el followUp pendiente (respuesta/feedback de Cris) para que el
  * puente lo empaquete en el prompt de seguimiento, y lo limpia de la tarea.
@@ -959,8 +1094,14 @@ export const claimTask = mutation({
     promptDigest: v.optional(v.string()),
     resumed: v.optional(v.boolean()),
     workspacePath: v.optional(v.string()),
+    /** Cuenta de Claude Code verificada por el puente justo antes del claim. */
+    account: v.optional(v.string()),
+    accountEmail: v.optional(v.string()),
   },
-  handler: async (ctx, { sessionToken, taskId, promptDigest, resumed, workspacePath }) => {
+  handler: async (
+    ctx,
+    { sessionToken, taskId, promptDigest, resumed, workspacePath, account, accountEmail },
+  ) => {
     await requireAuth(ctx, sessionToken);
     const task = await ctx.db.get(taskId);
     if (!task || task.deletedAt !== undefined)
@@ -1008,6 +1149,8 @@ export const claimTask = mutation({
       autonomy: task.autonomy,
       workspacePath: workspacePath ?? task.workspacePath,
       model: task.model,
+      account,
+      accountEmail,
       promptDigest: promptDigest?.slice(0, 500),
       followUp,
       followUpKind,

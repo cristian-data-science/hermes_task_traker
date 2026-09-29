@@ -3,43 +3,31 @@
  *
  * Verificado contra el CLI 2.1.263 (cuenta Enterprise, headless, Windows):
  *  - Spawn: claude.exe -p <prompt> [--resume <uuid>] --permission-mode
- *    bypassPermissions [--model <alias>] [--effort high]
+ *    bypassPermissions [--model <id>] [--effort medium|high]
  *    --output-format stream-json --verbose   (cwd = carpeta de trabajo).
+ *  - Cuenta: env CLAUDE_CONFIG_DIR según la cuenta de la tarea (ver
+ *    ../claude-accounts.mjs); la arma el dispatcher en el env del hijo.
  *  - Sesión: llega en el PRIMER evento (system/init → session_id, uuid v4) y
- *    persiste como <uuid>.jsonl en ~/.claude/projects/<cwd-codificado>/.
+ *    persiste como <uuid>.jsonl en <config de la cuenta>/projects/<cwd-codificado>/.
  *  -- resume: mantiene TODO el contexto (verificado).
  *  - Autonomía: sin TTY los modos con permisos se cuelgan → las tres
  *    autonomías mapean a bypassPermissions (misma lección que zcode/yolo).
- *  - Modelos: por FLAG (no hay swap global): "claude/sonnet-5-high" →
- *    --model sonnet --effort high. Sin modelo → default de la cuenta.
+ *  - Modelos: por FLAG (no hay swap global): "claude/opus-5.5-medium" →
+ *    --model claude-opus-5-5 --effort medium. Sin modelo → default de la
+ *    cuenta. Opus 5.5 exige CLI ≥ 2.1.280 (2.1.263 responde 400).
  *  - Actividad en vivo: el stream-json ya emite los eventos del asistente
  *    (tool_use/texto) — no hace falta tailer.
  */
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { CLAUDE_CLI, CLAUDE_PROJECTS_DIR, CLAUDE_SETTINGS } from "../config.mjs";
+import { readFileSync } from "node:fs";
+import { CLAUDE_CLI, CLAUDE_SETTINGS } from "../config.mjs";
+import { locateSession } from "../claude-accounts.mjs";
 
-/** Codifica un cwd como lo hace Claude: C:\a\b → C--a-b. */
-function encodeCwd(cwd) {
-  return String(cwd).replace(/[:.]/g, "").replace(/[\\/]/g, "-");
-}
-
-/** Ruta del JSONL de una sesión (busca en todos los proyectos por si movió). */
+/**
+ * Ruta del JSONL de una sesión: busca en los proyectos de TODAS las cuentas
+ * (Enterprise/Personal), primero en la carpeta del cwd.
+ */
 function sessionFile(sessionId, cwdHint) {
-  const names = cwdHint ? [encodeCwd(cwdHint)] : [];
-  try {
-    for (const d of readdirSync(CLAUDE_PROJECTS_DIR)) {
-      if (!names.includes(d)) names.push(d);
-    }
-  } catch {
-    // sin projects dir
-  }
-  for (const d of names) {
-    const f = path.join(CLAUDE_PROJECTS_DIR, d, `${sessionId}.jsonl`);
-    if (existsSync(f)) return f;
-  }
-  return null;
+  return locateSession(sessionId, cwdHint)?.file ?? null;
 }
 
 /** ¿La sesión existe en disco? (mejor esfuerzo: sin ~/.claude → no hay resume). */
@@ -49,8 +37,13 @@ function sessionAliveInFs(sessionId) {
 
 /**
  * Id interno del tracker → flags del CLI.
- * "claude/sonnet-5-high" → { model: "sonnet", effort: "high" }
- * "claude/opus-5-high"   → { model: "opus",   effort: "high" }
+ * "claude/opus-5.5-medium" → { model: "claude-opus-5-5", effort: "medium" }
+ * "claude/sonnet-5-high"   → { model: "claude-sonnet-5", effort: "high" }
+ * "claude/opus-high"       → { model: "opus", effort: "high" }  (alias sin versión)
+ * La versión VIAJA al CLI: antes solo iba el alias ("opus") y "Opus 5.5"
+ * corría Opus 5 en silencio (el alias resuelve la versión que el CLI
+ * conoce). Un CLI viejo que no conoce el modelo ahora falla con un 400
+ * explícito en vez de cambiar de modelo sin avisar.
  * Cualquier otro valor pasa verbatim como --model (permite ids custom); si
  * trae el prefijo "claude/" se lo saca antes, porque el CLI no lo entiende.
  */
@@ -58,11 +51,13 @@ export function claudeModelFlags(model) {
   if (!model) return {};
   if (!model.startsWith("claude/")) return { model };
   const rest = model.slice("claude/".length);
-  const m = rest.match(/^(sonnet|opus|haiku)(?:-[\d.]+)?(?:-(low|medium|high|xhigh|max))?$/);
+  const m = rest.match(/^(sonnet|opus|haiku)(?:-([\d.]+))?(?:-(low|medium|high|xhigh|max))?$/);
   // Id custom bajo el prefijo (p. ej. "claude/claude-opus-5"): va tal cual al
   // CLI sin el prefijo interno del tracker.
   if (!m) return rest ? { model: rest } : {};
-  return { model: m[1], ...(m[2] ? { effort: m[2] } : {}) };
+  const [, alias, version, effort] = m;
+  const id = version ? `claude-${alias}-${version.replace(/\./g, "-")}` : alias;
+  return { model: id, ...(effort ? { effort } : {}) };
 }
 
 /** Catálogo Claude: default de la cuenta (settings.json) + picks de Cris. */
@@ -75,10 +70,11 @@ function readClaudeCatalog() {
     // sin settings → sin default conocido
   }
   return {
+    // Modelos BASE: el esfuerzo (medio/alto) lo elige la app como sufijo.
     models: [
-      { id: "claude/sonnet-5-high", label: "Sonnet 5 High" },
-      { id: "claude/opus-5-high", label: "Opus 5 High" },
-      { id: "claude/opus-5.5-high", label: "Opus 5.5 High" },
+      { id: "claude/sonnet-5", label: "Sonnet 5" },
+      { id: "claude/opus-5", label: "Opus 5" },
+      { id: "claude/opus-5.5", label: "Opus 5.5" },
     ],
     default: def,
   };

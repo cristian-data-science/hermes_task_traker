@@ -284,6 +284,8 @@ const taskFields = {
     ),
   ),
   model: v.optional(v.string()),
+  /** Cuenta de Claude Code (solo executor claude); vacío = default global. */
+  claudeAccount: v.optional(v.string()),
   /** Estrategia Git: rama-pr (default) | main-directo | solo-local (custom sin git). */
   gitStrategy: v.optional(
     v.union(
@@ -374,6 +376,7 @@ export const create = mutation({
           : undefined,
       autonomy: isDelegatedExecutor(args.executor) ? args.autonomy : undefined,
       model: isDelegatedExecutor(args.executor) ? args.model : undefined,
+      claudeAccount: args.executor === "claude" ? args.claudeAccount || undefined : undefined,
       gitStrategy: isDelegatedExecutor(args.executor) ? args.gitStrategy : undefined,
       notifyWhatsapp: isDelegatedExecutor(args.executor) ? args.notifyWhatsapp : undefined,
       planMode: isDelegatedExecutor(args.executor) ? args.planMode : undefined,
@@ -472,6 +475,8 @@ export const update = mutation({
       ),
     ),
     model: v.optional(v.string()),
+    /** "" explícito = volver a la cuenta default global. */
+    claudeAccount: v.optional(v.string()),
     /** Estrategia Git: rama-pr (default) | main-directo | solo-local (custom sin git). */
     gitStrategy: v.optional(
       v.union(
@@ -594,6 +599,7 @@ export const update = mutation({
       "requestedBy",
       "clickupParentId",
       "clickupListId",
+      "claudeAccount",
     ] as const) {
       if ((patch as Record<string, unknown>)[f] === "") {
         (patch as Record<string, unknown>)[f] = undefined;
