@@ -484,24 +484,37 @@ async function mcpSpaceNodes(
 /**
  * Folders del space con sus lists embebidas — shape equivalente al viejo
  * `GET /space/{id}/folder`. Los contenedores sin lists se descartan igual.
+ *
+ * ClickUp anida folders (Proyectos → Internos/Externos/Cartelera, ATX →
+ * sub-folders): un folder puede ser contenedor de OTROS folders y no tener
+ * lists directas. El recorrido de UN nivel de antes los descartaba como
+ * "contenedor sin lists" y nunca aparecían en el picker. Se aplana con
+ * recursión: cada folder CON lists es una entrada, etiquetada con su ruta
+ * (ej. "Proyectos › Internos") para distinguirla en el dropdown.
  */
 async function mcpSpaceFolders(
   ctx: unknown,
 ): Promise<{ id: string; name: string; lists: { id: string; name: string; archived: false }[] }[]> {
   const nodes = await mcpSpaceNodes(ctx);
   const out: { id: string; name: string; lists: { id: string; name: string; archived: false }[] }[] = [];
-  for (const node of nodes) {
-    if (node.type !== "folder") continue;
+  const walk = (node: McpTreeNode, prefix: string) => {
+    if (node.type !== "folder") return;
+    const label = prefix
+      ? `${prefix} › ${node.name ?? "Sin nombre"}`
+      : (node.name ?? "Sin nombre");
     const lists = (node.children ?? [])
       .filter((c) => c.type === "list")
       .map((c) => ({ id: c.id, name: c.name, archived: false as const }));
-    if (lists.length === 0) continue; // contenedor sin lists: no es destino
-    out.push({
-      id: node.id,
-      name: node.name ?? "Sin nombre",
-      lists,
-    });
-  }
+    // Folder con lists directas: destino válido. Los SIN lists (contenedores
+    // puros como "Proyectos") no van a la lista — solo se atraviesan.
+    if (lists.length > 0) {
+      out.push({ id: node.id, name: label, lists });
+    }
+    for (const c of node.children ?? []) {
+      if (c.type === "folder") walk(c, label);
+    }
+  };
+  for (const node of nodes) walk(node, "");
   return out;
 }
 
@@ -1283,7 +1296,12 @@ export const discoverProjects = action({
         lists: folderLists,
         taskCount: 0, // No relevante ahora: listamos por estructura, no por tareas.
         suggestedDestinations: [{ label: "Tareas generales", parentId: null }],
-        alreadyIntegrated: integratedListIds.has(listId),
+        // ✓ si ALGUNA list del folder está integrada: con folders aplanados
+        // de varias lists (ej. "Proyectos › Internos") basta una para que el
+        // proyecto cuente como integrado.
+        alreadyIntegrated: folderLists.some((l) =>
+          integratedListIds.has(l.id),
+        ),
       });
     }
 
