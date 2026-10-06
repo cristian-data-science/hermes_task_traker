@@ -23,7 +23,7 @@ import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth } from "./authGuard";
-import { isDelegatedExecutor, agentStates } from "./schema";
+import { isDelegatedExecutor, agentStates, WORKING_STATES } from "./schema";
 import { logEvent, logStatusChange } from "./events";
 import { internal } from "./_generated/api";
 
@@ -529,7 +529,7 @@ export const agentOverview = query({
       .slice(0, 50);
     return {
       queue: pick(["encolada"]),
-      working: pick(["planificando", "despachada", "trabajando", "iterando"]),
+      working: pick([...WORKING_STATES]),
       review: pick(["plan-para-aprobar", "pregunta", "para-revision", "error"]),
       done: pick(["hecho"]).filter(
         (t) => (t.completedAt ?? t.updatedAt) >= cut,
@@ -537,6 +537,40 @@ export const agentOverview = query({
       cancelled: pick(["cancelada"]),
       history,
     };
+  },
+});
+
+/**
+ * Tareas "en ejecución" con lo MÍNIMO que necesita el watchdog del puente
+ * (recoverStuck): {_id, updatedAt, title} de los estados working, con
+ * tope por estado y los mismos filtros del bucket `working` de
+ * agentOverview (deletedAt sin definir + ejecutor delegado).
+ *
+ * Reemplaza la llamada por minuto del puente al overview COMPLETO (~52 KB
+ * por ejecución: todas las tareas con estado de agente, historial y
+ * canceladas incluidas) por una lectura de índice de 0-3 docs —
+ * PRD 2026-10-06-recoverstuck-liviano (límite de Database I/O del plan
+ * gratuito de Convex).
+ */
+export const agentWorkingTasks = query({
+  args: { ...sessionArg },
+  handler: async (ctx, { sessionToken }) => {
+    await requireAuth(ctx, sessionToken);
+    const rows = (
+      await Promise.all(
+        WORKING_STATES.map((s) =>
+          ctx.db
+            .query("tasks")
+            .withIndex("by_agent_state", (q) => q.eq("agentState", s))
+            .take(25),
+        ),
+      )
+    ).flat();
+    return rows
+      .filter(
+        (t) => t.deletedAt === undefined && isDelegatedExecutor(t.executor),
+      )
+      .map((t) => ({ _id: t._id, updatedAt: t.updatedAt, title: t.title }));
   },
 });
 

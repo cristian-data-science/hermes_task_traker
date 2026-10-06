@@ -77,6 +77,19 @@ export const agentStates = [
 export type AgentState = (typeof agentStates)[number];
 
 /**
+ * Estados que cuentan como "en ejecución". ÚNICA fuente para el bucket
+ * `working` de agentOverview y para la query liviana agentWorkingTasks del
+ * puente (watchdog recoverStuck): si las listas divergen, el watchdog
+ * dejaría tareas zombi o marcaría error corridas sanas.
+ */
+export const WORKING_STATES = [
+  "planificando",
+  "despachada",
+  "trabajando",
+  "iterando",
+] as const;
+
+/**
  * Ejecutores que el puente agent-bridge sabe despachar (tarea → corrida).
  * `claw` queda como label sin dispatch.
  */

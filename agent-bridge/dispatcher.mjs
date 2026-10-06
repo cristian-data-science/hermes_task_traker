@@ -148,8 +148,11 @@ function canDispatch(task, adapter) {
  */
 async function recoverStuck() {
   try {
-    const overview = await q("agent:agentOverview");
-    const stuck = [...(overview?.working ?? [])].filter(
+    // Query liviana (solo estados working, campos _id/updatedAt/title):
+    // el overview completo por minuto era el 65% del I/O de base de datos
+    // del plan gratuito de Convex — PRD 2026-10-06-recoverstuck-liviano.
+    const working = await q("agent:agentWorkingTasks");
+    const stuck = [...(working ?? [])].filter(
       (t) => !activeRuns.has(t._id) && !reserving.has(t._id),
     );
     for (const t of stuck) {
@@ -909,7 +912,6 @@ async function beat() {
       log("heartbeat falló:", e?.message ?? e);
     }
   }
-  await recoverStuck();
   // Cuentas: cada 5 min basta (la app pide verificar al instante si hace falta).
   if (Date.now() - lastAccountsSyncAt > 5 * 60 * 1000) {
     lastAccountsSyncAt = Date.now();
@@ -951,6 +953,14 @@ async function main() {
 
   const beatTimer = setInterval(() => void beat(), 60_000);
   await beat();
+
+  // Watchdog de corridas huérfanas: timer PROPIO cada 2 min (+ arranque).
+  // Antes vivía dentro del beat() de 60 s y llamaba al agentOverview
+  // completo — el 65% del I/O diario de BD del plan gratuito. Con la query
+  // liviana, cada 2 min es más que suficiente: la detección ya tiene una
+  // gracia de 5 min incorporada (latencia total ~7 min vs ~6 antes).
+  const stuckTimer = setInterval(() => void recoverStuck(), 2 * 60_000);
+  await recoverStuck();
 
   // Suscripción reactiva: cada cambio de la cola dispara un pump.
   const client = new ConvexClient(CONVEX_URL);
@@ -1005,6 +1015,7 @@ async function main() {
   const stop = () => {
     log("deteniendo puente…");
     clearInterval(beatTimer);
+    clearInterval(stuckTimer);
     for (const run of activeRuns.values()) {
       if (run.nudge) clearInterval(run.nudge);
       if (run.tailer) clearInterval(run.tailer);

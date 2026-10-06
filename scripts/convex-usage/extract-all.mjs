@@ -9,8 +9,10 @@ const BASE = "https://api.convex.dev/api/";
 const TEAM = 397658;
 const PROJECT = 2665409;
 const DEPLOYMENT = "effervescent-crab-895";
-const FROM = "2026-08-28";
-const TO = "2026-09-28";
+// Ventana: AAAA-MM-DD AAAA-MM-DD por argumento (default: mes en curso).
+// Ej: node scripts/convex-usage/extract-all.mjs 2026-10-06 2026-10-09
+const FROM = process.argv[2] ?? new Date().toISOString().slice(0, 8) + "01";
+const TO = process.argv[3] ?? new Date().toISOString().slice(0, 10);
 
 const Q = {
   teamSummary: "b63fe48d-320c-401a-8682-0a0b36b50e2b",
