@@ -103,3 +103,30 @@ se alcanza porque `tasks:list` tomó el puesto.**
   vivo. Recomendación: aplicar antes del ~20 oct si el promedio semanal
   sigue > 27 MB/día. Alternativa a investigar: qué escribe tareas ~200
   veces/día (¿sync inbound?) para reducir el churn de re-ejecuciones.
+
+## 7. Investigación C (hecha el 2026-10-09): qué dispara las re-ejecuciones
+
+**Conclusión: NO hay churn de escrituras. El costo de `tasks:list` lo
+genera el USO de la app + reconexiones de WebSocket, no escrituras.**
+
+- Escrituras reales a `tasks` en 6–9 oct: **5** (eventos: 2 created, 3
+  completed). Con eso no se explican 731 ejecuciones de `tasks:list`.
+- Descartado con código y datos: rotación de token (el token es fijo
+  desde el login), refresco de sesión (solo se escribe al login/logout),
+  sync inbound (no está corriendo), loops de polling en el frontend
+  (solo un reloj de UI a 30 s).
+- Evidencia del mecanismo real: las suscripciones del tablero se
+  ejecutan en BLOQUE con conteos casi idénticos (213–244/día) y casi
+  nada sale de caché (17–138 ejecuciones cacheadas/día) → cada
+  reconexión re-suscribe y re-ejecuta TODO sin caché. El ConvexClient
+  del puente registra desconexiones 1006 cada 15–25 min (mismo patrón de
+  red que sufre el navegador de Cris): cada una re-ejecuta cada
+  suscripción completa. Se suma cada apertura de la app (PWA/escritorio).
+- Medición en vivo (2026-10-09, app en reposo): `tasks:list` +1 en 25
+  min; watchdog +8 (≈ cada 3 min, según diseño); heartbeat 1/min.
+- **Implicancia: la única palanca sobre `tasks:list` es leer menos
+  documentos (opción A: excluir completadas, 71% de la tabla), no
+  reducir escrituras.**
+- Incidente menor observado: el puente murió a las 00:03 (fetch failed,
+  máquina dormida) y el daemon lo relanzó a las 11:28 — funcionamiento
+  esperado del supervisor.
