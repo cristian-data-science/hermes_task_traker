@@ -78,3 +78,28 @@ local; el puente tomó el código nuevo al reiniciarse a esa hora).
 - Watch items: `getSearchIndex` (lazy, 0 llamadas en oct pero ahora
   escanea ~25 lists del workspace por invocación) y `subtasks:allCounts`
   (1,3 MB/día, candidato a `count()` por índice).
+
+## 6. Control post (hecho el 2026-10-09)
+
+**El cambio funcionó según lo diseñado; la meta total < 25 MB/día aún no
+se alcanza porque `tasks:list` tomó el puesto.**
+
+| Métrica | Línea base (1–6 oct) | Post-deploy (6–9 oct) | Meta | ¿? |
+|---|---|---|---|---|
+| `agentOverview` | 29,4 MB/día (puente, 1/min) | **~0 MB/día** (solo restos pre-deploy del 6) | < 10 | ✓ |
+| `agentWorkingTasks` | — | 1.301 llamadas · **0,3 KB/call** · 0,37 MB total | — | ✓ |
+| IO total día 7 / 8 / 9 | ~45 MB/día | 38,5 / 27,3 / 5,7 (parcial) MB | < 25 | ✗ |
+| `tasks:list` | 12,5 MB/día | **20–31 MB/día** (80–85% del total, 130 KB/call × 160–240 ejec/día) | — | ⚠ |
+
+- Octubre oficial al 9: **361,6 MB de 1.000**; estado del equipo normal.
+- Piso sin actividad: ~1,5–2 MB/día (heartbeat + watchdog + base).
+- Proyección de cierre: ~850–950 MB al ritmo moderado; **~1.090 MB (quiebra
+  el 29–30) si se repiten días como el 7**. El costo ahora escala con la
+  actividad (escrituras de tareas), no con el reloj — esa es la mejora
+  estructural lograda.
+- Decisión pendiente (fase 2, `tasks:list`): excluir completadas de la
+  suscripción reactiva (71% de la tabla) y cargarlas bajo demanda bajaría
+  los días activos a ~12–15 MB, a costa de la columna "completado" en
+  vivo. Recomendación: aplicar antes del ~20 oct si el promedio semanal
+  sigue > 27 MB/día. Alternativa a investigar: qué escribe tareas ~200
+  veces/día (¿sync inbound?) para reducir el churn de re-ejecuciones.
