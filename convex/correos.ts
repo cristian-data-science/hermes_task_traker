@@ -35,6 +35,17 @@ const CUERPO_MAX = 100_000;
 /** Tope de las notas de la tarea (el cuerpo completo vive en `correos`). */
 const NOTAS_MAX = 5_000;
 
+/**
+ * Ventana de antigüedad máxima del correo que la ingesta acepta (14 días).
+ * Incidente 2026-10-13: un reset del cursor del trigger OnFlaggedEmailV4 de
+ * Power Automate reinyectó el backlog de correos con flag (63 correos de
+ * hasta ~7 años como tareas nuevas). Un correo que se recibió hace más de
+ * esto no puede ser un "correo marcado ahora": se descarta en el webhook
+ * sin tocar la base. Si Cris quiere una tarea de un correo más viejo, la
+ * crea a mano en la app.
+ */
+const ANTIGUEDAD_MAX_MS = 14 * 24 * 60 * 60 * 1000;
+
 // ============================================================
 //  Tarea automática: correo nuevo → tarea "pendiente" en Patagonia
 // ============================================================
@@ -266,6 +277,18 @@ export const ingestaCorreos = httpAction(async (ctx, request) => {
   const fechaRaw = str(body.recibidoEn);
   const fechaParseada = fechaRaw ? Date.parse(fechaRaw) : NaN;
   const recibidoEn = Number.isFinite(fechaParseada) ? fechaParseada : Date.now();
+
+  // Anti-backlog: Power Automate puede redisparar correos con flag antiguo
+  // (reset del cursor del trigger). Se descarta ANTES de escribir: sin fila
+  // en `correos` ni tarea. Se responde 200 para que el run del flow no
+  // quede marcado como fallido; la respuesta deja constancia en su historial.
+  // Fecha inválida/ausente o futura (reloj torcido del remitente): pasa.
+  if (Number.isFinite(fechaParseada) && Date.now() - recibidoEn > ANTIGUEDAD_MAX_MS) {
+    return jsonResponse(
+      { creado: false, descartado: "antiguo", recibidoEn },
+      200,
+    );
+  }
 
   const remitente = remitenteDe(body.remitenteEmail);
 
