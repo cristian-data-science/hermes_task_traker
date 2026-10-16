@@ -130,3 +130,26 @@ genera el USO de la app + reconexiones de WebSocket, no escrituras.**
 - Incidente menor observado: el puente murió a las 00:03 (fetch failed,
   máquina dormida) y el daemon lo relanzó a las 11:28 — funcionamiento
   esperado del supervisor.
+
+## 8. Control post definitivo (hecho el 2026-10-16)
+
+**META CUMPLIDA: el cambio funcionó y octubre cierra holgado.**
+
+| Métrica | Base (1–6 oct) | Post-deploy (7–16 oct) | Meta | ¿? |
+|---|---|---|---|---|
+| IO diario promedio | ~48 MB/día | **18,8 MB/día** | < 25 | ✓ |
+| `agentOverview` | 29,4 MB/día | **~0,5 MB/día** | < 10 | ✓✓ |
+| `agentWorkingTasks` | — | ~0,3 KB/call (despreciable) | barata | ✓ |
+| IO oficial octubre | proyección ~1.400 (quiebra 19–20) | **493,4 MB al día 16** · proyección cierre **~775 MB** | < 700 | ✓ (ajustado) |
+| Estado del equipo | Exceeded en sept | Default (sin avisos) | — | ✓ |
+
+Sin el cambio, octubre habría superado el 1 GB el ~19-20 (como pasó en
+septiembre, con apagón). Con el cambio: margen ~25%.
+
+**Nuevos focos (sin urgencia, registrado para noviembre):**
+- `tasks:list` = 77% del gasto actual y su coste por llamada CRECE con la
+  tabla: 124 KB (inicios oct) → 181 KB (7-16 oct). Si la tabla sigue
+  creciendo, la opción A (excluir completadas de la suscripción reactiva)
+  pasa de "opcional" a "conveniente" en noviembre.
+- `correos.js:ingestar` apareció como #2: 183 KB/call × ~9/día ≈
+  1,7 MB/día. Vigilar si crece.

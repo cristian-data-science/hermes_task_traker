@@ -54,8 +54,8 @@ Coste por ejecución: ~52,5 KB → ~2–5 KB. Ahorro esperado: **~28 MB/día**
 - [x] Typecheck convex OK.
 - [x] Deploy prod + `agentWorkingTasks` verificada con sesión del puente.
 - [x] Puente reiniciado sin corridas activas (toma el código nuevo).
-- [ ] Control post (pedir a los pocos días): total < 25 MB/día,
-      `agentOverview` < 10 MB/día. Línea base y comando de verificación
+- [x] Control post (2026-10-09 y 2026-10-16): total < 25 MB/día,
+      `agentOverview` < 10 MB/día — CUMPLIDO (18,8 y ~0,5). Línea base y comando
       en `docs/resumenes/2026-10-06-recoverstuck-liviano.md`.
 
 ## 5. Riesgos aceptados
